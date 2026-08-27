@@ -403,6 +403,28 @@ function dashboardHtml(rows, photos, generatedAt, plan = null) {
   .r-fair .score, .r-fair .rating { color: var(--warn); }
   .r-poor .score, .r-poor .rating { color: var(--muted); }
   .stale-note { color: var(--warn); font-size: 12px; margin: -4px 0 12px; }
+  /* Map-type control, positioned like Google's: a thumbnail in the lower-left
+     showing what you would switch TO, with the full list on hover or tap. */
+  .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
+  .swatch { width: 74px; height: 58px; padding: 0; border-radius: 6px; cursor: pointer;
+            border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45);
+            background-size: cover; background-position: center; position: relative;
+            display: block; overflow: hidden; }
+  .swatch span { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 0 4px;
+                 font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; color: #fff;
+                 text-shadow: 0 1px 3px rgba(0,0,0,.9); background: rgba(0,0,0,.35); }
+  .layermenu { position: absolute; left: 0; bottom: 0; display: none; gap: 8px;
+               background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+               padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  .layers.open .layermenu { display: flex; }
+  .layers.open .swatch { visibility: hidden; }
+  .layermenu button { width: 74px; height: 58px; padding: 0; border-radius: 6px;
+                      cursor: pointer; border: 2px solid transparent; overflow: hidden;
+                      background-size: cover; background-position: center; position: relative; }
+  .layermenu button.on { border-color: var(--accent); }
+  .layermenu button span { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 0 4px;
+                           font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; color: #fff;
+                           text-shadow: 0 1px 3px rgba(0,0,0,.9); background: rgba(0,0,0,.35); }
 </style>
 </head>
 <body>
@@ -420,8 +442,14 @@ function dashboardHtml(rows, photos, generatedAt, plan = null) {
   <h2 class="section">Cameras</h2>
   <div id="map"><div id="tiles"></div><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
+    <div class="layers">
+      <button id="layerToggle" class="swatch" type="button" title="Change map type">
+        <span id="layerLabel"></span>
+      </button>
+      <div class="layermenu" id="layerMenu"></div>
+    </div>
   </div>
-  <div class="attrib">Map data \u00a9 <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors. Drag to pan.</div>
+  <div class="attrib"><span id="credit"></span>. Drag to pan, scroll to zoom.</div>
   <div class="grid" id="cards"></div>
   <h2 class="section">Recent photos</h2>
   <div id="photoArea"></div>
@@ -454,6 +482,46 @@ if (bad.length) {
 
 // ---- map --------------------------------------------------------------
 const TS = 256;
+
+// Base layers, laid out like Google Maps: a Map/Satellite thumbnail toggle in
+// the bottom-left corner, with Hybrid offered once satellite is showing.
+//
+// Google's own tiles are deliberately NOT used — serving them outside their
+// Maps API breaches their terms. Esri's World Imagery is free for this kind of
+// use with attribution and reaches z19 over rural Wisconsin, which is close
+// enough to pick out field edges, funnels and standing crops. USGS imagery was
+// measured too: sharper where it exists, but it 404s above z16 here, so it is
+// offered as an option rather than the default.
+const LAYERS = {
+  map: {
+    label: 'Map', alt: 'Satellite', maxZoom: 19,
+    url: (z, x, y) => 'https://tile.openstreetmap.org/' + z + '/' + x + '/' + y + '.png',
+    credit: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  },
+  satellite: {
+    label: 'Satellite', alt: 'Map', maxZoom: 19,
+    url: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x,
+    credit: 'Imagery © Esri, Maxar, Earthstar Geographics',
+  },
+  hybrid: {
+    label: 'Hybrid', alt: 'Map', maxZoom: 19,
+    url: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x,
+    overlay: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/' + z + '/' + y + '/' + x,
+    credit: 'Imagery © Esri, Maxar, Earthstar Geographics',
+  },
+  topo: {
+    label: 'Terrain', alt: 'Map', maxZoom: 17,
+    url: (z, x, y) => 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/' + z + '/' + y + '/' + x,
+    credit: 'Topo © <a href="https://www.usgs.gov/">USGS</a> The National Map',
+  },
+};
+
+// Remembered per browser. Wrapped because a private window or blocked site
+// data makes storage throw rather than return null.
+let layerKey = 'satellite';
+try { layerKey = localStorage.getItem('trailcam.layer') || 'satellite'; } catch { /* ignore */ }
+if (!LAYERS[layerKey]) layerKey = 'satellite';
+const saveLayer = k => { try { localStorage.setItem('trailcam.layer', k); } catch { /* ignore */ } };
 const located = D.cameras.filter(c => typeof c.lat === 'number' && typeof c.lng === 'number');
 const mapEl = document.getElementById('map');
 const tilesEl = document.getElementById('tiles');
@@ -488,12 +556,30 @@ function draw() {
   for (let tx = Math.floor(left / TS); tx <= Math.floor((left + W) / TS); tx++) {
     for (let ty = Math.floor(top / TS); ty <= Math.floor((top + H) / TS); ty++) {
       if (ty < 0 || ty >= n) continue;
-      const img = new Image();
-      img.src = 'https://tile.openstreetmap.org/' + zoom + '/' + ((tx % n) + n) % n + '/' + ty + '.png';
-      img.alt = ''; img.loading = 'lazy';
-      img.style.left = (tx * TS - left) + 'px';
-      img.style.top = (ty * TS - top) + 'px';
-      tilesEl.appendChild(img);
+      const L = LAYERS[layerKey];
+      const wx = ((tx % n) + n) % n;
+      const place = img => {
+        img.alt = ''; img.loading = 'lazy';
+        img.style.left = (tx * TS - left) + 'px';
+        img.style.top = (ty * TS - top) + 'px';
+        // Offline — in a cabin, or a tile server having a bad day — a failed
+        // tile otherwise leaves a broken-image icon in every cell. Hide it and
+        // let the blank panel show through; the pins are what matter and they
+        // stay correctly positioned regardless.
+        img.onerror = () => { img.style.display = 'none'; };
+        tilesEl.appendChild(img);
+      };
+      const base = new Image();
+      base.src = L.url(zoom, wx, ty);
+      place(base);
+      // Hybrid draws place names and boundaries as a transparent PNG over the
+      // imagery, in a second pass so it always lands on top.
+      if (L.overlay) {
+        const ov = new Image();
+        ov.src = L.overlay(zoom, wx, ty);
+        ov.style.pointerEvents = 'none';
+        place(ov);
+      }
     }
   }
   for (const c of located) {
@@ -510,9 +596,59 @@ function draw() {
   }
 }
 
+// ---- map type control -------------------------------------------------
+const layersEl = document.querySelector('.layers');
+const toggleEl = document.getElementById('layerToggle');
+const menuEl = document.getElementById('layerMenu');
+const creditEl = document.getElementById('credit');
+
+// Each swatch previews a real tile from that layer over the cameras, so the
+// buttons look like where you actually hunt rather than a generic icon.
+const previewTile = key => {
+  const L = LAYERS[key];
+  const z = Math.min(14, L.maxZoom);
+  const n = 2 ** z;
+  const x = Math.floor((centre.lng + 180) / 360 * n);
+  const s = Math.sin(centre.lat * Math.PI / 180);
+  const y = Math.floor((0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n);
+  return L.url(z, ((x % n) + n) % n, Math.max(0, Math.min(n - 1, y)));
+};
+
+function paintControl() {
+  const L = LAYERS[layerKey];
+  // Google shows the layer you would switch TO, not the one you are on.
+  const other = LAYERS[layerKey] === LAYERS.map ? 'satellite' : 'map';
+  toggleEl.style.backgroundImage = 'url("' + previewTile(other) + '")';
+  document.getElementById('layerLabel').textContent = LAYERS[other].label;
+  creditEl.innerHTML = L.credit;
+
+  menuEl.textContent = '';
+  for (const [key, def] of Object.entries(LAYERS)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = key === layerKey ? 'on' : '';
+    b.style.backgroundImage = 'url("' + previewTile(key) + '")';
+    b.title = def.label;
+    b.appendChild(el('span', null, def.label));
+    b.onclick = ev => {
+      ev.stopPropagation();
+      layerKey = key; saveLayer(key);
+      if (zoom > LAYERS[key].maxZoom) zoom = LAYERS[key].maxZoom;
+      layersEl.classList.remove('open');
+      paintControl(); draw();
+    };
+    menuEl.appendChild(b);
+  }
+}
+
+toggleEl.onclick = e => { e.stopPropagation(); layersEl.classList.add('open'); };
+layersEl.onmouseenter = () => layersEl.classList.add('open');
+layersEl.onmouseleave = () => layersEl.classList.remove('open');
+document.addEventListener('click', () => layersEl.classList.remove('open'));
+
 let drag = null;
 mapEl.addEventListener('pointerdown', e => {
-  if (e.target.closest('.zoom')) return;
+  if (e.target.closest('.zoom') || e.target.closest('.layers')) return;
   drag = { x: e.clientX, y: e.clientY }; mapEl.classList.add('drag');
   mapEl.setPointerCapture(e.pointerId);
 });
@@ -528,10 +664,21 @@ mapEl.addEventListener('pointermove', e => {
 });
 for (const ev of ['pointerup', 'pointercancel'])
   mapEl.addEventListener(ev, () => { drag = null; mapEl.classList.remove('drag'); });
-document.getElementById('zin').onclick = () => { zoom = Math.min(19, zoom + 1); draw(); };
-document.getElementById('zout').onclick = () => { zoom = Math.max(2, zoom - 1); draw(); };
+// Each layer has its own deepest usable zoom — USGS topo stops well short of
+// the imagery — so clamp against the active layer rather than a fixed 19,
+// otherwise zooming in past coverage silently paints blank tiles.
+const setZoom = z => {
+  zoom = Math.max(2, Math.min(LAYERS[layerKey].maxZoom, z));
+  draw();
+};
+document.getElementById('zin').onclick = () => setZoom(zoom + 1);
+document.getElementById('zout').onclick = () => setZoom(zoom - 1);
+mapEl.addEventListener('wheel', e => {
+  e.preventDefault();
+  setZoom(zoom + (e.deltaY < 0 ? 1 : -1));
+}, { passive: false });
 addEventListener('resize', draw);
-if (located.length) draw();
+if (located.length) { paintControl(); draw(); }
 else mapEl.innerHTML = '<div style="padding:20px;color:#888">No camera reported GPS coordinates.</div>';
 
 // ---- camera cards -----------------------------------------------------

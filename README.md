@@ -175,6 +175,33 @@ cameras. Once photos accumulate, those sightings can be scored against these
 same factors to find which ones actually predict movement on your ground — and
 at that point the evidence should correct this model, not the reverse.
 
+## Map layers
+
+The dashboard map has a Google-style type switcher in the bottom-left corner —
+a thumbnail showing what you'd switch to, with the full set on hover or tap.
+**Satellite is the default**, since imagery is far more useful than street
+tiles for reading field edges, funnels and standing crops. The choice is
+remembered per browser.
+
+| Layer | Source | Max zoom |
+| --- | --- | --- |
+| **Satellite** (default) | Esri World Imagery | 19 |
+| **Hybrid** | Esri imagery + place/boundary labels | 19 |
+| **Map** | OpenStreetMap | 19 |
+| **Terrain** | USGS Topo | 17 |
+
+Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
+staring at blank tiles past its coverage. Scroll wheel zooms; drag pans.
+
+Google's own tiles are deliberately **not** used — serving them outside the
+Google Maps API breaches their terms. Esri's imagery is free for this with
+attribution and was measured to z19 over rural Wisconsin. USGS imagery is
+sharper where it exists but 404s above z16 there, so it isn't the default.
+
+Tiles that fail to load are hidden rather than left as broken-image icons: the
+map still lays out correctly with no connection, and the camera pins — the part
+that matters — are drawn from local data either way.
+
 ## Roadmap
 
 The end goal is pattern analysis: individual bucks, movement against weather and

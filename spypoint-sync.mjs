@@ -198,7 +198,7 @@ async function readPlan(dir) {
 // `plan` is optional and comes from hunt-planner.mjs by way of plan.json, so a
 // sync run picks up the last plan instead of wiping it off the page, and a
 // planner run rebuilds this same page. Either tool can be run first.
-function dashboardHtml(rows, photos, generatedAt, plan = null, stands = []) {
+function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
@@ -206,10 +206,11 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = []) {
     photos,
     plan,
     stands,
-    // Only a served page can save a pin; opened as a file there is nothing to
-    // POST to, so the UI hides the controls rather than offering a button that
-    // silently fails.
-    live: true,
+    // Only a SERVED page can save a pin: a file:// page has no server to POST
+    // to, so the button would do nothing. This must be passed in rather than
+    // hardcoded — it was hardcoded true at first, which put a dead button on
+    // the static dashboard the sync writes.
+    live,
   });
   return `<!doctype html>
 <html lang="en">
@@ -584,9 +585,14 @@ function pixelToLatLng(px, py) {
 
 const addBtn = document.getElementById('addStand');
 if (!D.live) {
-  // Opened as a file rather than served: there is nothing to POST to, so do not
-  // offer a button that would fail silently.
-  addBtn.style.display = 'none';
+  // Opened as a file rather than served. Say why the control is unavailable —
+  // a button that silently does nothing is worse than one that is absent, and
+  // an absent one with no explanation is a close second.
+  addBtn.textContent = 'Stands need the server';
+  addBtn.title = 'Run start-trailcam.cmd and open http://127.0.0.1:8787 to add stands';
+  addBtn.disabled = true;
+  addBtn.style.opacity = '0.6';
+  addBtn.style.cursor = 'not-allowed';
 } else {
   addBtn.onclick = ev => {
     ev.stopPropagation();

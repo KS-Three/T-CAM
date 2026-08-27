@@ -193,7 +193,7 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const s = await buildState(db, out);
         return send(res, 200, 'text/html; charset=utf-8',
-          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands));
+          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true));
       }
       // The API boundary a phone app would later speak to.
       if (req.method === 'GET' && url.pathname === '/api/state') {

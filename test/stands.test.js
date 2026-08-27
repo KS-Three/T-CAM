@@ -243,3 +243,29 @@ test('the client can ask what types and winds are allowed', async t => {
   assert.equal(meta.winds.length, 16);
   assert.ok(meta.winds.includes('NW'));
 });
+
+test('the Add stand button is only offered on a page that can actually save', async () => {
+  // The bug this pins: `live` was hardcoded true, so the STATIC dashboard the
+  // sync writes also showed the button. A file:// page has no server to POST
+  // to, so pressing it did nothing at all — the worst kind of broken, because
+  // it looks like a working control.
+  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+
+  const staticPage = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z', null, []);
+  assert.match(staticPage, /"live":false/,
+    'the file written by the sync declares itself not live');
+  assert.match(staticPage, /Stands need the server/,
+    'and the page explains why the control is unavailable');
+
+  const servedPage = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z', null, [], true);
+  assert.match(servedPage, /"live":true/, 'the served page can save');
+});
+
+test('a served page carries its stands into the rendered payload', async () => {
+  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const stands = [{ id: 1, name: 'East Ridge Ladder', type: 'tripod',
+    lat: 44.1, lng: -90.6, winds: ['NW'], nearbyCameras: [] }];
+  const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, stands, true);
+  assert.match(html, /East Ridge Ladder/);
+});

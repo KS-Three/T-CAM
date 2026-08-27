@@ -28,10 +28,14 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, allCameras, counts, allStands, createStand, updateStand, deleteStand,
-  STAND_TYPES, COMPASS,
+  STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
+import {
+  fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
+  slopeAspect, metresToFeet, planGrid,
+} from './terrain.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);
@@ -160,6 +164,110 @@ async function servePhoto(res, out, rel) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Terrain
+// ---------------------------------------------------------------------------
+
+// Fetches already running, keyed by the ground they cover. Two tabs opening the
+// same map must not both spend 25 seconds asking a public service for identical
+// data; the second waits on the first instead.
+const terrainInFlight = new Map();
+
+/**
+ * Everything the map needs to draw the ground: a hillshade image, contour
+ * lines, and the numbers behind them.
+ *
+ * The hillshade is computed here rather than in the browser so there is one
+ * implementation of the terrain maths, and it ships as base64 grey bytes —
+ * about 5 KB for a 61x61 grid, against 40 KB for the same thing as JSON
+ * numbers.
+ */
+export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 }) {
+  // spacingM is reassigned below when the area is too large to sample finely.
+  const dLat = radiusM / 110540;
+  const dLng = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  const bounds = { west: lng - dLng, south: lat - dLat, east: lng + dLng, north: lat + dLat };
+
+  // Coarsen rather than refuse.
+  //
+  // The route clamps radius and spacing separately, and the two clamps used to
+  // combine into a request that could never succeed: the largest allowed area
+  // at the finest allowed spacing is 361,201 samples, over the fetcher's own
+  // 250,000 guard, so asking for the maximum always failed. Area is what the
+  // caller actually cares about, so the area is honoured and the detail gives
+  // way — which is also the right trade when someone zooms out: they want to
+  // see the shape of a whole property, not every square metre of it.
+  const MAX_SAMPLES = 200_000;
+  let planned = planGrid(bounds, spacingM);
+  if (planned.cols * planned.rows > MAX_SAMPLES) {
+    const factor = Math.sqrt(planned.cols * planned.rows / MAX_SAMPLES);
+    spacingM = Math.ceil(spacingM * factor);
+    planned = planGrid(bounds, spacingM);
+  }
+
+  let grid = terrainGridCovering(db, bounds, spacingM);
+  let cached = !!grid;
+  if (!grid) {
+    const key = [bounds.west, bounds.south, bounds.east, bounds.north, spacingM]
+      .map(n => n.toFixed(6)).join(',');
+    if (!terrainInFlight.has(key)) {
+      terrainInFlight.set(key, (async () => {
+        const fetched = await fetchElevationGrid(bounds, { spacingM });
+        saveTerrainGrid(db, fetched);
+        return fetched;
+      })().finally(() => terrainInFlight.delete(key)));
+    }
+    grid = await terrainInFlight.get(key);
+  }
+
+  const stats = gridStats(grid);
+  if (!stats.count) {
+    // Real answer, not a failure: outside LiDAR coverage there is no terrain to
+    // draw, and saying so beats drawing an empty grey square.
+    return { covered: false, cached, bounds: gridBounds(grid), stats: null };
+  }
+
+  const hs = hillshade(grid);
+  const { slope } = slopeAspect(grid);
+  const slopes = [...slope].filter(Number.isFinite).sort((a, b) => a - b);
+  const contours = contourLines(grid);
+
+  return {
+    covered: true,
+    cached,
+    bounds: gridBounds(grid),
+    grid: { cols: grid.cols, rows: grid.rows, spacingM: grid.spacingM },
+    stats: {
+      minFt: Math.round(metresToFeet(stats.min) * 10) / 10,
+      maxFt: Math.round(metresToFeet(stats.max) * 10) / 10,
+      reliefFt: Math.round(metresToFeet(stats.relief) * 10) / 10,
+      medianSlopeDeg: slopes.length ? Math.round(slopes[Math.floor(slopes.length / 2)] * 10) / 10 : null,
+      maxSlopeDeg: slopes.length ? Math.round(slopes.at(-1) * 10) / 10 : null,
+    },
+    hillshade: {
+      // Row 0 of the grid is the SOUTH edge, but an image's first row is its
+      // TOP. The flip happens here, once, so the browser can blit the bytes
+      // straight into an ImageData without knowing about the convention.
+      shade: Buffer.from(flipRows(hs.shade, hs.cols, hs.rows)).toString('base64'),
+      alpha: Buffer.from(flipRows(hs.alpha, hs.cols, hs.rows)).toString('base64'),
+      cols: hs.cols, rows: hs.rows,
+      // Reported, not hidden: this hillshade is vertically exaggerated, and a
+      // reader who does not know by how much will misjudge the ground badly.
+      zFactor: Math.round(hs.zFactor * 10) / 10,
+    },
+    contours,
+  };
+}
+
+function flipRows(arr, cols, rows) {
+  const out = new Uint8Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    out.set(arr.subarray(r * cols, (r + 1) * cols), (rows - 1 - r) * cols);
+  }
+  return out;
+}
+
 const MAX_BODY = 64 * 1024;
 
 function readJson(req) {
@@ -253,6 +361,34 @@ export function createServer({ out = OPT.out } = {}) {
         return sendJson(res, 200, { types: STAND_TYPES, winds: COMPASS });
       }
 
+
+      // The shape of the ground, from free USGS LiDAR.
+      //
+      // Fetching is slow — about 25 seconds for a 600 m square, across five
+      // requests — so it happens once and is cached in the database forever
+      // after. The ground does not move. In-flight requests are also shared:
+      // two browser tabs asking for the same ground must not start two fetches.
+      if (req.method === 'GET' && url.pathname === '/api/terrain') {
+        const raw = { lat: url.searchParams.get('lat'), lng: url.searchParams.get('lng') };
+        if (!raw.lat || !raw.lng) {
+          return sendJson(res, 400, { error: 'lat and lng are required' });
+        }
+        const lat = Number(raw.lat), lng = Number(raw.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)
+          || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          return sendJson(res, 400, { error: 'lat and lng must be real coordinates' });
+        }
+        // Bounded hard: the radius decides how many samples get requested from
+        // a public service, so it is not left to whatever the caller types.
+        const radiusM = Math.min(1500, Math.max(100, Number(url.searchParams.get('radius')) || 300));
+        const spacingM = Math.min(50, Math.max(5, Number(url.searchParams.get('spacing')) || 10));
+        try {
+          const terrain = await terrainFor(db, { lat, lng, radiusM, spacingM });
+          return sendJson(res, 200, terrain);
+        } catch (err) {
+          return sendJson(res, 502, { error: err.message });
+        }
+      }
       // Who owns this ground. Proxied through the server rather than called
       // from the browser so the public service sees one client, the result can
       // be cached in one place, and a future non-Wisconsin source is a change

@@ -233,6 +233,41 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX stands_property ON stands(property_id);');
     },
   },
+  {
+    version: 3,
+    name: 'terrain grids',
+    up: db => {
+      // Cached LiDAR elevation. Fetching a 600 m square at 10 m spacing takes
+      // about 25 seconds across five requests to the USGS service — far too
+      // slow to repeat on every page load, and the ground does not move, so it
+      // never needs fetching twice.
+      //
+      // Samples are stored as a raw little-endian Float32 BLOB rather than
+      // JSON: a 61x61 grid is 3721 numbers, and JSON would roughly quadruple
+      // the file for no gain. cols/rows/spacing are what make the blob
+      // interpretable, so they live beside it rather than in a header.
+      //
+      // NaN in the blob means no data at that cell. That is a real state — the
+      // edge of LiDAR coverage, or open water — and it must survive the round
+      // trip rather than being written as 0, which is a sea-level elevation.
+      db.exec(`
+        CREATE TABLE terrain_grids (
+          id         INTEGER PRIMARY KEY,
+          west       REAL NOT NULL,
+          south      REAL NOT NULL,
+          d_lng      REAL NOT NULL,
+          d_lat      REAL NOT NULL,
+          cols       INTEGER NOT NULL,
+          rows       INTEGER NOT NULL,
+          spacing_m  REAL NOT NULL,
+          source     TEXT NOT NULL DEFAULT 'usgs-3dep',
+          fetched_at TEXT NOT NULL,
+          samples    BLOB NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX terrain_grids_at ON terrain_grids(west, south, spacing_m);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -599,3 +634,75 @@ export function standHuntableOn(stand, windFromDeg) {
   const point = COMPASS[Math.round(((windFromDeg % 360) + 360) % 360 / 22.5) % 16];
   return winds.includes(point);
 }
+
+// ---------------------------------------------------------------------------
+// Terrain
+// ---------------------------------------------------------------------------
+
+/**
+ * Save a fetched elevation grid. Float32Array -> BLOB; the view is copied into
+ * a Buffer over exactly its own bytes, because a Float32Array can be a window
+ * onto a larger buffer and writing the whole underlying buffer would store
+ * somebody else's data alongside ours.
+ */
+export function saveTerrainGrid(db, grid) {
+  const bytes = Buffer.from(grid.z.buffer, grid.z.byteOffset, grid.z.byteLength);
+  const info = db.prepare(`
+    INSERT INTO terrain_grids
+      (west, south, d_lng, d_lat, cols, rows, spacing_m, fetched_at, samples)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(grid.west, grid.south, grid.dLng, grid.dLat,
+         grid.cols, grid.rows, grid.spacingM, nowIso(), bytes);
+  return Number(info.lastInsertRowid);
+}
+
+const gridFromRow = row => ({
+  id: row.id,
+  west: row.west, south: row.south,
+  dLng: row.d_lng, dLat: row.d_lat,
+  cols: row.cols, rows: row.rows, spacingM: row.spacing_m,
+  fetchedAt: row.fetched_at,
+  // A copy, not a view onto the row's buffer: node:sqlite may reuse that memory
+  // for the next row read, which would quietly corrupt a grid held across
+  // queries. The copy is a few kilobytes and removes the whole class of bug.
+  z: new Float32Array(
+    row.samples.buffer.slice(row.samples.byteOffset,
+                             row.samples.byteOffset + row.samples.byteLength)),
+});
+
+export const allTerrainGrids = db =>
+  db.prepare('SELECT * FROM terrain_grids ORDER BY id').all().map(gridFromRow);
+
+/**
+ * The cached grid covering a point, if there is one. Prefers the finest
+ * spacing available, since a 5 m grid tells you more than a 30 m one about the
+ * same ground.
+ */
+export function terrainGridAt(db, lat, lng) {
+  const rows = db.prepare('SELECT * FROM terrain_grids ORDER BY spacing_m ASC').all();
+  for (const row of rows) {
+    const east = row.west + (row.cols - 1) * row.d_lng;
+    const north = row.south + (row.rows - 1) * row.d_lat;
+    if (lng >= row.west && lng <= east && lat >= row.south && lat <= north) {
+      return gridFromRow(row);
+    }
+  }
+  return null;
+}
+
+/** Does a cached grid already cover this whole box at this spacing or finer? */
+export function terrainGridCovering(db, { west, south, east, north }, spacingM) {
+  const rows = db.prepare(
+    'SELECT * FROM terrain_grids WHERE spacing_m <= ? ORDER BY spacing_m ASC').all(spacingM);
+  for (const row of rows) {
+    const e = row.west + (row.cols - 1) * row.d_lng;
+    const n = row.south + (row.rows - 1) * row.d_lat;
+    if (row.west <= west && row.south <= south && e >= east && n >= north) {
+      return gridFromRow(row);
+    }
+  }
+  return null;
+}
+
+export const deleteTerrainGrid = (db, id) =>
+  db.prepare('DELETE FROM terrain_grids WHERE id = ?').run(id).changes > 0;

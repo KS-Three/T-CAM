@@ -328,6 +328,21 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                      box-shadow: 0 1px 4px rgba(0,0,0,.25); }
   .maptools button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   #map.placing { cursor: crosshair; }
+  /* The terrain layers cover the whole map, so they MUST not take clicks —
+     without pointer-events:none they would swallow every press meant for the
+     ground and break stand placement and ownership lookup alike. */
+  #terrain, #contours { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+                        pointer-events: none; display: none; }
+  #map.terrain-on #terrain, #map.terrain-on #contours { display: block; }
+  #terrain { opacity: .72; mix-blend-mode: multiply; }
+  #contours path { fill: none; stroke: rgba(255,238,170,.55); stroke-width: 1; }
+  #contours path.index { stroke: rgba(255,225,120,.95); stroke-width: 1.8; }
+  .terrainnote { position: absolute; left: 10px; bottom: 46px; z-index: 4; max-width: 260px;
+                 background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 8px 10px; font-size: 11px; color: var(--muted);
+                 box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  .terrainnote b { color: var(--ink); }
+  .terrainnote .warn { color: var(--warn); }
   .standform { position: absolute; left: 50%; top: 50%; z-index: 5;
                transform: translate(-50%, -50%); width: min(340px, 90%);
                background: var(--panel); border: 1px solid var(--line);
@@ -399,11 +414,12 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
   <div id="planArea"></div>
   <h2 class="section">Cameras</h2>
-  <div id="map"><div id="tiles"></div><div id="pins"></div>
+  <div id="map"><div id="tiles"></div><canvas id="terrain"></canvas><svg id="contours"></svg><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
     <div class="maptools">
       <button id="addStand" type="button">+ Add stand</button>
       <button id="whoOwns" type="button">Who owns this?</button>
+      <button id="terrainBtn" type="button">Terrain</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -516,6 +532,7 @@ function draw() {
   const left = cx - W / 2, top = cy - H / 2;
   const n = 2 ** zoom;
   tilesEl.textContent = ''; pinsEl.textContent = '';
+  drawTerrain(left, top, W, H);
   for (let tx = Math.floor(left / TS); tx <= Math.floor((left + W) / TS); tx++) {
     for (let ty = Math.floor(top / TS); ty <= Math.floor((top + H) / TS); ty++) {
       if (ty < 0 || ty >= n) continue;
@@ -575,6 +592,183 @@ function draw() {
     pin.onclick = ev => { ev.stopPropagation(); openStandForm(s); };
     pinsEl.append(lab, pin);
   }
+}
+
+
+// ---- terrain ----------------------------------------------------------
+// The ground itself, from free USGS LiDAR. This is the layer the paid apps
+// charge for, and on subtle ground it is the one that actually tells you where
+// to sit: a two-foot bench does not show up on satellite imagery at all.
+const terrainCanvas = document.getElementById('terrain');
+const contoursEl = document.getElementById('contours');
+let TERRAIN = null;          // the loaded payload
+let terrainImage = null;     // an offscreen canvas holding the hillshade
+let terrainOn = false;
+let terrainLoading = false;
+const terrainBtn = document.getElementById('terrainBtn');
+
+function terrainNote(html) {
+  document.querySelector('.terrainnote')?.remove();
+  if (!html) return;
+  const n = el('div', 'terrainnote');
+  n.innerHTML = html;
+  mapEl.appendChild(n);
+}
+
+/** base64 -> bytes, without pulling in anything. */
+function unb64(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function buildTerrainImage(t) {
+  const { cols, rows } = t.hillshade;
+  const shade = unb64(t.hillshade.shade), alpha = unb64(t.hillshade.alpha);
+  const off = document.createElement('canvas');
+  off.width = cols; off.height = rows;
+  const ctx = off.getContext('2d');
+  const img = ctx.createImageData(cols, rows);
+  for (let i = 0; i < cols * rows; i++) {
+    const v = shade[i];
+    img.data[i * 4] = v; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = alpha[i];
+  }
+  ctx.putImageData(img, 0, 0);
+  return off;
+}
+
+/**
+ * How much ground to ask for, and how finely.
+ *
+ * A fixed patch is wrong in both directions: zoomed out it covers a third of
+ * the screen, zoomed in it fetches far more than you can see. So the radius
+ * follows the visible map, and the spacing is then chosen to keep the sample
+ * count — and therefore the wait, and the load on a public service — roughly
+ * constant however much ground was asked for.
+ */
+function terrainRequestForView() {
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  // Metres per pixel at this zoom and latitude, from the Web Mercator scale.
+  const mpp = 156543.03392 * Math.cos(centre.lat * Math.PI / 180) / 2 ** zoom;
+  const halfSpan = Math.max(W, H) / 2 * mpp;
+  const radius = Math.min(1500, Math.max(150, Math.round(halfSpan)));
+  // Aim for about 120 cells across, so a patch is ~14k samples whatever its
+  // size. The server clamps spacing to 5 m at the finest regardless.
+  const spacing = Math.min(50, Math.max(5, Math.round(2 * radius / 120)));
+  return { radius, spacing };
+}
+
+/** Is the map still looking at the ground we loaded? */
+function terrainCoversView() {
+  if (!TERRAIN) return false;
+  const b = TERRAIN.bounds;
+  return centre.lat >= b.south && centre.lat <= b.north
+      && centre.lng >= b.west && centre.lng <= b.east;
+}
+
+async function loadTerrain() {
+  if (terrainLoading) return;
+  terrainLoading = true;
+  const { radius, spacing } = terrainRequestForView();
+  terrainBtn.textContent = 'Reading ground\u2026';
+  terrainNote('Fetching LiDAR elevation from USGS for about '
+    + (radius >= 1000 ? (radius * 2 / 1000).toFixed(1) + ' km' : radius * 2 + ' m')
+    + ' of ground. A few seconds the first time, then it is cached and instant.');
+  try {
+    const res = await fetch('/api/terrain?lat=' + centre.lat + '&lng=' + centre.lng
+      + '&radius=' + radius + '&spacing=' + spacing);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'terrain lookup failed');
+    if (!body.covered) {
+      terrainNote('No LiDAR coverage here. Outside the mapped area there is '
+        + 'nothing to draw, which is different from flat ground.');
+      terrainOn = false;
+      return;
+    }
+    TERRAIN = body;
+    terrainImage = buildTerrainImage(body);
+    terrainOn = true;
+    mapEl.classList.add('terrain-on');
+    const st = body.stats, c = body.contours;
+    // The exaggeration is stated, deliberately. A hillshade stretched 23x is a
+    // diagram, and a reader who thinks it is a photograph will read these as
+    // real hills. On ground this flat, saying so is the honest part.
+    const flat = st.medianSlopeDeg < 2;
+    terrainNote(
+      '<b>' + st.reliefFt + ' ft</b> of relief here (' + st.minFt + '\u2013' + st.maxFt + ' ft). '
+      + 'Contours every <b>' + c.intervalFt + ' ft</b>. '
+      + 'Median slope <b>' + st.medianSlopeDeg + '\u00b0</b>.<br>'
+      + 'Hillshade is exaggerated <b>' + body.hillshade.zFactor + '\u00d7</b> vertically \u2014 '
+      + 'at true scale this ground would look flat.'
+      + (flat ? '<br><span class="warn">Ground this gentle has no meaningful thermals.</span>' : '')
+      + '<br>Loaded for this view \u2014 pan, then press Terrain again for new ground.');
+  } catch (err) {
+    terrainNote('Terrain unavailable: ' + err.message);
+    terrainOn = false;
+  } finally {
+    terrainLoading = false;
+    terrainBtn.textContent = 'Terrain';
+    terrainBtn.classList.toggle('on', terrainOn);
+    mapEl.classList.toggle('terrain-on', terrainOn);
+    draw();
+  }
+}
+
+terrainBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  // Pressing Terrain while looking at ground we have not loaded fetches it,
+  // rather than switching on a hillshade of somewhere else entirely.
+  if (!TERRAIN || (!terrainOn && !terrainCoversView())) return loadTerrain();
+  terrainOn = !terrainOn;
+  terrainBtn.classList.toggle('on', terrainOn);
+  mapEl.classList.toggle('terrain-on', terrainOn);
+  if (!terrainOn) terrainNote(null);
+  draw();
+};
+if (!D.live) {
+  terrainBtn.disabled = true;
+  terrainBtn.title = 'Terrain needs the server';
+  terrainBtn.style.opacity = '0.6';
+  terrainBtn.style.cursor = 'not-allowed';
+}
+
+/** Paint the hillshade and contours for the current pan and zoom. */
+function drawTerrain(left, top, W, H) {
+  if (!terrainOn || !TERRAIN) return;
+  const b = TERRAIN.bounds;
+  // Project the terrain patch's own corners, so it stays pinned to the ground
+  // through every pan and zoom rather than to the screen.
+  const x0 = projX(b.west, zoom) - left, x1 = projX(b.east, zoom) - left;
+  const y0 = projY(b.north, zoom) - top, y1 = projY(b.south, zoom) - top;
+
+  terrainCanvas.width = W; terrainCanvas.height = H;
+  const ctx = terrainCanvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  if (terrainImage) ctx.drawImage(terrainImage, x0, y0, x1 - x0, y1 - y0);
+
+  // Contours as one path per line. Every fifth line is drawn heavier, the way a
+  // paper topo does it, so you can count elevation without reading labels.
+  const step = TERRAIN.contours.intervalFt || 1;
+  const parts = [];
+  for (const line of TERRAIN.contours.lines) {
+    let d = '';
+    for (let i = 0; i < line.path.length; i++) {
+      const px = projX(line.path[i][0], zoom) - left;
+      const py = projY(line.path[i][1], zoom) - top;
+      d += (i ? 'L' : 'M') + px.toFixed(1) + ' ' + py.toFixed(1);
+    }
+    const index = Math.round(line.levelFt / step) % 5 === 0;
+    parts.push('<path class="' + (index ? 'index' : '') + '" d="' + d + '"></path>');
+  }
+  contoursEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  contoursEl.setAttribute('width', W);
+  contoursEl.setAttribute('height', H);
+  contoursEl.innerHTML = parts.join('');
 }
 
 // ---- stands -----------------------------------------------------------

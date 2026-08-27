@@ -191,3 +191,23 @@ is gated on sighting data.
 | Individual buck identification | Blocked: needs photos. Realistically manual tagging with assisted matching — automated re-identification from trail-camera images is not a solved problem |
 | Movement vs. weather, learned from your ground | Blocked: needs a season of sightings |
 | Stand recommendations from observed patterns | Blocked: needs all of the above |
+
+### It writes to the dashboard
+
+`hunt-planner.mjs` saves `spypoint-data/plan.json` and rebuilds
+`dashboard.html` with a **Best sits ahead** section at the top — so there is one
+page to open, not a console to read:
+
+```powershell
+node hunt-planner.mjs
+start $HOME\TrailCam\spypoint-data\dashboard.html
+```
+
+The two tools can be run in either order. A sync carries the last plan forward
+instead of wiping it, and the planner rebuilds the page around your existing
+cameras and photos. A plan older than 12 hours is labelled as stale on the page,
+since a forecast goes off quickly.
+
+Cameras on one property share a forecast, so ranking each separately would fill
+the list with the same morning repeated once per camera. Sits are collapsed to
+one row per window, keeping the best-scoring camera and naming the others.

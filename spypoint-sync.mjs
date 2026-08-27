@@ -285,12 +285,27 @@ function healthOf(r) {
 const embed = data => JSON.stringify(data)
   .replace(/&/g, '\\u0026').replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
 
-function dashboardHtml(rows, photos, generatedAt) {
+const PLAN_FILE = 'plan.json';
+
+// Missing or malformed plan.json is normal, not an error: the planner may never
+// have been run. The dashboard renders an explanatory panel in that case.
+async function readPlan(dir) {
+  try {
+    const plan = JSON.parse(await fs.readFile(path.join(dir, PLAN_FILE), 'utf8'));
+    return Array.isArray(plan?.sits) ? plan : null;
+  } catch { return null; }
+}
+
+// `plan` is optional and comes from hunt-planner.mjs by way of plan.json, so a
+// sync run picks up the last plan instead of wiping it off the page, and a
+// planner run rebuilds this same page. Either tool can be run first.
+function dashboardHtml(rows, photos, generatedAt, plan = null) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
     cameras: rows.map(r => ({ ...r, health: healthOf(r) })),
     photos,
+    plan,
   });
   return `<!doctype html>
 <html lang="en">
@@ -372,6 +387,22 @@ function dashboardHtml(rows, photos, generatedAt) {
   .photos figcaption { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px;
            padding: 20px; color: var(--muted); font-size: 14px; }
+  .sit { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+         padding: 12px 14px; margin-bottom: 8px; display: grid;
+         grid-template-columns: auto 1fr; gap: 4px 14px; align-items: start; }
+  .sit .score { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+                text-align: center; min-width: 52px; }
+  .sit .when { font-weight: 600; }
+  .sit .cond { color: var(--muted); font-size: 13px; }
+  .sit ul { margin: 6px 0 0; padding-left: 16px; font-size: 13px; color: var(--muted); }
+  .sit li.neg { color: var(--bad); }
+  .rating { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+  .r-prime .score, .r-prime .rating { color: var(--ok); }
+  .r-strong .score, .r-strong .rating { color: var(--ok); }
+  .r-good .score, .r-good .rating { color: var(--accent); }
+  .r-fair .score, .r-fair .rating { color: var(--warn); }
+  .r-poor .score, .r-poor .rating { color: var(--muted); }
+  .stale-note { color: var(--warn); font-size: 12px; margin: -4px 0 12px; }
 </style>
 </head>
 <body>
@@ -384,6 +415,9 @@ function dashboardHtml(rows, photos, generatedAt) {
     <div class="sub" id="plan"></div>
   </header>
   <div id="alerts"></div>
+  <h2 class="section" style="margin-top:0">Best sits ahead</h2>
+  <div id="planArea"></div>
+  <h2 class="section">Cameras</h2>
   <div id="map"><div id="tiles"></div><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
   </div>
@@ -546,6 +580,52 @@ for (const c of D.cameras) {
     c.health.level === 'ok' ? 'healthy' : c.health.notes.join(' \u00b7 '));
   card.appendChild(t);
   cards.appendChild(card);
+}
+
+// ---- hunt plan --------------------------------------------------------
+const planArea = document.getElementById('planArea');
+if (!D.plan || !D.plan.sits || !D.plan.sits.length) {
+  planArea.appendChild(el('div', 'empty',
+    'No hunt plan yet. Run "node hunt-planner.mjs" to rank the coming sits by weather, rut phase and moon — it needs no photos, only your camera locations.'));
+} else {
+  // A forecast goes off quickly, so say plainly when the plan was built rather
+  // than presenting week-old weather as if it were current.
+  const built = new Date(D.plan.generatedAt);
+  const hrs = (Date.now() - built.getTime()) / 3600000;
+  if (hrs > 12) {
+    planArea.appendChild(el('div', 'stale-note',
+      'This plan was built ' + (hrs < 48 ? Math.round(hrs) + ' hours' : Math.round(hrs / 24) + ' days')
+      + ' ago. Re-run "node hunt-planner.mjs" for a current forecast.'));
+  }
+  for (const s of D.plan.sits.slice(0, 8)) {
+    const row = el('div', 'sit r' + '-' + s.rating.toLowerCase());
+    const sc = el('div');
+    sc.appendChild(el('div', 'score', String(Math.round(s.total))));
+    sc.appendChild(el('span', 'rating', s.rating));
+    const body = el('div');
+    const when = new Date(s.start);
+    body.appendChild(el('div', 'when',
+      when.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
+      + ' · ' + s.window + ' from '
+      + when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      + ' · ' + s.camera));
+    body.appendChild(el('div', 'cond',
+      Math.round(s.temp) + '°F · wind ' + s.windFrom + ' ' + Math.round(s.wind)
+      + ' mph · ' + s.rut + ' · ' + s.moon + ' moon'
+      + (s.alsoAt && s.alsoAt.length
+        ? ' · same window also scored at ' + s.alsoAt.join(', ') : '')));
+    const ul = el('ul');
+    for (const p of s.parts) {
+      const li = el('li', p.points < 0 ? 'neg' : null,
+        (p.points > 0 ? '+' : '') + p.points + '  ' + p.reason);
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+    row.append(sc, body);
+    planArea.appendChild(row);
+  }
+  planArea.appendChild(el('div', 'sub',
+    'Wind direction is where the wind comes FROM. This ranks WHEN to sit; you still choose WHERE.'));
 }
 
 // ---- photos -----------------------------------------------------------
@@ -748,7 +828,11 @@ async function main() {
     all.sort((a, b) => Date.parse(b.date ?? 0) - Date.parse(a.date ?? 0));
 
     const dash = path.join(OPT.out, 'dashboard.html');
-    await fs.writeFile(dash, dashboardHtml(rows, all, new Date().toISOString()));
+    // Carry forward the last hunt plan if one exists, so syncing does not blank
+    // the plan section. hunt-planner.mjs writes this file and rebuilds the same
+    // page, so the two tools can be run in either order.
+    const plan = await readPlan(OPT.out);
+    await fs.writeFile(dash, dashboardHtml(rows, all, new Date().toISOString(), plan));
     log(`Dashboard: ${dash}`);
   }
 
@@ -770,4 +854,4 @@ if (invokedDirectly) {
   });
 }
 
-export { cameraSummary, fmtLoc, fmtPct, daysSince, photoDate, photoUrl, healthOf, dashboardHtml, STALE_DAYS };
+export { cameraSummary, fmtLoc, fmtPct, daysSince, photoDate, photoUrl, healthOf, dashboardHtml, readPlan, PLAN_FILE, STALE_DAYS };

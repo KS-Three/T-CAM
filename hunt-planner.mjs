@@ -33,6 +33,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+// Safe to import: spypoint-sync only runs a sync when invoked as a program, so
+// pulling in its helpers here never touches the network or asks for credentials.
+import { cameraSummary, dashboardHtml, PLAN_FILE } from './spypoint-sync.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);
@@ -258,7 +261,6 @@ async function loadCameras() {
       + '  Run a sync first:  node spypoint-sync.mjs\n'
       + '  Or plan for one spot without it:  node hunt-planner.mjs --lat 44.1 --lng -90.6');
   }
-  const { cameraSummary } = await import('./spypoint-sync.mjs');
   const rows = raw.map(cameraSummary).filter(r => r.lat !== null && r.lng !== null);
   if (!rows.length) throw new Error('camera data has no usable coordinates');
   return rows;
@@ -299,7 +301,11 @@ async function main() {
           date: daily.time[d], window: w.name,
           start: new Date(start).toISOString(), end: new Date(end).toISOString(),
           rut: rut.phase, moon: moon.name,
-          ...s, rating: rate(s.total),
+          ...s,
+          // Resolve the bearing here: the dashboard shows this verbatim and
+          // should not have to know the compass conversion.
+          windFrom: s.windDir === null ? '?' : compass(s.windDir),
+          rating: rate(s.total),
         });
       }
     }
@@ -307,7 +313,21 @@ async function main() {
 
   sits.sort((a, b) => b.total - a.total);
 
-  const top = sits.slice(0, 12);
+  // Cameras on one property share a forecast, so ranking every camera
+  // separately fills the list with the same morning repeated once per camera
+  // and pushes out genuinely different dates. Collapse to one row per sit
+  // window, keeping the best-scoring camera, and record the others so nothing
+  // is silently dropped.
+  const byWindow = new Map();
+  for (const s of sits) {
+    const key = `${s.date}|${s.window}`;
+    const kept = byWindow.get(key);
+    if (!kept) byWindow.set(key, { ...s, alsoAt: [] });
+    else if (!kept.alsoAt.includes(s.camera)) kept.alsoAt.push(s.camera);
+  }
+  const ranked = [...byWindow.values()].sort((a, b) => b.total - a.total);
+
+  const top = ranked.slice(0, 12);
   log('BEST SITS, RANKED\n');
   for (const s of top) {
     const when = new Date(s.start);
@@ -326,7 +346,36 @@ async function main() {
     log(`Full plan written to ${OPT.json}`);
   }
 
-  log('Wind direction is where the wind comes FROM. Pick the stand it does not');
+  // Write the plan where the dashboard looks for it, then rebuild the page so
+  // there is one thing to open rather than a console to read.
+  const plan = { generatedAt: new Date().toISOString(), sits: ranked };
+  try {
+    await fs.mkdir(OPT.out, { recursive: true });
+    await fs.writeFile(path.join(OPT.out, PLAN_FILE), JSON.stringify(plan, null, 2));
+
+    // Rebuilding needs the synced cameras and photos. Without them the plan is
+    // still saved and will appear on the next sync — no reason to fail here.
+    const raw = JSON.parse(await fs.readFile(path.join(OPT.out, 'cameras.raw.json'), 'utf8'));
+    let photos = [];
+    try {
+      photos = (await fs.readFile(path.join(OPT.out, 'photos.jsonl'), 'utf8'))
+        .split('\n').filter(Boolean)
+        .map(l => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean);
+    } catch { /* no photos synced yet */ }
+    photos.sort((a, b) => Date.parse(b.date ?? 0) - Date.parse(a.date ?? 0));
+
+    const dash = path.join(OPT.out, 'dashboard.html');
+    await fs.writeFile(dash, dashboardHtml(
+      raw.map(cameraSummary), photos, new Date().toISOString(), plan));
+    log(`\nDashboard updated: ${dash}`);
+    log('Open it to see this plan alongside your camera map.');
+  } catch {
+    log(`\nPlan saved to ${path.join(OPT.out, PLAN_FILE)}.`);
+    log('Run "node spypoint-sync.mjs" to build the dashboard around it.');
+  }
+
+  log('\nWind direction is where the wind comes FROM. Pick the stand it does not');
   log('carry your scent from — this model scores WHEN, you still choose WHERE.');
 }
 

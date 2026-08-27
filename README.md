@@ -217,6 +217,42 @@ Updates are partial, so a rename cannot silently clear the winds — a real risk
 since that would quietly turn a known-good stand into one the tool refuses to
 recommend.
 
+## Who owns this ground
+
+Press **Who owns this?** on the map and click anywhere: owner name, acreage,
+property class, county, town, school district and the owner's mailing address —
+which is how you write to ask permission.
+
+This is the headline feature of the paid hunting apps, and in Wisconsin it is
+free. The data is the [Wisconsin Statewide Parcel
+Map](https://maps.sco.wisc.edu/Parcels/), aggregated from every county by the
+State Cartographer's Office: 3.5 million parcels, public record, queryable by
+point.
+
+**Wisconsin only.** Other states publish parcel data in wildly varying shapes
+and several do not publish owner names at all. A point outside the state
+returns "no parcel here" rather than pretending. The endpoint is overridable
+via `TRAILCAM_PARCEL_URL`, so pointing at another state's service is a config
+change rather than a rewrite.
+
+### On privacy
+
+Owner names and mailing addresses are public record, and the mailing address is
+the practical point. It is still someone's home address, so lookups are made
+**on demand** and held only in memory for the life of the process. Nothing is
+written to the database or to disk, and there is no bulk download.
+
+### Two failure modes kept distinct
+
+- **No parcel there** — outside Wisconsin, or on water. A real answer, returned
+  as `found: false` with HTTP 200.
+- **The lookup broke** — returned as HTTP 502.
+
+Conflating them would have the map claim nobody owns ground that plainly is
+owned. ArcGIS makes this easy to get wrong: it reports its own errors *inside*
+a 200 response, so checking the status code alone would turn a broken service
+into "no parcel here". A test pins that.
+
 ## Output
 
 ```

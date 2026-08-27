@@ -349,6 +349,17 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .formrow button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .formrow button.danger { color: var(--bad); }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .parcelcard { position: absolute; left: 10px; bottom: 78px; z-index: 5;
+                width: min(300px, calc(100% - 20px)); background: var(--panel);
+                border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
+                box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  .parcelcard h4 { margin: 0 0 8px; font-size: 14px; }
+  .parcelcard .row { display: flex; justify-content: space-between; gap: 12px;
+                     padding: 3px 0; color: var(--muted); }
+  .parcelcard .row b { color: var(--ink); font-weight: 600; text-align: right; }
+  .parcelcard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                       border: 0; background: none; color: var(--muted); font-size: 18px;
+                       line-height: 1; padding: 2px 6px; }
   /* Map-type control, positioned like Google's: a thumbnail in the lower-left
      showing what you would switch TO, with the full list on hover or tap. */
   .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
@@ -388,7 +399,10 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <h2 class="section">Cameras</h2>
   <div id="map"><div id="tiles"></div><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
-    <div class="maptools"><button id="addStand" type="button">+ Add stand</button></div>
+    <div class="maptools">
+      <button id="addStand" type="button">+ Add stand</button>
+      <button id="whoOwns" type="button">Who owns this?</button>
+    </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
         <span id="layerLabel"></span>
@@ -583,6 +597,71 @@ function pixelToLatLng(px, py) {
   };
 }
 
+// ---- who owns this ----------------------------------------------------
+let identifying = false;
+const ownBtn = document.getElementById('whoOwns');
+
+function closeParcelCard() { document.querySelector('.parcelcard')?.remove(); }
+
+function showParcelCard(title, rows, note) {
+  closeParcelCard();
+  const card = el('div', 'parcelcard');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
+  x.onclick = closeParcelCard;
+  card.appendChild(x);
+  card.appendChild(el('h4', null, title));
+  for (const [k, v] of rows) {
+    if (v === null || v === undefined || v === '') continue;
+    const r = el('div', 'row');
+    r.append(el('span', null, k), el('b', null, String(v)));
+    card.appendChild(r);
+  }
+  if (note) card.appendChild(el('div', 'hint', note));
+  mapEl.appendChild(card);
+}
+
+async function lookupParcel(lat, lng) {
+  showParcelCard('Looking up\u2026', [], null);
+  try {
+    const res = await fetch('/api/parcel?lat=' + lat + '&lng=' + lng);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'lookup failed');
+    if (!body.found) {
+      return showParcelCard('No parcel here', [],
+        'Wisconsin parcels only. Outside the state, or on water, there is nothing to look up.');
+    }
+    const p = body.parcel;
+    showParcelCard(p.owner || 'Owner not recorded', [
+      ['Acres', p.acres],
+      ['Class', p.propClassName || p.propClass],
+      ['County', p.county],
+      ['Parcel ID', p.parcelId],
+      ['Mailing address', p.mailingAddress],
+      ['School district', p.schoolDistrict],
+    ], 'Public record from the Wisconsin statewide parcel map.');
+  } catch (err) {
+    showParcelCard('Lookup failed', [['Reason', err.message]],
+      'The parcel service may be down; the rest of the map is unaffected.');
+  }
+}
+
+if (!D.live) {
+  ownBtn.disabled = true;
+  ownBtn.title = 'Ownership lookup needs the server';
+  ownBtn.style.opacity = '0.6';
+  ownBtn.style.cursor = 'not-allowed';
+} else {
+  ownBtn.onclick = ev => {
+    ev.stopPropagation();
+    identifying = !identifying;
+    if (identifying && placing) addBtn.onclick(new Event('click'));
+    ownBtn.classList.toggle('on', identifying);
+    ownBtn.textContent = identifying ? 'Click the map\u2026' : 'Who owns this?';
+    mapEl.classList.toggle('placing', identifying);
+  };
+}
+
 const addBtn = document.getElementById('addStand');
 if (!D.live) {
   // Opened as a file rather than served. Say why the control is unavailable —
@@ -761,7 +840,20 @@ layersEl.onmouseleave = () => layersEl.classList.remove('open');
 document.addEventListener('click', () => layersEl.classList.remove('open'));
 
 mapEl.addEventListener('click', e => {
-  if (!placing || e.target.closest('.zoom, .layers, .maptools, .standform, .stand')) return;
+  if (e.target.closest('.zoom, .layers, .maptools, .standform, .stand, .parcelcard')) return;
+  if (identifying) {
+    const r0 = mapEl.getBoundingClientRect();
+    const ix = e.clientX - r0.left, iy = e.clientY - r0.top;
+    if (ix < 0 || iy < 0 || ix > r0.width || iy > r0.height) return;
+    const at0 = pixelToLatLng(ix, iy);
+    identifying = false;
+    ownBtn.classList.remove('on');
+    ownBtn.textContent = 'Who owns this?';
+    mapEl.classList.remove('placing');
+    lookupParcel(at0.lat, at0.lng);
+    return;
+  }
+  if (!placing) return;
   const r = mapEl.getBoundingClientRect();
   const px = e.clientX - r.left, py = e.clientY - r.top;
   if (px < 0 || py < 0 || px > r.width || py > r.height) return;

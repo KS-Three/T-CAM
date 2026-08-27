@@ -31,6 +31,7 @@ import {
   STAND_TYPES, COMPASS,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
+import { parcelAt } from './parcels.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);
@@ -250,6 +251,34 @@ export function createServer({ out = OPT.out } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/stand-types') {
         return sendJson(res, 200, { types: STAND_TYPES, winds: COMPASS });
+      }
+
+      // Who owns this ground. Proxied through the server rather than called
+      // from the browser so the public service sees one client, the result can
+      // be cached in one place, and a future non-Wisconsin source is a change
+      // here rather than in the page.
+      if (req.method === 'GET' && url.pathname === '/api/parcel') {
+        // Number(null) is 0, so a MISSING parameter would otherwise become a
+        // valid-looking query against 0,0 in the Atlantic and answer "no parcel
+        // here" instead of "you gave me no coordinates".
+        const raw = { lat: url.searchParams.get('lat'), lng: url.searchParams.get('lng') };
+        if (raw.lat === null || raw.lng === null || raw.lat === '' || raw.lng === '') {
+          return sendJson(res, 400, { error: 'lat and lng are required' });
+        }
+        const lat = Number(raw.lat);
+        const lng = Number(raw.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)
+          || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          return sendJson(res, 400, { error: 'lat and lng must be real coordinates' });
+        }
+        try {
+          const parcel = await parcelAt(lat, lng);
+          // No parcel is a real answer (outside Wisconsin, or on water), and
+          // must not read as a failed lookup.
+          return sendJson(res, 200, { parcel, found: parcel !== null });
+        } catch (err) {
+          return sendJson(res, 502, { error: err.message });
+        }
       }
 
       if (req.method === 'GET' && url.pathname === '/api/health') {

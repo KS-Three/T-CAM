@@ -29,8 +29,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { getProvider, credentialsFor } from './providers/index.mjs';
+import spypoint from './providers/spypoint.mjs';
 
-const API = 'https://restapi.spypoint.com/api/v3';
+// Re-exported from the provider rather than defined twice: two copies of the
+// same extraction logic is exactly how they drift apart.
+const cameraSummary = spypoint.normalizeCamera;
+const photoDate = p => spypoint.photoDate(p);
+const photoUrl = (p, prefer) => spypoint.photoUrl(p, prefer);
+
 const FUTURE = '2100-01-01T00:00:00.000Z';
 
 const argv = process.argv.slice(2);
@@ -49,6 +56,7 @@ const OPT = {
   dryRun: has('--dry-run'),
   inspect: has('--inspect'),
   quiet: has('--quiet'),
+  provider: val('--provider', 'spypoint'),
 };
 
 const log = (...a) => { if (!OPT.quiet) console.log(...a); };
@@ -62,35 +70,6 @@ const warn = (...a) => console.error(...a);
 class Fatal extends Error {}
 const die = msg => { throw new Fatal(msg); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-async function api(method, route, { token, body } = {}) {
-  await sleep(250); // no official rate limits exist, so stay deliberately slow
-  for (let attempt = 1; ; attempt++) {
-    let res;
-    try {
-      res = await fetch(API + route, {
-        method,
-        headers: {
-          accept: 'application/json',
-          ...(body ? { 'content-type': 'application/json' } : {}),
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch (err) {
-      if (attempt < 3) { await sleep(1500 * attempt); continue; }
-      throw new Error(`${method} ${route}: network failure after ${attempt} tries (${err.message})`);
-    }
-    if (res.status >= 500 && attempt < 3) { await sleep(1500 * attempt); continue; }
-    if (!res.ok) {
-      const text = (await res.text().catch(() => '')).slice(0, 300);
-      const e = new Error(`${method} ${route} -> HTTP ${res.status}${text ? ` ${text}` : ''}`);
-      e.status = res.status;
-      throw e;
-    }
-    return res.json();
-  }
-}
 
 // The camera/photo schemas are undocumented (both community clients pass the
 // JSON through untouched), so extraction hunts by key name instead of
@@ -108,67 +87,8 @@ function* walk(obj, prefix = '') {
   for (const [k, v] of Object.entries(obj)) yield* walk(v, prefix ? `${prefix}.${k}` : k);
 }
 
-const leafKey = p => p.replace(/\[\d+\]/g, '').split('.').pop();
-
-function findFirst(obj, keyRe, pred = () => true) {
-  for (const [p, v] of walk(obj)) {
-    if (keyRe.test(leafKey(p)) && pred(v)) return { path: p, value: v };
-  }
-  return null;
-}
-
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const first = a => (Array.isArray(a) ? a[0] : undefined);
-
-// Field paths below were confirmed against a real 4-camera FLEX-M account on
-// 2026-08-27 via --inspect. The generic findFirst() hunts remain as fallbacks,
-// since other SpyPoint models may lay their documents out differently.
-//
-// Location arrives as a GeoJSON Point (status.coordinates[0].position), so
-// `coordinates` is [longitude, latitude] — NOT the other way round. This was
-// verified, not assumed: the same object carries DMS strings, and converting
-// them reproduces the numeric array with longitude in slot 0. Transposing it
-// drops a Wisconsin camera into Asia, and a map renders that without
-// complaining, so test/extract.test.js pins the ordering. Do not "fix" this.
-function cameraSummary(cam) {
-  const st = cam?.status ?? {};
-  const gps = first(st.coordinates);
-  const pos = gps?.position?.coordinates;
-  const geo = Array.isArray(pos) && isNum(pos[0]) && isNum(pos[1]);
-  const power = first(st.powerSources);
-  // status.signal is an object, so an earlier "first number named signal" hunt
-  // silently found nothing and every camera reported an unknown signal.
-  const sig = st.signal ?? {};
-  const sub = first(cam?.subscriptions);
-
-  return {
-    id: String(cam?.id ?? ''),
-    name: cam?.config?.name
-      ?? findFirst(cam, /^name$/i, v => typeof v === 'string' && v.length > 0)?.value
-      ?? String(cam?.id ?? 'camera'),
-    model: st.model ?? findFirst(cam, /^model$/i, v => typeof v === 'string')?.value ?? null,
-    lat: geo ? pos[1] : findFirst(cam, /^lat(itude)?$/i, isNum)?.value ?? null,
-    lng: geo ? pos[0] : findFirst(cam, /^(lng|lon|long|longitude)$/i, isNum)?.value ?? null,
-    gpsFix: gps?.dateTime ?? null,
-    battery: power?.percentage ?? first(st.batteries)
-      ?? findFirst(cam, /batter/i, isNum)?.value ?? null,
-    batteryLevel: power?.level ?? first(st.batteryLevels) ?? null,
-    batterySource: power?.type ?? st.batteryType ?? null,
-    signal: sig.processed?.percentage ?? null,
-    signalBars: sig.processed?.bar ?? sig.bar ?? null,
-    signalLevel: sig.processed?.level ?? null,
-    signalType: sig.type ?? null,
-    tempValue: st.temperature?.value ?? null,
-    tempUnit: st.temperature?.unit ?? null,
-    memUsed: st.memory?.used ?? null,
-    memSize: st.memory?.size ?? null,
-    plan: sub?.plan?.name ?? null,
-    photoCount: sub?.photoCount ?? null,
-    photoLimit: sub?.photoLimit ?? null,
-    lastSeen: st.lastUpdate
-      ?? findFirst(cam, /last.?(update|sync|comm|photo)/i, v => typeof v === 'string')?.value ?? null,
-  };
-}
 
 const fmtLoc = r => (r.lat !== null && r.lng !== null ? `${r.lat},${r.lng}` : '?');
 
@@ -185,23 +105,6 @@ function daysSince(iso) {
 }
 
 const STALE_DAYS = 30;
-
-const DATE_KEYS = ['originDate', 'date', 'createDate', 'creationDate', 'dateTime'];
-function photoDate(p) {
-  for (const k of DATE_KEYS) {
-    if (typeof p?.[k] === 'string' && !Number.isNaN(Date.parse(p[k]))) return p[k];
-  }
-  const hit = findFirst(p, /date|time/i, v => typeof v === 'string' && !Number.isNaN(Date.parse(v)));
-  return hit?.value ?? null;
-}
-
-function photoUrl(p, prefer) {
-  for (const size of [prefer, 'large', 'medium', 'small']) {
-    const s = p?.[size];
-    if (s?.host && s?.path) return `https://${s.host}/${s.path}`;
-  }
-  return null;
-}
 
 const q = v => {
   if (v === null || v === undefined) return '';
@@ -230,12 +133,6 @@ async function download(url, dest) {
   await fs.mkdir(path.dirname(dest), { recursive: true });
   await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
 }
-
-const fetchPage = (token, cameraId, dateEnd) =>
-  api('POST', '/photo/all', {
-    token,
-    body: { camera: [cameraId], dateEnd, favorite: false, hd: false, limit: OPT.limit, tag: [] },
-  });
 
 function dumpPaths(label, obj) {
   console.log(`\n=== ${label} ===`);
@@ -682,6 +579,7 @@ if (located.length) { paintControl(); draw(); }
 else mapEl.innerHTML = '<div style="padding:20px;color:#888">No camera reported GPS coordinates.</div>';
 
 // ---- camera cards -----------------------------------------------------
+const MIXED_BRANDS = new Set(D.cameras.map(c => c.provider).filter(Boolean)).size > 1;
 const cards = document.getElementById('cards');
 const meter = (pct, colour) => {
   const b = el('div', 'bar'), i = el('i');
@@ -695,7 +593,12 @@ for (const c of D.cameras) {
   const card = el('div', 'card ' + c.health.level);
   card.id = 'cam-' + c.id;
   card.appendChild(el('h3', null, c.name));
-  card.appendChild(el('div', 'model', [c.model, c.signalType].filter(Boolean).join(' \u00b7 ') || '\u2014'));
+  // Name the brand only when more than one is present. On a single-brand
+  // account it would be the same word on every card, which is just noise.
+  const brand = MIXED_BRANDS && c.provider
+    ? c.provider.charAt(0).toUpperCase() + c.provider.slice(1) : null;
+  card.appendChild(el('div', 'model',
+    [brand, c.model, c.signalType].filter(Boolean).join(' \u00b7 ') || '\u2014'));
 
   if (typeof c.battery === 'number') {
     const v = el('span', null, c.battery + '%' + (c.batteryLevel ? ' (' + c.batteryLevel + ')' : ''));
@@ -801,33 +704,38 @@ if (!D.photos.length) {
 }
 
 async function main() {
-  const email = process.env.SPYPOINT_EMAIL;
-  const password = process.env.SPYPOINT_PASSWORD;
+  // Everything brand-specific now lives behind a provider, so adding a camera
+  // make means writing providers/<id>.mjs, not touching this file.
+  let provider;
+  try {
+    provider = getProvider(OPT.provider);
+  } catch (err) {
+    die(err.message);
+  }
+  const { email, password } = credentialsFor(provider);
+  const P = provider.envPrefix;
   if (!email || !password) {
-    die(`SPYPOINT_EMAIL and SPYPOINT_PASSWORD must be set (never hardcode them).
-  PowerShell:  $env:SPYPOINT_EMAIL = "you@example.com"; $env:SPYPOINT_PASSWORD = "..."
-  cmd:         set SPYPOINT_EMAIL=you@example.com
-  bash:        export SPYPOINT_EMAIL=you@example.com`);
+    die(`${P}_EMAIL and ${P}_PASSWORD must be set (never hardcode them).
+  PowerShell:  $env:${P}_EMAIL = "you@example.com"; $env:${P}_PASSWORD = "..."
+  cmd:         set ${P}_EMAIL=you@example.com
+  bash:        export ${P}_EMAIL=you@example.com
+
+  Or just double-click start-trailcam.cmd, which asks for them.`);
   }
 
-  log(`Logging in as ${email} ...`);
-  let auth;
+  log(`Logging in to ${provider.label} as ${email} ...`);
+  let session;
   try {
-    auth = await api('POST', '/user/login', { body: { username: email, password } });
+    session = await provider.login(email, password);
   } catch (err) {
-    if (err.status === 401 || err.status === 403) {
-      die('SpyPoint rejected the login — check SPYPOINT_EMAIL / SPYPOINT_PASSWORD.');
-    }
+    // Providers flag a credential rejection so the message stays specific
+    // without this file knowing any provider's status codes.
+    if (err.credentials) die(err.message);
     throw err;
   }
-  const token = auth?.token;
-  if (!token) {
-    die(`login response carried no token — the API may have changed. Keys seen: ${Object.keys(auth ?? {}).join(', ')}`);
-  }
 
-  const cameras = await api('GET', '/camera/all', { token });
-  if (!Array.isArray(cameras)) die('camera/all did not return an array — the API may have changed.');
-  log(`${cameras.length} camera(s) on the account.`);
+  const cameras = await provider.cameras(session);
+  log(`${cameras.length} ${provider.label} camera(s) on the account.`);
 
   if (OPT.inspect) {
     dumpPaths('camera[0] raw fields', cameras[0]);
@@ -835,10 +743,9 @@ async function main() {
     // genuinely holds no photos, or that this query is shaped wrong. Dump the
     // response envelope for EVERY camera so the two can be told apart.
     for (const cam of cameras) {
-      const label = cam?.config?.name ?? cam?.id ?? 'camera';
+      const label = provider.normalizeCamera(cam).name;
       if (!cam?.id) continue;
-      const page = await fetchPage(token, cam.id, FUTURE);
-      const photos = page?.photos ?? [];
+      const { photos, raw: page } = await provider.photos(session, cam.id, FUTURE, OPT.limit);
       console.log(`\n=== photo/all envelope for ${label} ===`);
       console.log(`  response keys: ${Object.keys(page ?? {}).join(', ') || '(none)'}`);
       console.log(`  photos array present: ${Array.isArray(page?.photos)}`);
@@ -852,7 +759,7 @@ async function main() {
     return;
   }
 
-  const rows = cameras.map(cameraSummary);
+  const rows = cameras.map(c => ({ ...provider.normalizeCamera(c), provider: provider.id }));
   const selected = OPT.cameras.length
     ? rows.filter(r => OPT.cameras.some(f =>
         r.name.toLowerCase().includes(f) || r.id.toLowerCase().includes(f)))
@@ -913,17 +820,16 @@ async function main() {
     let fetched = 0;
     let pages = 0;
     camloop: while (pages < 1000) {
-      const page = await fetchPage(token, cam.id, dateEnd);
-      const photos = page?.photos ?? [];
+      const { photos } = await provider.photos(session, cam.id, dateEnd, OPT.limit);
       pages++;
       if (photos.length === 0) break;
       let oldest = null;
       for (const p of photos) {
-        const d = photoDate(p);
+        const d = provider.photoDate(p);
         if (d && (oldest === null || Date.parse(d) < Date.parse(oldest))) oldest = d;
-        const id = String(p?.id ?? '');
+        const id = provider.photoId(p);
         if (!id || seen.has(id)) continue;
-        const url = photoUrl(p, OPT.size);
+        const url = provider.photoUrl(p, OPT.size);
         if (!url) { warn(`  ${cam.name}: photo ${id} has no downloadable URL, skipped`); continue; }
         // Stored with forward slashes and relative to the output dir, because
         // the dashboard loads it as an <img src> from that same folder.
@@ -941,7 +847,8 @@ async function main() {
         seen.add(id);
         meta.push(JSON.stringify({
           id, camera: cam.id, cameraName: cam.name, date: d,
-          tags: p.tag ?? p.tags ?? [], url, file: rel,
+          tags: provider.photoTags(p), url,
+          provider: provider.id, file: rel,
         }));
         fetched++; totalNew++;
         if (OPT.max && fetched >= OPT.max) {

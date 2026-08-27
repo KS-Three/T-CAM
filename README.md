@@ -57,6 +57,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
 | `node spypoint-sync.mjs --inspect` | Dumps the raw API field names for one camera and one photo |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
+| `node spypoint-sync.mjs --provider <id>` | Sync a different camera brand |
 
 | Flag | Meaning |
 | --- | --- |
@@ -66,6 +67,49 @@ are never written to disk, never logged, and never stored in this repo.
 | `--size S` | `large` (default) / `medium` / `small`; falls back downward |
 | `--cameras A,B` | Only cameras whose name or id contains one of these |
 | `--quiet` | Errors and final summary only |
+
+## Camera brands
+
+Each brand's cloud sits behind a provider, so the sync, the map, the dashboard
+and the hunt planner never learn anything brand-specific — a camera is just a
+row, and cameras from different brands appear together on one map with a brand
+label on each card.
+
+| Provider | State |
+| --- | --- |
+| `spypoint` | **Working.** Verified against a real 4-camera FLEX-M account |
+| `moultrie` | **Not implemented** — see below |
+
+`providers/README.md` documents the interface and how to add a brand.
+
+### Why Moultrie isn't supported yet
+
+Moultrie is a much harder target than SpyPoint, and not for lack of looking
+(measured 2026-08-27):
+
+- **No community client exists.** SpyPoint has two independent ones that agree
+  on every endpoint, which is why that provider was short work. The only
+  Moultrie project of any relevance,
+  [lzilioli/moultrie-scraper](https://github.com/lzilioli/moultrie-scraper),
+  drives a headless browser with Puppeteer rather than calling an API — what
+  people resort to when there is no easy API.
+- **The web app is Blazor WebAssembly** (.NET 8). Its endpoints are compiled
+  into `.wasm` assemblies, so there is no JavaScript bundle to read them out of.
+- **It authenticates with Microsoft MSAL** — OAuth with browser redirects, not
+  SpyPoint's `POST /user/login` returning a bearer token. A standalone client
+  would need the full authorization-code + PKCE flow and token refresh.
+- **No official API or developer programme.**
+
+Rather than stub it with invented endpoints — a provider returning
+plausible-looking wrong data would be drawn on the map and fed to the hunt
+planner without complaint — `providers/moultrie.mjs` refuses with an
+explanation, and records what was found so the next attempt starts from
+evidence.
+
+**One capture unblocks it**, about five minutes for anyone with a Moultrie
+account: [`docs/moultrie-capture.md`](docs/moultrie-capture.md). It yields the
+real API host, the endpoints, the field names and how the token is carried —
+after which implementing the provider is ordinary work rather than guesswork.
 
 ## Output
 

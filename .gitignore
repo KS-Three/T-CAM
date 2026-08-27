@@ -24,6 +24,9 @@ sync.cmd
 sync.sh
 .env
 .env.*
+# Written by Start-TrailCam.ps1. DPAPI-encrypted to one Windows account, but a
+# credential file all the same and never belongs in a public repo.
+.credentials.xml
 
 # Node / editor noise
 node_modules/

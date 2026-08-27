@@ -14,7 +14,26 @@ Zero dependencies. One file. Node 20+.
 > the credential-bearing scheduler wrapper. **Check `git status` before your
 > first commit**, and keep it that way.
 
-## Quick start
+## Easiest way to run it
+
+Double-click **`start-trailcam.cmd`**.
+
+It checks Node is installed, asks for your SpyPoint login the first time
+(offering to remember it, encrypted to your Windows account), syncs your
+cameras, builds the hunt plan, and opens the dashboard in your browser. Run it
+again any time to refresh.
+
+If you'd rather paste one line:
+
+```powershell
+cd $HOME\TrailCam; .\start-trailcam.cmd
+```
+
+The saved login lives in `.credentials.xml`, encrypted with Windows DPAPI so
+only your Windows account on that machine can read it. It never leaves the PC
+and is gitignored. Delete it to be asked again.
+
+## Quick start (manual)
 
 ```powershell
 # Windows PowerShell — one line at a time

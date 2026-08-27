@@ -37,6 +37,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `node spypoint-sync.mjs` | Full sync: cameras, photos, dashboard |
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
 | `node spypoint-sync.mjs --inspect` | Dumps the raw API field names for one camera and one photo |
+| `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
 
 | Flag | Meaning |
 | --- | --- |
@@ -125,12 +126,68 @@ public.
   downloads) with no retry storms. Hourly is plenty — cameras only upload a few
   times a day on their own schedule.
 
-## Status
+## Hunt planner
 
-Verified against a real 4-camera FLEX-M account:
+```bash
+node hunt-planner.mjs                            # uses your synced camera locations
+node hunt-planner.mjs --days 14 --json plan.json
+node hunt-planner.mjs --lat 44.1 --lng -90.6     # works with no sync data at all
+```
 
-- Login, camera listing, and every field above — **working**.
-- Photo download and paging — **untested against real photos**. The test
-  account's cameras had been offline for months, so the list was legitimately
-  empty. The code mirrors the community clients but has not yet moved a real
-  photo.
+Pulls a real forecast for each camera's coordinates and scores every morning
+and evening sit for the next N days, ranked, with the reasoning printed:
+
+```
+  PRIME   58  Thu, Nov 5 AM (from 5:21 AM)  North Ridge
+         28°F, wind NW 9 mph, Seeking
+         +24  Seeking — bucks cruising for the first does
+         +14  temperature 21°F below yesterday — strong cold front
+         +8   pressure rising 0.19 inHg — front clearing
+```
+
+### What the score is built from
+
+Additive and deliberately transparent, in rough order of effect size:
+
+| Factor | Why |
+| --- | --- |
+| **Rut phase** | Photoperiod-driven, so the dates barely move year to year. The calendar in the source is for ~43–45°N (Wisconsin); further south it all slides later |
+| **Temperature drop** | A day-over-day fall in the high is the most reliable non-rut trigger. A warm-up scores negative |
+| **Barometric trend** | Rising behind a departing front is the classic signal; a steep fall means deer sit it out |
+| **Wind** | A curve, not more-is-better — a steady breeze is cover, dead calm pools your scent, a gale shuts movement down |
+| **Rain** | A drizzle is fine and quiets the woods; a downpour ends the sit |
+| **Cloud cover** | Low light stretches the morning window |
+| **Moon** | Included, weighted small, and labelled as such — solunar theory is genuinely contested and the effect is minor next to a front or the rut |
+
+Out of season the weather cannot rescue a date, so those sits are capped —
+otherwise a flawless August morning outranks a windy day in the rut. The cap
+appears as a printed reason rather than being applied silently.
+
+### What it is not
+
+**It knows nothing about your deer.** It has never seen a photo. It does not
+know which buck uses which trail, where anything beds, or what happened on your
+ground last November. It ranks *when* the weather and calendar favour a sit; you
+still choose *where*, and the wind direction is printed for every sit so you can.
+
+Every factor is published whitetail behaviour, not a pattern learned from your
+cameras. Once photos accumulate, those sightings can be scored against these
+same factors to find which ones actually predict movement on your ground — and
+at that point the evidence should correct this model, not the reverse.
+
+## Roadmap
+
+The end goal is pattern analysis: individual bucks, movement against weather and
+season, and stand recommendations grounded in what actually happened. That work
+is gated on sighting data.
+
+| | Status |
+| --- | --- |
+| Camera locations, status, health | **Working** |
+| Offline map dashboard | **Working** |
+| Hunt planner — weather, rut, moon | **Working**, no sighting data required |
+| Photo download and paging | Written, **never run against real photos** |
+| Sighting log — deer per camera per hour | Blocked: needs photos |
+| Individual buck identification | Blocked: needs photos. Realistically manual tagging with assisted matching — automated re-identification from trail-camera images is not a solved problem |
+| Movement vs. weather, learned from your ground | Blocked: needs a season of sightings |
+| Stand recommendations from observed patterns | Blocked: needs all of the above |

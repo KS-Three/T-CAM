@@ -57,6 +57,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
 | `node spypoint-sync.mjs --inspect` | Dumps the raw API field names for one camera and one photo |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
+| `node serve.mjs` | Serves the dashboard from the database at http://127.0.0.1:8787 |
 | `node spypoint-sync.mjs --provider <id>` | Sync a different camera brand |
 
 | Flag | Meaning |
@@ -139,6 +140,46 @@ Schema highlights, and why:
 Migrations are versioned and applied once, each in a transaction. **Never edit a
 migration that has shipped** — add another; this file holds data the user cares
 about.
+
+## The local server
+
+`start-trailcam.cmd` now finishes by starting a small server instead of opening
+a file:
+
+```powershell
+node serve.mjs                      # http://127.0.0.1:8787
+node serve.mjs --host 0.0.0.0       # also reachable from a phone on your Wi-Fi
+node serve.mjs --port 8080 --open
+```
+
+**Why a server at all:** a static HTML file cannot save anything. The moment you
+want to click a photo and say "that's Split G2", the page needs somewhere to
+write — that is what this provides, and it is the groundwork for the tagging
+screen.
+
+Node's built-in `http` module, so still no dependencies. It binds to
+**127.0.0.1 by default** — nothing outside this computer can reach it until you
+explicitly pass `--host 0.0.0.0`, which is a deliberate choice because it
+exposes your camera locations to anything else on that network.
+
+The browser talks to a small JSON API rather than a page with data baked in:
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /` | The dashboard, rendered from the database |
+| `GET /api/state` | Everything the page needs in one call |
+| `GET /api/cameras` | Cameras with their property names |
+| `GET /api/photos?limit=N` | Photos newest first, with species tags |
+| `GET /api/health` | Store contents |
+| `GET /photos/...` | A synced image |
+
+That boundary is deliberate: the phone app, when it comes, speaks to exactly
+this interface instead of forcing a rewrite.
+
+Photo paths come from the URL and are therefore untrusted — they are resolved
+and checked to be inside the photo directory before anything is read. A test
+sends the raw un-normalized bytes down a socket to prove the *server* refuses,
+rather than proving a polite HTTP client rewrote the path first.
 
 ## Output
 

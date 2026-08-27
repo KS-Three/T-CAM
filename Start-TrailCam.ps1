@@ -112,21 +112,22 @@ if ($LASTEXITCODE -ne 0) {
     Say '  Could not build the hunt plan - carrying on without it.' 'Yellow'
 }
 
-# --- Open --------------------------------------------------------------------
-$dash = Join-Path $PSScriptRoot 'spypoint-data\dashboard.html'
+# --- Serve -------------------------------------------------------------------
+# The dashboard is now served from the database rather than opened as a file,
+# because a static page cannot save anything - and tagging needs to save.
+# -Host 0.0.0.0 also makes it reachable from a phone on the same Wi-Fi.
+$port = 8787
 Say ''
-Say '  [3/3] Opening the dashboard...' 'White'
-if (Test-Path -LiteralPath $dash) {
-    Start-Process $dash
-    Say ''
-    Say '  Done. The page is in your browser.' 'Green'
-    Say "  It is saved at: $dash" 'DarkGray'
-    Say '  Run this again any time to refresh it.' 'DarkGray'
-} else {
-    Say ''
-    Say '  The sync finished but no dashboard was written.' 'Red'
-    Say "  Expected it at: $dash" 'DarkGray'
-}
+Say '  [3/3] Starting TrailCam...' 'White'
+Say ''
+Say "    On this computer:  http://127.0.0.1:$port" 'Green'
+Say '    On your phone:     shown below, if on the same Wi-Fi' 'DarkGray'
+Say ''
+Say '  Leave this window open while you use it. Ctrl+C to stop.' 'DarkGray'
+Say ''
+
+& node --disable-warning=ExperimentalWarning serve.mjs --host 0.0.0.0 --port $port --open
 
 Say ''
+Say '  TrailCam stopped.' 'DarkGray'
 Read-Host '  Press Enter to close'

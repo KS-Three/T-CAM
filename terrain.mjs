@@ -467,3 +467,26 @@ export function hillshade(grid, {
   }
   return { shade, alpha, cols, rows, zFactor: z, relief: stats.relief };
 }
+
+/**
+ * Slope and aspect at one point, from the nearest lattice cell.
+ *
+ * Nearest-cell rather than interpolated on purpose: aspect is an angle that
+ * wraps at 360, and averaging 350 with 10 gives 180 — the exact opposite of the
+ * right answer. Interpolating slope alone would be fine; doing one and not the
+ * other invites someone to "fix" the inconsistency later.
+ */
+export function slopeAspectAt(grid, lat, lng, precomputed = null) {
+  const { slope, aspect } = precomputed ?? slopeAspect(grid);
+  const c = Math.round((lng - grid.west) / grid.dLng);
+  const r = Math.round((lat - grid.south) / grid.dLat);
+  if (c < 0 || r < 0 || c >= grid.cols || r >= grid.rows) return null;
+  const k = r * grid.cols + c;
+  const s = slope[k];
+  if (!Number.isFinite(s)) return null;
+  return {
+    slopeDeg: s,
+    // NaN aspect is flat ground, which genuinely faces nowhere.
+    aspectDeg: Number.isFinite(aspect[k]) ? aspect[k] : null,
+  };
+}

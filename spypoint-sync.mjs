@@ -356,6 +356,20 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
                  box-shadow: 0 2px 10px rgba(0,0,0,.35); }
   .terrainnote b { color: var(--ink); }
+  .sitplan { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+             margin-bottom: 10px; background: var(--panel); }
+  .sitplan h3 { margin: 0 0 2px; font-size: 14px; }
+  .sitplan .verdict { font-size: 13px; color: var(--ink); margin: 6px 0 10px; }
+  .srow { display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
+          border-top: 1px solid var(--line); font-size: 13px; }
+  .srow .nm { font-weight: 600; min-width: 150px; }
+  .srow .verdict-tag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+                       margin-left: 8px; }
+  .srow.yes .verdict-tag { color: var(--ok); }
+  .srow.no .verdict-tag { color: var(--bad); }
+  .srow.unknown .verdict-tag { color: var(--muted); }
+  .srow ul { margin: 2px 0 0; padding-left: 15px; color: var(--muted); font-size: 12px; }
+  .srow li.minus { color: var(--warn); }
   .terrainnote .warn { color: var(--warn); }
   .standform { position: absolute; left: 50%; top: 50%; z-index: 5;
                transform: translate(-50%, -50%); width: min(340px, 90%);
@@ -427,6 +441,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <div id="alerts"></div>
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
   <div id="planArea"></div>
+  <h2 class="section">Where to sit</h2>
+  <div id="standPlan"></div>
   <h2 class="section">Cameras</h2>
   <div id="map"><div id="tiles"></div><canvas id="terrain"></canvas><svg id="contours"></svg><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
@@ -608,6 +624,61 @@ function draw() {
   }
 }
 
+
+
+// ---- where to sit -----------------------------------------------------
+// The planner ranks WHEN. This ranks WHERE within one of those windows, which
+// is the question you act on while putting your boots by the door.
+const standPlanEl = document.getElementById('standPlan');
+
+async function loadStandPlan() {
+  if (!D.live) {
+    standPlanEl.appendChild(el('div', 'empty',
+      'Stand ranking needs the server \u2014 open http://127.0.0.1:8787'));
+    return;
+  }
+  let data;
+  try {
+    data = await (await fetch('/api/stand-plan?sits=3')).json();
+  } catch {
+    standPlanEl.appendChild(el('div', 'empty', 'Could not load the stand ranking.'));
+    return;
+  }
+  standPlanEl.textContent = '';
+  if (data.note) standPlanEl.appendChild(el('div', 'stale-note', data.note));
+  if (!data.sits.length) return;
+
+  for (const sit of data.sits) {
+    const box = el('div', 'sitplan');
+    const d = new Date(sit.date + 'T12:00:00');
+    box.appendChild(el('h3', null,
+      d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+      + ' ' + sit.window + ' \u2014 ' + sit.rating + ', wind ' + sit.windFrom));
+    box.appendChild(el('div', 'verdict', sit.summary));
+
+    for (const st of sit.stands) {
+      const cls = st.huntable === true ? 'yes' : st.huntable === false ? 'no' : 'unknown';
+      const row = el('div', 'srow ' + cls);
+      const left = el('div');
+      left.appendChild(el('span', 'nm', st.name));
+      // "Unknown" is shown as unknown, never as a quiet yes: a stand whose
+      // winds have not been recorded must not look like one that works.
+      left.appendChild(el('span', 'verdict-tag',
+        st.huntable === true ? 'huntable' : st.huntable === false ? 'wrong wind' : 'winds not set'));
+      const ul = document.createElement('ul');
+      for (const r of st.reasons) {
+        const li = el('li', r.points < 0 ? 'minus' : null,
+          r.why + (r.points ? ' (' + (r.points > 0 ? '+' : '') + r.points + ')' : ''));
+        ul.appendChild(li);
+      }
+      left.appendChild(ul);
+      row.appendChild(left);
+      box.appendChild(row);
+    }
+    standPlanEl.appendChild(box);
+  }
+}
+loadStandPlan();
 
 // ---- terrain ----------------------------------------------------------
 // The ground itself, from free USGS LiDAR. This is the layer the paid apps
@@ -1272,7 +1343,10 @@ if (!D.plan || !D.plan.sits || !D.plan.sits.length) {
       + (s.alsoAt && s.alsoAt.length
         ? ' · same window also scored at ' + s.alsoAt.join(', ') : '')));
     const ul = el('ul');
-    for (const p of s.parts) {
+    // A plan written by an older version of the planner, or edited by hand, may
+    // not carry the reason breakdown. Missing reasons should cost you the
+    // reasons, not the whole page — this threw and blanked everything below it.
+    for (const p of s.parts ?? []) {
       const li = el('li', p.points < 0 ? 'neg' : null,
         (p.points > 0 ? '+' : '') + p.points + '  ' + p.reason);
       ul.appendChild(li);

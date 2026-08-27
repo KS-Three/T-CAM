@@ -28,14 +28,15 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, allCameras, counts, allStands, createStand, updateStand, deleteStand,
-  STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering,
+  STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering, terrainGridAt,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
+import { rankStands, summarise } from './stand-ranking.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
-  slopeAspect, metresToFeet, planGrid,
+  slopeAspect, metresToFeet, planGrid, slopeAspectAt,
 } from './terrain.mjs';
 
 const argv = process.argv.slice(2);
@@ -282,6 +283,27 @@ function flipRows(arr, cols, rows) {
   return out;
 }
 
+
+/**
+ * Look up the ground under a stand, using whatever terrain has already been
+ * cached. Deliberately does NOT fetch: ranking stands must stay instant, and a
+ * ranking that silently spends 25 seconds on a network call the first time it
+ * is asked would be worse than one that says thermals are unavailable until
+ * you press Terrain.
+ *
+ * slopeAspect over a whole grid is the expensive part, so it is computed once
+ * per grid rather than once per stand.
+ */
+function standTerrainLookup(db) {
+  const cache = new Map();
+  return stand => {
+    const grid = terrainGridAt(db, stand.lat, stand.lng);
+    if (!grid) return null;
+    if (!cache.has(grid.id)) cache.set(grid.id, slopeAspect(grid));
+    return slopeAspectAt(grid, stand.lat, stand.lng, cache.get(grid.id));
+  };
+}
+
 const MAX_BODY = 64 * 1024;
 
 function readJson(req) {
@@ -376,6 +398,34 @@ export function createServer({ out = OPT.out } = {}) {
       }
 
 
+
+      // Which stand, for a given sit. The planner says WHEN; this says WHERE.
+      if (req.method === 'GET' && url.pathname === '/api/stand-plan') {
+        const plan = await readPlan(out);
+        const stands = allStands(db);
+        const terrainAt = standTerrainLookup(db);
+        const hasTerrain = stands.some(st => terrainAt(st) !== null);
+        const howMany = Math.min(10, Math.max(1, Number(url.searchParams.get('sits')) || 3));
+        const sits = (plan?.sits ?? []).slice(0, howMany).map(sit => {
+          const ranked = rankStands({ stands, sit, terrainAt });
+          return {
+            date: sit.date, window: sit.window, rating: sit.rating,
+            score: sit.total, windFrom: sit.windFrom, rut: sit.rut,
+            stands: ranked,
+            summary: summarise(ranked, { hasTerrain }),
+          };
+        });
+        return sendJson(res, 200, {
+          sits,
+          hasTerrain,
+          // Said out loud so an empty or flat ranking is explicable rather than
+          // just disappointing.
+          note: !stands.length ? 'No stands yet — drop a pin on the map.'
+            : !plan ? 'No plan yet — run the sync to fetch a forecast.'
+            : hasTerrain ? null
+            : 'Thermals are not included: press Terrain on the map to load elevation first.',
+        });
+      }
       // The shape of the ground, from free USGS LiDAR.
       //
       // Fetching is slow — about 25 seconds for a 600 m square, across five

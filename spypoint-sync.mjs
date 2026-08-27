@@ -337,6 +337,20 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   #terrain { opacity: .72; mix-blend-mode: multiply; }
   #contours path { fill: none; stroke: rgba(255,238,170,.55); stroke-width: 1; }
   #contours path.index { stroke: rgba(255,225,120,.95); stroke-width: 1.8; }
+  /* Drainages and ridges are drawn in different colours AND different dash
+     patterns, so they stay distinguishable printed, in bright sun, or by
+     someone who does not separate blue from tan easily. */
+  #contours path.drain { stroke: rgba(120,190,255,.95); stroke-width: 2.4; stroke-linecap: round; }
+  #contours path.ridgeline { stroke: rgba(255,170,105,.9); stroke-width: 2.2;
+                             stroke-dasharray: 7 5; stroke-linecap: round; }
+  .tfeat { position: absolute; z-index: 2; pointer-events: auto; cursor: help; }
+  .tfeat.saddle { width: 13px; height: 13px; transform: translate(-50%,-50%) rotate(45deg);
+                  background: rgba(255,215,0,.92); border: 2px solid #3a2c00; }
+  .tfeat.bench { width: 13px; height: 9px; transform: translate(-50%,-50%);
+                 background: rgba(160,235,160,.92); border: 2px solid #123a12; border-radius: 2px; }
+  .tlegend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .tlegend span { display: inline-flex; align-items: center; gap: 4px; }
+  .tlegend i { width: 14px; height: 0; border-top-width: 3px; border-top-style: solid; }
   .terrainnote { position: absolute; left: 10px; bottom: 46px; z-index: 4; max-width: 260px;
                  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
@@ -607,6 +621,8 @@ let terrainOn = false;
 let terrainLoading = false;
 const terrainBtn = document.getElementById('terrainBtn');
 
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+
 function terrainNote(html) {
   document.querySelector('.terrainnote')?.remove();
   if (!html) return;
@@ -695,14 +711,30 @@ async function loadTerrain() {
     // The exaggeration is stated, deliberately. A hillshade stretched 23x is a
     // diagram, and a reader who thinks it is a photograph will read these as
     // real hills. On ground this flat, saying so is the honest part.
+    const F = body.features;
     const flat = st.medianSlopeDeg < 2;
     terrainNote(
       '<b>' + st.reliefFt + ' ft</b> of relief here (' + st.minFt + '\u2013' + st.maxFt + ' ft). '
       + 'Contours every <b>' + c.intervalFt + ' ft</b>. '
       + 'Median slope <b>' + st.medianSlopeDeg + '\u00b0</b>.<br>'
-      + 'Hillshade is exaggerated <b>' + body.hillshade.zFactor + '\u00d7</b> vertically \u2014 '
+      + 'Hillshade exaggerated <b>' + body.hillshade.zFactor + '\u00d7</b> vertically \u2014 '
       + 'at true scale this ground would look flat.'
-      + (flat ? '<br><span class="warn">Ground this gentle has no meaningful thermals.</span>' : '')
+      + '<div class="tlegend">'
+      + '<span><i style="border-color:rgba(120,190,255,.95)"></i>'
+      + plural(F.drainages.length, 'draw') + '</span>'
+      + '<span><i style="border-color:rgba(255,170,105,.9);border-top-style:dashed"></i>'
+      + plural(F.ridges.length, 'ridge') + '</span>'
+      + (F.saddles.length ? '<span>\u25c6 ' + plural(F.saddles.length, 'saddle') + '</span>' : '')
+      + (F.benches.length ? '<span>\u25ac ' + plural(F.benches.length, 'bench', 'benches') + '</span>' : '')
+      + '</div>'
+      // Why the list is empty, rather than an empty list. A detector that finds
+      // nothing and says nothing is indistinguishable from a broken one.
+      + (F.quiet
+        ? '<span class="warn">No saddles or benches: this ground is too gentle '
+          + '(median ' + F.medianSlopeDeg + '\u00b0) for either to mean anything. '
+          + 'Draws and ridges still hold \u2014 a two-foot draw still carries a trail.</span>'
+        : '')
+      + (flat ? '<br><span class="warn">Thermals need real slope; this ground has none.</span>' : '')
       + '<br>Loaded for this view \u2014 pan, then press Terrain again for new ground.');
   } catch (err) {
     terrainNote('Terrain unavailable: ' + err.message);
@@ -765,10 +797,46 @@ function drawTerrain(left, top, W, H) {
     const index = Math.round(line.levelFt / step) % 5 === 0;
     parts.push('<path class="' + (index ? 'index' : '') + '" d="' + d + '"></path>');
   }
+
+  // Drainages and ridges on top of the contours, because they are the reading
+  // of the ground rather than the ground itself.
+  const F = TERRAIN.features;
+  if (F) {
+    const trace = (line, cls) => {
+      let d = '';
+      for (let i = 0; i < line.path.length; i++) {
+        const px = projX(line.path[i][0], zoom) - left;
+        const py = projY(line.path[i][1], zoom) - top;
+        d += (i ? 'L' : 'M') + px.toFixed(1) + ' ' + py.toFixed(1);
+      }
+      parts.push('<path class="' + cls + '" d="' + d + '"></path>');
+    };
+    for (const r of F.ridges) trace(r, 'ridgeline');
+    for (const dr of F.drainages) trace(dr, 'drain');
+  }
   contoursEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
   contoursEl.setAttribute('width', W);
   contoursEl.setAttribute('height', H);
   contoursEl.innerHTML = parts.join('');
+
+  // Saddles and benches are places, not lines, so they get pins.
+  if (!F) return;
+  for (const sd of F.saddles) {
+    const m = el('div', 'tfeat saddle');
+    m.style.left = (projX(sd.lng, zoom) - left) + 'px';
+    m.style.top = (projY(sd.lat, zoom) - top) + 'px';
+    m.title = 'Saddle \u2014 the low crossing on this ridge, about '
+      + sd.reliefFt + ' ft below the high ground either side. Deer cross where it is cheapest.';
+    pinsEl.appendChild(m);
+  }
+  for (const bn of F.benches) {
+    const m = el('div', 'tfeat bench');
+    m.style.left = (projX(bn.lng, zoom) - left) + 'px';
+    m.style.top = (projY(bn.lat, zoom) - top) + 'px';
+    m.title = 'Bench \u2014 a flat shelf (' + bn.slopeDeg + '\u00b0) with '
+      + bn.steepAround + '% steeper ground around it. Deer bed on these and travel along them.';
+    pinsEl.appendChild(m);
+  }
 }
 
 // ---- stands -----------------------------------------------------------

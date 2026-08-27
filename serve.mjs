@@ -32,6 +32,7 @@ import {
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
+import { terrainFeatures } from './terrain-features.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
   slopeAspect, metresToFeet, planGrid,
@@ -229,6 +230,7 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
   }
 
   const hs = hillshade(grid);
+  const features = terrainFeatures(grid);
   const { slope } = slopeAspect(grid);
   const slopes = [...slope].filter(Number.isFinite).sort((a, b) => a - b);
   const contours = contourLines(grid);
@@ -257,6 +259,18 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
       zFactor: Math.round(hs.zFactor * 10) / 10,
     },
     contours,
+    features: {
+      // Lines carry only their geometry to the browser; the cell indices they
+      // were traced through are an implementation detail of the detector.
+      drainages: features.drainages.map(d => ({ path: d.path, dropFt: d.dropFt, drains: d.drains })),
+      ridges: features.ridges.map(d => ({ path: d.path, dropFt: d.dropFt })),
+      saddles: features.saddles,
+      benches: features.benches,
+      // Passed through so the page can say WHY it found no benches or saddles.
+      // An empty list with no explanation reads as a broken detector.
+      quiet: features.quiet,
+      medianSlopeDeg: features.medianSlopeDeg,
+    },
   };
 }
 

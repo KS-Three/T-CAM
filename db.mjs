@@ -268,6 +268,43 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX terrain_grids_at ON terrain_grids(west, south, spacing_m);');
     },
   },
+  {
+    version: 4,
+    name: 'scouting markers',
+    up: db => {
+      // Sign you found on the ground: rubs, scrapes, beds, trails, food plots.
+      // This is what both onX and Spartan Forge are really built around, and it
+      // is the layer that turns a map into YOUR map.
+      //
+      // Kept separate from stands rather than folded in as another stand type.
+      // A stand is somewhere you can BE, and carries winds and a structure; a
+      // rub is something you SAW. Merging them would put a good_winds column on
+      // a scrape and make every query about either one ambiguous.
+      //
+      // found_at is the important column and is why this is not just a pin
+      // list. Sign is seasonal: a rub line found last November means something
+      // quite different in October, and without a date the map slowly fills
+      // with old news that looks current.
+      db.exec(`
+        CREATE TABLE markers (
+          id          INTEGER PRIMARY KEY,
+          property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+          kind        TEXT NOT NULL
+                        CHECK (kind IN ('rub', 'scrape', 'bed', 'trail', 'food-plot',
+                                        'water', 'access', 'other')),
+          name        TEXT,
+          lat         REAL NOT NULL,
+          lng         REAL NOT NULL,
+          found_at    TEXT,
+          notes       TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX markers_kind ON markers(kind);');
+      db.exec('CREATE INDEX markers_property ON markers(property_id);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -706,3 +743,88 @@ export function terrainGridCovering(db, { west, south, east, north }, spacingM) 
 
 export const deleteTerrainGrid = (db, id) =>
   db.prepare('DELETE FROM terrain_grids WHERE id = ?').run(id).changes > 0;
+
+// ---------------------------------------------------------------------------
+// Scouting markers
+// ---------------------------------------------------------------------------
+
+export const MARKER_KINDS = ['rub', 'scrape', 'bed', 'trail', 'food-plot',
+  'water', 'access', 'other'];
+
+// Labels live here rather than in the page so the API and the UI cannot drift.
+export const MARKER_LABELS = {
+  rub: 'Rub', scrape: 'Scrape', bed: 'Bed', trail: 'Trail',
+  'food-plot': 'Food plot', water: 'Water', access: 'Access route', other: 'Other',
+};
+
+function checkPoint(lat, lng) {
+  // Number(null) is 0, and 0,0 is a real place in the Atlantic, so the check is
+  // on the value BEFORE conversion as well as after.
+  if (lat === null || lat === undefined || lng === null || lng === undefined) {
+    throw new Error('a marker needs a latitude and longitude');
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+    || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    throw new Error('a marker needs real coordinates');
+  }
+}
+
+export function createMarker(db, { kind, name = null, lat, lng,
+  foundAt = null, notes = null, propertyId = null }) {
+  if (!MARKER_KINDS.includes(kind)) {
+    throw new Error(`unknown marker kind "${kind}" — one of ${MARKER_KINDS.join(', ')}`);
+  }
+  checkPoint(lat, lng);
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO markers (property_id, kind, name, lat, lng, found_at, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(propertyId, kind, name, lat, lng, foundAt, notes, now, now);
+  return markerById(db, Number(info.lastInsertRowid));
+}
+
+export const markerById = (db, id) =>
+  db.prepare('SELECT * FROM markers WHERE id = ?').get(id) ?? null;
+
+export function updateMarker(db, id, patch = {}) {
+  const row = markerById(db, id);
+  if (!row) throw new Error(`no marker with id ${id}`);
+  const next = {
+    kind: patch.kind ?? row.kind,
+    name: patch.name !== undefined ? patch.name : row.name,
+    lat: patch.lat !== undefined ? patch.lat : row.lat,
+    lng: patch.lng !== undefined ? patch.lng : row.lng,
+    foundAt: patch.foundAt !== undefined ? patch.foundAt : row.found_at,
+    notes: patch.notes !== undefined ? patch.notes : row.notes,
+    propertyId: patch.propertyId !== undefined ? patch.propertyId : row.property_id,
+  };
+  if (!MARKER_KINDS.includes(next.kind)) {
+    throw new Error(`unknown marker kind "${next.kind}"`);
+  }
+  checkPoint(next.lat, next.lng);
+  db.prepare(`
+    UPDATE markers SET property_id = ?, kind = ?, name = ?, lat = ?, lng = ?,
+                       found_at = ?, notes = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.propertyId, next.kind, next.name, next.lat, next.lng,
+         next.foundAt, next.notes, nowIso(), id);
+  return markerById(db, id);
+}
+
+export const deleteMarker = (db, id) =>
+  db.prepare('DELETE FROM markers WHERE id = ?').run(id).changes > 0;
+
+/**
+ * Every marker, with how old the sign is. Age is the point: a scrape found last
+ * season is history, not intelligence, and the map should be able to show that
+ * without the reader doing date arithmetic in their head.
+ */
+export function allMarkers(db, { now = new Date() } = {}) {
+  return db.prepare('SELECT * FROM markers ORDER BY kind, id').all().map(m => ({
+    ...m,
+    label: MARKER_LABELS[m.kind] ?? m.kind,
+    // null, not 0: sign with no date recorded is of UNKNOWN age, which is a
+    // different thing from sign found today.
+    daysOld: m.found_at ? Math.floor((now - new Date(m.found_at)) / 86400000) : null,
+  }));
+}

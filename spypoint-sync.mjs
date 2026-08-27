@@ -198,7 +198,7 @@ async function readPlan(dir) {
 // `plan` is optional and comes from hunt-planner.mjs by way of plan.json, so a
 // sync run picks up the last plan instead of wiping it off the page, and a
 // planner run rebuilds this same page. Either tool can be run first.
-function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false) {
+function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false, markers = []) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
@@ -211,6 +211,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
     // hardcoded — it was hardcoded true at first, which put a dead button on
     // the static dashboard the sync writes.
     live,
+    markers,
   });
   return `<!doctype html>
 <html lang="en">
@@ -351,6 +352,25 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .tlegend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .tlegend span { display: inline-flex; align-items: center; gap: 4px; }
   .tlegend i { width: 14px; height: 0; border-top-width: 3px; border-top-style: solid; }
+  /* Sign markers carry a LETTER as well as a colour, so a rub and a scrape are
+     told apart on a sunlit phone screen and in greyscale. */
+  .mark { position: absolute; width: 18px; height: 18px; cursor: pointer;
+          transform: translate(-50%, -50%); border-radius: 4px; border: 2px solid #fff;
+          font: 700 10px/14px ui-sans-serif, system-ui, sans-serif; text-align: center;
+          color: #10240f; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  .mark.old { opacity: .45; }
+  .ovsep { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+           color: var(--muted); padding: 6px 4px 2px; border-top: 1px solid var(--line);
+           margin-top: 4px; }
+  .layermenu button.ovbtn { background: none; height: auto; width: auto; padding: 4px 6px;
+    font: 600 11px/1.3 ui-sans-serif, system-ui, sans-serif; color: var(--ink);
+    text-align: left; border: 0; cursor: pointer; }
+  .layermenu button.ovbtn.on { color: var(--accent); }
+  .mklabel { position: absolute; transform: translate(-50%, -190%); font-size: 10px;
+             white-space: nowrap; padding: 1px 4px; border-radius: 4px;
+             background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
+  #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
+                          stroke-dasharray: none; }
   .terrainnote { position: absolute; left: 10px; bottom: 46px; z-index: 4; max-width: 260px;
                  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
@@ -391,6 +411,11 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                     background: var(--bg); color: var(--ink); }
   .formrow button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .formrow button.danger { color: var(--bad); }
+  /* The marker form's Delete sits outside .formrow, so it needs its own rule
+     rather than inheriting one scoped to that row. */
+  .standform > button.danger { color: var(--bad); background: var(--bg); cursor: pointer;
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 11px; font: inherit;
+    font-size: 13px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   /* Bottom-right: the toolbar owns the top-left, zoom the top-right and the
      layer switcher the bottom-left, so this is the last free corner. */
@@ -450,6 +475,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
       <button id="addStand" type="button">+ Add stand</button>
       <button id="whoOwns" type="button">Who owns this?</button>
       <button id="terrainBtn" type="button">Terrain</button>
+      <button id="markBtn" type="button">+ Mark sign</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -525,6 +551,71 @@ const LAYERS = {
   },
 };
 
+/**
+ * Wisconsin DNR overlays — the regulatory layers, free from the state.
+ *
+ * These are MapServers rather than tile caches, so there is no /tile/z/y/x to
+ * ask for; each tile is an "export" of a bounding box. The box has to be given
+ * in Web Mercator metres (bboxSR 3857) to line up with the base map, which is
+ * why tileBounds3857 exists rather than passing degrees.
+ *
+ * Labels are deliberately narrow. "Public land" would be wrong and dangerously
+ * so: VPA is the Voluntary Public Access programme — private land enrolled for
+ * public hunting — not state land, and not every place you may legally hunt.
+ * Nothing here replaces reading the regulations.
+ */
+const OVERLAYS = {
+  vpa: {
+    label: 'VPA public access',
+    note: 'Private land enrolled in the DNR Voluntary Public Access programme. '
+      + 'Not all public land, and not a substitute for the regulations.',
+    service: 'WM_VPA/WM_VPA_HUNT_LEASE_LAND_WTM',
+    credit: 'Public access © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
+  },
+  cwd: {
+    label: 'CWD areas',
+    note: 'Chronic wasting disease management areas. Baiting and carcass '
+      + 'transport rules differ inside these.',
+    service: 'WM_CWD/WM_CWD_WTM_Ext',
+    credit: 'CWD areas © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
+  },
+  units: {
+    label: 'Deer zones',
+    note: 'DNR deer management zones — which unit your tag is valid in.',
+    service: 'WM_CWD/WM_DEER_MANAGEMENT_ZONES_WTM_Ext',
+    credit: 'Deer zones © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
+  },
+};
+
+// Web Mercator metres for one slippy tile. The projection constant is the
+// half-circumference of the earth in the same metres the base tiles use.
+const MERC = 20037508.342789244;
+function tileBounds3857(z, x, y) {
+  const size = 2 * MERC / 2 ** z;
+  return [
+    -MERC + x * size,
+    MERC - (y + 1) * size,
+    -MERC + (x + 1) * size,
+    MERC - y * size,
+  ].join(',');
+}
+
+const overlayUrl = (key, z, x, y) =>
+  'https://dnrmaps.wi.gov/arcgis/rest/services/' + OVERLAYS[key].service
+  + '/MapServer/export?bbox=' + tileBounds3857(z, x, y)
+  + '&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image';
+
+// Remembered per browser, like the base layer.
+let overlayOn = new Set();
+try {
+  const saved = JSON.parse(localStorage.getItem('trailcam.overlays') || '[]');
+  overlayOn = new Set(saved.filter(k => OVERLAYS[k]));
+} catch { /* private window, or blocked site data */ }
+const saveOverlays = () => {
+  try { localStorage.setItem('trailcam.overlays', JSON.stringify([...overlayOn])); }
+  catch { /* ignore */ }
+};
+
 // Remembered per browser. Wrapped because a private window or blocked site
 // data makes storage throw rather than return null.
 let layerKey = 'satellite';
@@ -590,6 +681,14 @@ function draw() {
         ov.style.pointerEvents = 'none';
         place(ov);
       }
+      // DNR regulatory overlays, each a transparent PNG in its own pass.
+      for (const key of overlayOn) {
+        const dnr = new Image();
+        dnr.src = overlayUrl(key, zoom, wx, ty);
+        dnr.style.pointerEvents = 'none';
+        dnr.style.opacity = '0.55';
+        place(dnr);
+      }
     }
   }
   for (const c of located) {
@@ -622,9 +721,155 @@ function draw() {
     pin.onclick = ev => { ev.stopPropagation(); openStandForm(s); };
     pinsEl.append(lab, pin);
   }
+
+  drawMarkers(left, top, W, H);
 }
 
 
+
+
+// ---- scouting markers -------------------------------------------------
+// Sign you found on the ground. Both paid apps are built around this layer,
+// and it is the one that turns a generic map into YOUR map.
+let MARKERS = D.markers || [];
+let marking = false;
+const markBtn = document.getElementById('markBtn');
+
+// Colour AND letter for each kind. Colour alone fails on a sunlit phone.
+const MARK_STYLE = {
+  rub: ['#d8b25a', 'R'], scrape: ['#c98a4b', 'S'], bed: ['#9fd3a0', 'B'],
+  trail: ['#a8c8e8', 'T'], 'food-plot': ['#b8e07a', 'F'], water: ['#7fc4e8', 'W'],
+  access: ['#e0a8d8', 'A'], other: ['#cccccc', '?'],
+};
+
+// Sign goes stale. A rub found last November is history in October, so an old
+// marker is drawn faded rather than as if you saw it this morning.
+const STALE_SIGN_DAYS = 45;
+
+async function refreshMarkers() {
+  MARKERS = await (await fetch('/api/markers')).json();
+  draw();
+}
+
+function drawMarkers(left, top, W, H) {
+  for (const m of MARKERS) {
+    const x = projX(m.lng, zoom) - left, y = projY(m.lat, zoom) - top;
+    if (x < -30 || y < -30 || x > W + 30 || y > H + 30) continue;
+    const [colour, letter] = MARK_STYLE[m.kind] || MARK_STYLE.other;
+    const stale = m.daysOld !== null && m.daysOld > STALE_SIGN_DAYS;
+    const pin = el('div', 'mark' + (stale ? ' old' : ''), letter);
+    pin.style.left = x + 'px'; pin.style.top = y + 'px';
+    pin.style.background = colour;
+    pin.title = m.label + (m.name ? ' \u2014 ' + m.name : '')
+      + (m.daysOld === null ? ' \u2014 no date recorded'
+         : m.daysOld === 0 ? ' \u2014 found today'
+         : ' \u2014 found ' + m.daysOld + ' days ago')
+      // The newline below is escaped TWICE on purpose. This whole script is
+      // emitted from a template literal, so a single-escaped newline is turned
+      // into a REAL line break when the page is built — which lands a raw
+      // newline inside a quoted string and makes the entire dashboard script a
+      // syntax error. (Writing that warning out in full here broke it a second
+      // time, because the comment is inside the same template literal.)
+      // Unicode escapes such as the em-dash are safe: they produce an ordinary
+      // character rather than a control one.
+      + (m.notes ? '\\n' + m.notes : '');
+    pin.onclick = ev => { ev.stopPropagation(); openMarkerForm(m); };
+    pinsEl.appendChild(pin);
+    if (m.name) {
+      const lab = el('div', 'mklabel', m.name);
+      lab.style.left = x + 'px'; lab.style.top = y + 'px';
+      pinsEl.appendChild(lab);
+    }
+  }
+}
+
+markBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  marking = !marking;
+  if (marking && placing) addBtn.onclick(new Event('click'));
+  if (marking && identifying) ownBtn.onclick(new Event('click'));
+  markBtn.classList.toggle('on', marking);
+  markBtn.textContent = marking ? 'Click the map\u2026' : '+ Mark sign';
+  mapEl.classList.toggle('placing', marking);
+};
+if (!D.live) {
+  markBtn.disabled = true;
+  markBtn.title = 'Markers need the server';
+  markBtn.style.opacity = '0.6';
+  markBtn.style.cursor = 'not-allowed';
+}
+
+function openMarkerForm(marker) {
+  document.querySelector('.standform')?.remove();
+  const isNew = !marker.id;
+  const form = el('div', 'standform');
+  form.appendChild(el('h3', null, isNew ? 'Mark sign' : 'Edit sign'));
+
+  const kind = document.createElement('select');
+  for (const [value, label] of Object.entries(
+    { rub: 'Rub', scrape: 'Scrape', bed: 'Bed', trail: 'Trail',
+      'food-plot': 'Food plot', water: 'Water', access: 'Access route', other: 'Other' })) {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    if ((marker.kind || 'rub') === value) o.selected = true;
+    kind.appendChild(o);
+  }
+  form.append(el('label', null, 'What is it'), kind);
+
+  const name = document.createElement('input');
+  name.value = marker.name || '';
+  name.placeholder = 'Fence-line rub';
+  form.append(el('label', null, 'Name (optional)'), name);
+
+  // Defaulted to today because that is nearly always right, and because sign
+  // with no date cannot be aged later.
+  const found = document.createElement('input');
+  found.type = 'date';
+  found.value = (marker.found_at || new Date().toISOString()).slice(0, 10);
+  form.append(el('label', null, 'When you found it'), found);
+
+  const notes = document.createElement('textarea');
+  notes.rows = 2;
+  notes.value = marker.notes || '';
+  form.append(el('label', null, 'Notes'), notes);
+
+  const row = el('div', 'formrow');
+  const save = el('button', 'primary', isNew ? 'Drop pin' : 'Save');
+  const cancel = el('button', null, 'Cancel');
+  row.append(save, cancel);
+  form.appendChild(row);
+
+  if (!isNew) {
+    const del = el('button', 'danger', 'Delete');
+    del.style.marginTop = '8px';
+    del.onclick = async () => {
+      await apiWrite('DELETE', '/api/markers/' + marker.id);
+      form.remove();
+      refreshMarkers();
+    };
+    form.appendChild(del);
+  }
+
+  cancel.onclick = () => form.remove();
+  save.onclick = async () => {
+    const body = {
+      kind: kind.value, name: name.value.trim() || null,
+      lat: marker.lat, lng: marker.lng,
+      foundAt: found.value || null, notes: notes.value.trim() || null,
+    };
+    try {
+      if (isNew) await apiWrite('POST', '/api/markers', body);
+      else await apiWrite('PATCH', '/api/markers/' + marker.id, body);
+      form.remove();
+      refreshMarkers();
+    } catch (err) {
+      form.appendChild(el('div', 'hint', 'Could not save: ' + err.message));
+    }
+  };
+  mapEl.appendChild(form);
+  name.focus();
+}
 
 // ---- where to sit -----------------------------------------------------
 // The planner ranks WHEN. This ranks WHERE within one of those windows, which
@@ -686,6 +931,7 @@ loadStandPlan();
 // to sit: a two-foot bench does not show up on satellite imagery at all.
 const terrainCanvas = document.getElementById('terrain');
 const contoursEl = document.getElementById('contours');
+let PARCEL_RINGS = null;     // boundary of the parcel last looked up
 let TERRAIN = null;          // the loaded payload
 let terrainImage = null;     // an offscreen canvas holding the hillshade
 let terrainOn = false;
@@ -838,9 +1084,40 @@ if (!D.live) {
   terrainBtn.style.cursor = 'not-allowed';
 }
 
+/** Project one ring or path into an SVG path string. */
+function svgPath(points, left, top, close) {
+  let d = '';
+  for (let i = 0; i < points.length; i++) {
+    const px = projX(points[i][0], zoom) - left;
+    const py = projY(points[i][1], zoom) - top;
+    d += (i ? 'L' : 'M') + px.toFixed(1) + ' ' + py.toFixed(1);
+  }
+  return d + (close ? 'Z' : '');
+}
+
+function parcelPaths(left, top) {
+  if (!PARCEL_RINGS) return [];
+  return PARCEL_RINGS.map(ring =>
+    '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>');
+}
+
+/** The parcel boundary alone, when the terrain layer is off. */
+function drawOverlayOnly(left, top, W, H) {
+  const paths = parcelPaths(left, top);
+  if (!paths.length) { contoursEl.innerHTML = ''; contoursEl.style.display = 'none'; return; }
+  contoursEl.style.display = 'block';
+  contoursEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  contoursEl.setAttribute('width', W);
+  contoursEl.setAttribute('height', H);
+  contoursEl.innerHTML = paths.join('');
+}
+
 /** Paint the hillshade and contours for the current pan and zoom. */
 function drawTerrain(left, top, W, H) {
-  if (!terrainOn || !TERRAIN) return;
+  // The parcel outline is not terrain, but it lives in the same SVG so it pans
+  // and zooms with everything else. It must draw whether or not the terrain
+  // layer is switched on, so it comes before that check.
+  if (!terrainOn || !TERRAIN) return drawOverlayOnly(left, top, W, H);
   const b = TERRAIN.bounds;
   // Project the terrain patch's own corners, so it stays pinned to the ground
   // through every pan and zoom rather than to the screen.
@@ -885,6 +1162,8 @@ function drawTerrain(left, top, W, H) {
     for (const r of F.ridges) trace(r, 'ridgeline');
     for (const dr of F.drainages) trace(dr, 'drain');
   }
+  parts.push(...parcelPaths(left, top));
+  contoursEl.style.display = 'block';
   contoursEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
   contoursEl.setAttribute('width', W);
   contoursEl.setAttribute('height', H);
@@ -936,10 +1215,22 @@ function pixelToLatLng(px, py) {
 let identifying = false;
 const ownBtn = document.getElementById('whoOwns');
 
-function closeParcelCard() { document.querySelector('.parcelcard')?.remove(); }
+// Two different things, and conflating them cost an afternoon: REPLACING the
+// card (which showParcelCard does on every lookup) must leave the boundary
+// alone, while DISMISSING it should take the boundary with it. When close did
+// both, every lookup drew the outline and then immediately wiped it, because
+// showParcelCard opens by clearing whatever card is already there.
+function removeParcelCard() { document.querySelector('.parcelcard')?.remove(); }
+
+function closeParcelCard() {
+  removeParcelCard();
+  // A red outline left on the map with nothing explaining it reads as a
+  // permanent property line, so the two go together.
+  if (PARCEL_RINGS) { PARCEL_RINGS = null; draw(); }
+}
 
 function showParcelCard(title, rows, note) {
-  closeParcelCard();
+  removeParcelCard();
   const card = el('div', 'parcelcard');
   const x = document.createElement('button');
   x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
@@ -963,10 +1254,14 @@ async function lookupParcel(lat, lng) {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'lookup failed');
     if (!body.found) {
+      PARCEL_RINGS = null;
+      draw();
       return showParcelCard('No parcel here', [],
         'Wisconsin parcels only. Outside the state, or on water, there is nothing to look up.');
     }
     const p = body.parcel;
+    PARCEL_RINGS = p.rings || null;
+    draw();
     showParcelCard(p.owner || 'Owner not recorded', [
       ['Acres', p.acres],
       ['Class', p.propClassName || p.propClass],
@@ -1017,7 +1312,8 @@ if (!D.live) {
   };
 }
 
-async function saveStand(method, path, body) {
+// Used by stands and markers alike, so it is named for what it does.
+async function apiWrite(method, path, body) {
   const res = await fetch(path, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -1091,8 +1387,8 @@ function openStandForm(stand) {
         goodWinds: [...chosen],
         notes: notes.value || null,
       };
-      if (isNew) await saveStand('POST', '/api/stands', body);
-      else await saveStand('PATCH', '/api/stands/' + stand.id, body);
+      if (isNew) await apiWrite('POST', '/api/stands', body);
+      else await apiWrite('PATCH', '/api/stands/' + stand.id, body);
       form.remove(); editing = null;
       await refreshStands();
     } catch (err) {
@@ -1112,7 +1408,7 @@ function openStandForm(stand) {
     del.className = 'danger'; del.textContent = 'Delete';
     del.onclick = async () => {
       if (!confirm('Delete ' + stand.name + '?')) return;
-      await saveStand('DELETE', '/api/stands/' + stand.id);
+      await apiWrite('DELETE', '/api/stands/' + stand.id);
       form.remove(); editing = null;
       await refreshStands();
     };
@@ -1148,7 +1444,7 @@ function paintControl() {
   const other = LAYERS[layerKey] === LAYERS.map ? 'satellite' : 'map';
   toggleEl.style.backgroundImage = 'url("' + previewTile(other) + '")';
   document.getElementById('layerLabel').textContent = LAYERS[other].label;
-  creditEl.innerHTML = L.credit;
+  creditEl.innerHTML = [L.credit, ...[...overlayOn].map(k => OVERLAYS[k].credit)].join('. ');
 
   menuEl.textContent = '';
   for (const [key, def] of Object.entries(LAYERS)) {
@@ -1163,6 +1459,25 @@ function paintControl() {
       layerKey = key; saveLayer(key);
       if (zoom > LAYERS[key].maxZoom) zoom = LAYERS[key].maxZoom;
       layersEl.classList.remove('open');
+      paintControl(); draw();
+    };
+    menuEl.appendChild(b);
+  }
+
+  // Overlays are checkboxes rather than a choice: they stack on any base map,
+  // and several can be on at once.
+  const sep = el('div', 'ovsep', 'Overlays \u2014 Wisconsin DNR');
+  menuEl.appendChild(sep);
+  for (const [key, def] of Object.entries(OVERLAYS)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ovbtn' + (overlayOn.has(key) ? ' on' : '');
+    b.title = def.note;
+    b.textContent = (overlayOn.has(key) ? '\u2611 ' : '\u2610 ') + def.label;
+    b.onclick = ev => {
+      ev.stopPropagation();
+      if (overlayOn.has(key)) overlayOn.delete(key); else overlayOn.add(key);
+      saveOverlays();
       paintControl(); draw();
     };
     menuEl.appendChild(b);
@@ -1205,6 +1520,18 @@ mapEl.addEventListener('click', e => {
     ownBtn.textContent = 'Who owns this?';
     mapEl.classList.remove('placing');
     lookupParcel(at0.lat, at0.lng);
+    return;
+  }
+  if (marking) {
+    const rm = mapEl.getBoundingClientRect();
+    const mx = e.clientX - rm.left, my = e.clientY - rm.top;
+    if (mx < 0 || my < 0 || mx > rm.width || my > rm.height) return;
+    const at = pixelToLatLng(mx, my);
+    marking = false;
+    markBtn.classList.remove('on');
+    markBtn.textContent = '+ Mark sign';
+    mapEl.classList.remove('placing');
+    openMarkerForm({ lat: at.lat, lng: at.lng });
     return;
   }
   if (!placing) return;

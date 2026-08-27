@@ -58,6 +58,11 @@ export function describeClass(code) {
  */
 export function parcelFromFeature(f) {
   const a = f?.attributes ?? {};
+  // Rings come back as [[[lng, lat], ...]] because outSR is pinned to 4326 in
+  // the query. Without that the service answers in the layer's own projection
+  // (Web Mercator), whose numbers are metres — drawing those as degrees puts
+  // the boundary somewhere off the coast of Africa, silently and confidently.
+  const rings = Array.isArray(f?.geometry?.rings) ? f.geometry.rings : null;
   const clean = v => {
     if (v === null || v === undefined) return null;
     const s = String(v).trim();
@@ -77,6 +82,7 @@ export function parcelFromFeature(f) {
     propClass: clean(a.PROPCLASS),
     propClassName: describeClass(a.PROPCLASS),
     schoolDistrict: clean(a.SCHOOLDIST),
+    rings,
   };
 }
 
@@ -111,7 +117,11 @@ export async function parcelAt(lat, lng, { signal } = {}) {
     inSR: '4326',
     spatialRel: 'esriSpatialRelIntersects',
     outFields: FIELDS,
-    returnGeometry: 'false',
+    // The boundary itself, not just the answer to "who owns this". Drawing the
+    // line is what makes ownership readable at a glance rather than one click
+    // at a time — it is the thing onX is recognised for.
+    returnGeometry: 'true',
+    outSR: '4326',
     resultRecordCount: '1',
     f: 'json',
   })}`;

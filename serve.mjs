@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import {
   openDb, allCameras, counts, allStands, createStand, updateStand, deleteStand,
   STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering, terrainGridAt,
+  allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
@@ -121,7 +122,9 @@ export async function buildState(db, out) {
   const photos = recentPhotos(db);
   const plan = await readPlan(out);
   const stands = allStands(db);
-  return { generatedAt: new Date().toISOString(), cameras, photos, stands, plan, counts: counts(db) };
+  const markers = allMarkers(db);
+  return { generatedAt: new Date().toISOString(), cameras, photos, stands, markers,
+           plan, counts: counts(db) };
 }
 
 const send = (res, code, type, body) => {
@@ -338,7 +341,7 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const s = await buildState(db, out);
         return send(res, 200, 'text/html; charset=utf-8',
-          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true));
+          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true, s.markers));
       }
       // The API boundary a phone app would later speak to.
       if (req.method === 'GET' && url.pathname === '/api/state') {
@@ -392,6 +395,54 @@ export function createServer({ out = OPT.out } = {}) {
             ? sendJson(res, 200, { deleted: id })
             : sendJson(res, 404, { error: `no stand with id ${id}` });
         }
+      }
+
+      // --- scouting markers ---------------------------------------------
+      // Sign found on the ground. Same shape as stands deliberately: one CRUD
+      // pattern for everything the map lets you place.
+      if (url.pathname === '/api/markers') {
+        if (req.method === 'GET') return sendJson(res, 200, allMarkers(db));
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          try {
+            return sendJson(res, 201, createMarker(db, {
+              kind: b.kind, name: b.name ?? null,
+              lat: b.lat === undefined || b.lat === null || b.lat === '' ? null : Number(b.lat),
+              lng: b.lng === undefined || b.lng === null || b.lng === '' ? null : Number(b.lng),
+              foundAt: b.foundAt ?? null, notes: b.notes ?? null,
+              propertyId: b.propertyId ?? null,
+            }));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
+      const markerMatch = url.pathname.match(/^\/api\/markers\/(\d+)$/);
+      if (markerMatch) {
+        const id = Number(markerMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            const patch = {};
+            for (const k of ['kind', 'name', 'notes', 'foundAt', 'propertyId']) {
+              if (b[k] !== undefined) patch[k] = b[k];
+            }
+            if (b.lat !== undefined) patch.lat = Number(b.lat);
+            if (b.lng !== undefined) patch.lng = Number(b.lng);
+            return sendJson(res, 200, updateMarker(db, id, patch));
+          } catch (err) {
+            const missing = /no marker with id/.test(err.message);
+            return sendJson(res, missing ? 404 : 400, { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteMarker(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: `no marker with id ${id}` });
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/marker-kinds') {
+        return sendJson(res, 200, { kinds: MARKER_KINDS, labels: MARKER_LABELS });
       }
       if (req.method === 'GET' && url.pathname === '/api/stand-types') {
         return sendJson(res, 200, { types: STAND_TYPES, winds: COMPASS });

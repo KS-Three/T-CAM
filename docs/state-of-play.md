@@ -13,12 +13,18 @@ is *status*; that one is *why*.
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 100 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 189 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
 | **Parcel ownership** — click for owner, acres, class, county, mailing address | Live against the Wisconsin service at a real camera; button-to-card path re-verified with a real mouse |
 | **Hunt planner** — ranks sits by rut, fronts, pressure, wind, rain, moon | Unit-tested; live forecast fetch verified |
+| **LiDAR terrain** — hillshade + adaptive contours from free USGS 3DEP | Live at 1 m resolution at the Green Lake camera |
+| **Terrain features** — draws, ridges, saddles, benches | Cross-checked geometrically: 87% of drainage points sit below their flanks, 88% of ridge points above |
+| **Stand ranking** — which stand for a given sit, wind + thermals | Unit-tested; thermal direction checked against physics in both windows |
+| **Parcel boundaries drawn**, DNR VPA / CWD / deer-zone overlays | Live against both services, browser-verified |
+| **Scouting markers** — rubs, scrapes, beds, trails, plots, water, access | Browser-verified end to end with a real mouse |
+| **Offline map cache** — tiles kept on disk, bounded "save this view" | Browser-verified: the page contacts no external host directly |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -51,27 +57,51 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 
 | Feature | onX / Spartan Forge | Here |
 | --- | --- | --- |
-| Land ownership | onX: 161.5M parcels nationwide | **Yes, Wisconsin only, free** |
+| Land ownership | onX: 161.5M parcels nationwide | **Yes, Wisconsin only, free — boundaries drawn** |
 | Trail-camera integration | onX: Elite tier only | **Native** |
-| LiDAR / canopy-strip terrain | Both, prominently | No — would need a rendered tile service |
-| Historical imagery | Spartan Forge: 10 years UAV | No |
-| Offline maps | onX | No |
+| LiDAR terrain | Both, prominently | **Yes — free USGS 3DEP, 1 m at the camera** |
+| Terrain feature ID (saddles, benches, funnels) | Spartan Forge | **Yes, with absolute thresholds — it reports "none here" on flat ground** |
+| Thermals | Spartan Forge charges for it | **Yes where there is slope; says so plainly where there is not** |
+| Scouting waypoints | Both, core | **Yes, and dated — sign ages and fades** |
+| Public land / CWD / deer zones | onX layer set | **Yes, from WI DNR** |
+| Offline maps | onX paid tier | **Yes — viewed tiles always, bounded pre-fetch** |
+| Historical imagery | Spartan Forge: 10 years UAV | No (NAIP endpoint timed out; unverified) |
 | Movement prediction | Spartan Forge: neural net on university collar data | **No, and cannot match it** — the planner is weather + rut + your own cameras, and says so |
 | Pin sharing with partners | Spartan Forge | No |
 
 The honest line on prediction: without collar data, anything fancier here would
 be the same inputs in a better costume.
 
+## The ground itself
+
+Worth knowing before reading anything terrain-related: **this property is very
+flat.** Measured, not guessed — a 600 m box at the Green Lake camera holds
+12.5 ft of relief, with a median slope of 0.5 degrees and a maximum of 2.2.
+
+Consequences, all of them deliberate in the code:
+
+- Contour intervals and hillshade exaggeration are chosen from the relief
+  present. A fixed 10 ft interval draws ONE line here; the auto-chosen interval
+  is 2 ft, and the hillshade is stretched ~23x vertically (and says so).
+- **Thermals do not meaningfully exist here.** Below 2 degrees the ranking
+  reports "too flat for a thermal" and contributes nothing either way. This is
+  the honest answer, not a gap — a confident arrow on a flat field is worse
+  than silence, because it might be believed.
+- Saddles and benches correctly find nothing at the camera. Drainages are the
+  payoff on ground like this: flow accumulation is scale-free, and there are 14
+  of them, the longest a 390 m draw with 7 ft of fall.
+
 ## Next, in order
 
 1. **Photos land** → verify the download path against real images, then build
    the tagging screen (step 4). Burst grouping should pay immediately: the
-   cameras fire two frames per trigger.
-2. **Parcel boundaries drawn on the map**, not just a click-to-identify card —
-   the visual that makes onX feel like onX. The service returns geometry;
-   nothing else is needed.
+   cameras fire two frames per trigger. Note that stand ranking already has
+   camera-detection scoring wired up and returning zero; it starts working the
+   day photos exist.
+2. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
 3. **Finish the collar-data question** from a machine that can reach Movebank.
 4. Moultrie, if a capture arrives.
+5. Historical imagery, if a working NAIP endpoint can be found.
 
 ## Things that will bite you
 
@@ -86,6 +116,29 @@ be the same inputs in a better costume.
 - `Number(null)` is `0`, and 0,0 is a real place in the Atlantic. Missing
   coordinates must be rejected before conversion, not after.
 - Never edit a shipped migration — add another.
+- **The page script is emitted from a template literal, and that is a trap.**
+  An escape written with one backslash resolves when the PAGE IS BUILT, not
+  when the browser reads it: a single-escaped newline becomes a real line break
+  inside a quoted string and makes the whole dashboard a syntax error. A
+  backtick anywhere in that region — including inside a comment — closes the
+  template early. `node --check` on the module passes throughout, because the
+  module is fine; it is the page it produces that is broken. `test/dashboard-script.test.js`
+  compiles the generated script with node:vm and is the only thing that catches it.
+- **Terrain grid row 0 is the SOUTH edge**, with r increasing northward. Getting
+  this backwards mirrors every aspect by 180 degrees, which points every thermal
+  exactly the wrong way and looks entirely plausible.
+- **Hillshade is a dot product, not the textbook trig identity.** The identity is
+  easy to transcribe with the aspect convention inverted, which lights terrain
+  from the south-east and makes every ridge read as a valley. It shipped that way
+  once.
+- **Parcel queries must pin `outSR=4326`.** Without it the geometry arrives in
+  the layer's own projection, whose numbers are metres; drawn as degrees, the
+  boundary lands off the coast of Africa.
+- **Esri and USGS tiles are /z/y/x, not /z/x/y.** Swapping them gives a
+  valid-looking URL for the wrong ground.
+- **Do not bulk-download OpenStreetMap tiles.** Their policy forbids it and their
+  tiles are donated. `bulkAllowed: false` in tile-sources.mjs enforces this;
+  leave it alone.
 - **Everything interactive on the map is a child of `#map`** — toolbar, stand
   form, parcel card, pins. So the drag handler and the click handler both have
   to tell a press on a control from a press on the ground, and they must use

@@ -349,7 +349,9 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .formrow button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .formrow button.danger { color: var(--bad); }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .parcelcard { position: absolute; left: 10px; bottom: 78px; z-index: 5;
+  /* Bottom-right: the toolbar owns the top-left, zoom the top-right and the
+     layer switcher the bottom-left, so this is the last free corner. */
+  .parcelcard { position: absolute; right: 10px; bottom: 10px; z-index: 5;
                 width: min(300px, calc(100% - 20px)); background: var(--panel);
                 border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
                 box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }

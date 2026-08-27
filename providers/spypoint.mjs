@@ -9,7 +9,9 @@
  * loudly rather than fed a guess.
  */
 
-const API = 'https://restapi.spypoint.com/api/v3';
+// Overridable so the sync can be exercised end to end against a local stand-in
+// server in the tests. Nothing in normal use sets this.
+const API = process.env.SPYPOINT_API_BASE || 'https://restapi.spypoint.com/api/v3';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -178,7 +180,13 @@ export default {
   photoUrl(p, prefer = 'large') {
     for (const size of [prefer, 'large', 'medium', 'small']) {
       const s = p?.[size];
-      if (s?.host && s?.path) return `https://${s.host}/${s.path}`;
+      if (!s?.host || !s?.path) continue;
+      // host is normally a bare CDN hostname, but tolerate one that already
+      // carries a scheme: blindly prefixing would yield "https://https://..."
+      // and a broken link that only shows up as a failed download.
+      return s.host.includes('://')
+        ? `${s.host.replace(/\/$/, '')}/${s.path}`
+        : `https://${s.host}/${s.path}`;
     }
     return null;
   },

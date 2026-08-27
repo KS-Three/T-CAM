@@ -31,6 +31,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
+import { openDb, upsertCamera, upsertPhoto, addDetection, counts } from './db.mjs';
 
 // Re-exported from the provider rather than defined twice: two copies of the
 // same extraction logic is exactly how they drift apart.
@@ -57,6 +58,7 @@ const OPT = {
   inspect: has('--inspect'),
   quiet: has('--quiet'),
   provider: val('--provider', 'spypoint'),
+  account: val('--account', null),
 };
 
 const log = (...a) => { if (!OPT.quiet) console.log(...a); };
@@ -788,8 +790,28 @@ async function main() {
     warn('sync below is expected rather than a failure.\n');
   }
 
+  // The database is the system of record from here on; the flat files below are
+  // still written so nothing that reads them breaks mid-migration. A dry run
+  // touches neither.
+  let db = null;
   if (!OPT.dryRun) {
     await fs.mkdir(OPT.out, { recursive: true });
+    try {
+      db = openDb(OPT.out);
+      for (let i = 0; i < rows.length; i++) {
+        upsertCamera(db, rows[i], {
+          provider: provider.id,
+          accountLabel: OPT.account,
+          raw: cameras[i],
+        });
+      }
+    } catch (err) {
+      // A store failure must not cost the sync: the photos and the dashboard are
+      // the point, and the database can be rebuilt from the next run.
+      warn(`  could not open the database (${err.message}) — continuing without it`);
+      db = null;
+    }
+
     await fs.writeFile(path.join(OPT.out, 'cameras.raw.json'), JSON.stringify(cameras, null, 2));
     const header = [
       'id', 'name', 'model', 'latitude', 'longitude', 'gps_fix',
@@ -845,9 +867,29 @@ async function main() {
           }
         }
         seen.add(id);
+        const tags = provider.photoTags(p);
+        if (db) {
+          try {
+            const stored = upsertPhoto(db, {
+              provider: provider.id, cameraId: cam.id, nativeId: id,
+              takenAt: d, filePath: OPT.dryRun ? null : rel, url, raw: p,
+            });
+            // The vendor's species tag is recorded as an UNCONFIRMED machine
+            // claim, never as an observation. A person confirming it later is
+            // what turns it into evidence.
+            for (const tag of tags) {
+              addDetection(db, {
+                photoId: stored.id, species: String(tag).toLowerCase(),
+                source: 'camera-ai', confirmed: false,
+              });
+            }
+          } catch (err) {
+            warn(`  ${cam.name}: could not record photo ${id} (${err.message})`);
+          }
+        }
         meta.push(JSON.stringify({
           id, camera: cam.id, cameraName: cam.name, date: d,
-          tags: provider.photoTags(p), url,
+          tags, url,
           provider: provider.id, file: rel,
         }));
         fetched++; totalNew++;
@@ -888,6 +930,13 @@ async function main() {
     const plan = await readPlan(OPT.out);
     await fs.writeFile(dash, dashboardHtml(rows, all, new Date().toISOString(), plan));
     log(`Dashboard: ${dash}`);
+  }
+
+  if (db) {
+    const c = counts(db);
+    log(`Store: ${c.cameras} camera(s), ${c.photos} photo(s), ${c.detections} detection(s), `
+      + `${c.bucks} buck(s), ${c.weatherHours} weather hour(s).`);
+    db.close();
   }
 
   console.log(`Done: ${totalNew} new photo(s)${OPT.dryRun ? ' would be downloaded (dry run)' : ''}. Output: ${OPT.out}`);

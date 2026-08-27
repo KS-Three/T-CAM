@@ -14,6 +14,9 @@ cameras.raw.json
 cameras.csv
 photos.jsonl
 dashboard.html
+trailcam.db
+trailcam.db-wal
+trailcam.db-shm
 photos/
 *.jpg
 *.jpeg

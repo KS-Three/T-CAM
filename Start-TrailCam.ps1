@@ -89,7 +89,7 @@ $env:SPYPOINT_PASSWORD = $cred.GetNetworkCredential().Password
 # --- Sync --------------------------------------------------------------------
 Say ''
 Say '  [1/3] Fetching cameras and photos...' 'White'
-& node spypoint-sync.mjs
+& node --disable-warning=ExperimentalWarning spypoint-sync.mjs
 if ($LASTEXITCODE -ne 0) {
     Say ''
     Say '  The sync failed - see the message above.' 'Red'
@@ -107,7 +107,7 @@ if ($LASTEXITCODE -ne 0) {
 # dashboard is still worth opening for camera locations and status.
 Say ''
 Say '  [2/3] Ranking the next two weeks of sits...' 'White'
-& node hunt-planner.mjs --days 14 --quiet
+& node --disable-warning=ExperimentalWarning hunt-planner.mjs --days 14 --quiet
 if ($LASTEXITCODE -ne 0) {
     Say '  Could not build the hunt plan - carrying on without it.' 'Yellow'
 }

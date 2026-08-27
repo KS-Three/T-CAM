@@ -111,6 +111,35 @@ account: [`docs/moultrie-capture.md`](docs/moultrie-capture.md). It yields the
 real API host, the endpoints, the field names and how the token is carried —
 after which implementing the provider is ordinary work rather than guesswork.
 
+## Data store
+
+Cameras, photos, detections, bucks, properties and hourly weather live in
+`spypoint-data/trailcam.db`, a SQLite file. `node:sqlite` is built into Node 22+,
+so this adds **no dependencies**. Photos stay as JPEGs on disk; the raw API JSON
+for every camera and photo is kept in the database alongside the parsed fields,
+so nothing is lost when a provider's shape turns out to differ.
+
+Run with `--disable-warning=ExperimentalWarning` (the launcher does) — `node:sqlite`
+prints an experimental notice on every run that otherwise makes a working tool
+look broken.
+
+Schema highlights, and why:
+
+| Choice | Reason |
+| --- | --- |
+| `NULL` means unknown, never `0` | A camera at 0% battery is urgent; one that reports no figure is a different thing, and the health rules must tell them apart |
+| `lat` and `lng` are separate named columns | Never a positional pair — the ordering is the classic way to get this wrong |
+| Detections are per **animal** | So one frame can hold two different bucks |
+| `source` is `camera-ai` or `manual` | An unreviewed machine tag is never mistaken for a human identification |
+| Bucks are global; cameras belong to properties | A buck seen on two properties is one buck |
+| Weather is stored for **every** hour | The hours with no detections are the control group; without them no pattern can be tested |
+| Weather locations match on distance, not a grid | Two cameras 200 m apart can round into different grid cells; distance matching keeps them on one record |
+| IDs are `provider:native_id` | Two accounts, or two brands, can never collide |
+
+Migrations are versioned and applied once, each in a transaction. **Never edit a
+migration that has shipped** — add another; this file holds data the user cares
+about.
+
 ## Output
 
 ```

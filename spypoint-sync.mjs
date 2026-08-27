@@ -378,7 +378,11 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
              background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
   #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
                           stroke-dasharray: none; }
-  .terrainnote { position: absolute; left: 10px; bottom: 46px; z-index: 4; max-width: 260px;
+  /* Top-RIGHT, below the zoom buttons. It used to sit bottom-left, which was
+     fine with three toolbar buttons and started covering the fifth one when the
+     toolbar grew. The bottom-right corner is spoken for by the parcel card. */
+  .terrainnote { position: absolute; right: 10px; top: 84px; z-index: 4; max-width: 250px;
+                 max-height: calc(100% - 190px); overflow-y: auto;
                  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
                  box-shadow: 0 2px 10px rgba(0,0,0,.35); }

@@ -441,3 +441,96 @@ test('the requested area is clamped, whatever the caller asks for', async t => {
   assert.ok(body.grid.cols * body.grid.rows <= 200_000,
     'and the sample count stays inside the fetcher\'s guard by coarsening');
 });
+
+// ---------------------------------------------------------------------------
+// Surviving a public service having a bad moment
+// ---------------------------------------------------------------------------
+
+test('a rate-limited batch is retried rather than failing the whole grid', async t => {
+  // One 429 used to abort everything and surface as "terrain fetch failed",
+  // throwing away every other batch with it. A public service under load
+  // answers this way routinely.
+  let calls = 0;
+  const impl = async (url, opts) => {
+    calls++;
+    if (calls === 1) {
+      return { ok: false, status: 429, headers: { get: () => null } };
+    }
+    const geom = JSON.parse(new URLSearchParams(opts.body).get('geometry'));
+    return {
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => ({ samples: geom.points.map((p, i) => ({ locationId: i, value: '250' })) }),
+    };
+  };
+  const g = await fetchElevationGrid(bounds, { spacingM: 10, fetchImpl: impl });
+  assert.equal(gridStats(g).count, g.cols * g.rows, 'the grid completed despite the 429');
+  assert.ok(calls > 1, 'because the batch was retried');
+});
+
+test('a dropped connection is retried too', async () => {
+  let calls = 0;
+  const impl = async (url, opts) => {
+    calls++;
+    if (calls === 1) throw new Error('socket hang up');
+    const geom = JSON.parse(new URLSearchParams(opts.body).get('geometry'));
+    return {
+      ok: true, headers: { get: () => 'application/json' },
+      json: async () => ({ samples: geom.points.map((p, i) => ({ locationId: i, value: '250' })) }),
+    };
+  };
+  const g = await fetchElevationGrid(bounds, { spacingM: 10, fetchImpl: impl });
+  assert.equal(gridStats(g).count, g.cols * g.rows);
+});
+
+test('a service that stays down gives up with a message that says what to do', async () => {
+  const impl = async () => ({ ok: false, status: 429, headers: { get: () => null } });
+  await assert.rejects(
+    () => fetchElevationGrid(bounds, { spacingM: 10, fetchImpl: impl }),
+    /HTTP 429.*rate limited — try a smaller area/);
+});
+
+test('an unreachable service is reported as unreachable, not as bad data', async () => {
+  const impl = async () => { throw new Error('getaddrinfo ENOTFOUND'); };
+  await assert.rejects(
+    () => fetchElevationGrid(bounds, { spacingM: 10, fetchImpl: impl }),
+    /could not reach the elevation service/);
+});
+
+test('a 404 is not retried — it will not get better', async () => {
+  let calls = 0;
+  const impl = async () => { calls++; return { ok: false, status: 404, headers: { get: () => null } }; };
+  await assert.rejects(() => fetchElevationGrid(bounds, { spacingM: 10, fetchImpl: impl }),
+    /HTTP 404/);
+  assert.equal(calls, 1, 'retrying a 404 just wastes time');
+});
+
+test('ground outside US coverage is explained, not reported as a failure', async t => {
+  // 3DEP is a United States programme. Asked about anywhere else it answers
+  // "Invalid or missing input parameters", which reaches a person as an
+  // inexplicable "terrain fetch failed".
+  const { get, calls } = await serving(t);
+  const res = await get('/api/terrain?lat=51.5&lng=-0.12&radius=200&spacing=20');
+  assert.equal(res.status, 200, 'no coverage is an answer, not an error');
+  const body = await res.json();
+  assert.equal(body.covered, false);
+  assert.match(body.why, /covers the United States/);
+  assert.equal(calls.length, 0, 'and nothing was asked of the service');
+});
+
+test('a map with no location says so instead of querying the Atlantic', async t => {
+  // The map centres on 0,0 when no camera has reported a GPS fix. That is in
+  // the Gulf of Guinea, and the resulting service error explains nothing.
+  const { get, calls } = await serving(t);
+  const body = await (await get('/api/terrain?lat=0&lng=0&radius=200&spacing=20')).json();
+  assert.equal(body.covered, false);
+  assert.match(body.why, /no cameras? reported GPS|no location yet/i);
+  assert.equal(calls.length, 0);
+});
+
+test('ground inside coverage still goes to the service', async t => {
+  const { get, calls } = await serving(t);
+  const body = await (await get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20')).json();
+  assert.equal(body.covered, true, 'the guard must not block real ground');
+  assert.ok(calls.length > 0);
+});

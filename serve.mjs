@@ -213,6 +213,26 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
     planned = planGrid(bounds, spacingM);
   }
 
+  // 3DEP is a United States programme. Asked about anywhere else the service
+  // answers "Invalid or missing input parameters", which surfaces to a person
+  // as an inexplicable failure rather than as "there is no data there". Worth
+  // catching before the request: the map centres on 0,0 when no camera has a
+  // GPS fix, which lands in the Gulf of Guinea.
+  const IN_COVERAGE = (la, ln) =>
+    (la >= 24 && la <= 50 && ln >= -125 && ln <= -66)      // lower 48
+    || (la >= 51 && la <= 72 && ln >= -170 && ln <= -129)  // Alaska
+    || (la >= 18 && la <= 23 && ln >= -161 && ln <= -154); // Hawaii
+  if (!IN_COVERAGE(lat, lng)) {
+    return {
+      covered: false, cached: false, bounds, stats: null,
+      why: lat === 0 && lng === 0
+        ? 'The map has no location yet — none of your cameras reported GPS '
+          + 'coordinates, so there is nowhere to read the ground.'
+        : 'USGS 3DEP covers the United States. There is no elevation data at '
+          + `${lat.toFixed(4)}, ${lng.toFixed(4)}.`,
+    };
+  }
+
   let grid = terrainGridCovering(db, bounds, spacingM);
   let cached = !!grid;
   if (!grid) {
@@ -232,7 +252,11 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
   if (!stats.count) {
     // Real answer, not a failure: outside LiDAR coverage there is no terrain to
     // draw, and saying so beats drawing an empty grey square.
-    return { covered: false, cached, bounds: gridBounds(grid), stats: null };
+    return {
+      covered: false, cached, bounds: gridBounds(grid), stats: null,
+      why: 'No LiDAR coverage on this ground. That is a real answer rather than '
+        + 'a fault — 3DEP does not cover every square metre.',
+    };
   }
 
   const hs = hillshade(grid);
@@ -563,6 +587,13 @@ export function createServer({ out = OPT.out } = {}) {
           const terrain = await terrainFor(db, { lat, lng, radiusM, spacingM });
           return sendJson(res, 200, terrain);
         } catch (err) {
+          // Printed as well as returned. The browser shows one line; the
+          // window the launcher leaves open is where you can actually see what
+          // went wrong, and "terrain fetch failed" on its own is not a
+          // diagnosis.
+          console.error(`\n  Terrain failed at ${lat.toFixed(5)},${lng.toFixed(5)} `
+            + `(radius ${radiusM} m, spacing ${spacingM} m):\n  ${err.message}\n`
+            + '  Run  node check-terrain.mjs  to test the elevation service on its own.\n');
           return sendJson(res, 502, { error: err.message });
         }
       }

@@ -1035,8 +1035,10 @@ async function loadTerrain() {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'terrain lookup failed');
     if (!body.covered) {
-      terrainNote('No LiDAR coverage here. Outside the mapped area there is '
-        + 'nothing to draw, which is different from flat ground.');
+      // The server says WHY, and it is not always the same reason — no
+      // coverage, or a map that has no location at all because no camera
+      // reported GPS. "Nothing to draw" would hide the difference.
+      terrainNote(body.why || 'No LiDAR coverage here. That is different from flat ground.');
       terrainOn = false;
       return;
     }

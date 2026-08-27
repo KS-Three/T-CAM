@@ -131,7 +131,7 @@ export function parseElevation(v) {
  */
 export async function fetchElevationGrid(bounds, {
   spacingM = 10, signal, onProgress = null, fetchImpl = globalThis.fetch,
-  concurrency = 4,
+  concurrency = 3,
 } = {}) {
   const grid = planGrid(bounds, spacingM);
   const total = grid.cols * grid.rows;
@@ -149,9 +149,10 @@ export async function fetchElevationGrid(bounds, {
 
   // Batches run several at a time. Sequentially, a patch covering a zoomed-out
   // map is fifteen round trips and about a minute of staring at a button —
-  // long enough that the first version felt broken. Four at a time cuts that to
-  // roughly a quarter without hammering a free public service; it is a
-  // deliberate ceiling, not a value to raise casually.
+  // long enough that the first version felt broken. Three at a time still cuts
+  // that by most of its length while staying polite to a free public service
+  // reached from a home connection; it is a deliberate ceiling, not a value to
+  // raise casually.
   let done = 0;
   let next = 0;
   const worker = async () => {
@@ -167,7 +168,18 @@ export async function fetchElevationGrid(bounds, {
   return grid;
 }
 
-async function fetchBatch(grid, b, { signal, fetchImpl }) {
+/**
+ * A public service under load answers 429 or 503 rather than failing outright,
+ * and a single one of those used to abort the whole grid — turning a momentary
+ * hiccup into "terrain fetch failed" with sixteen batches thrown away. Retried
+ * with backoff, honouring Retry-After when the service sends one.
+ */
+const RETRY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+export const RETRIES = 3;
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+async function fetchBatch(grid, b, { signal, fetchImpl, attempt = 0 }) {
   const total = grid.cols * grid.rows;
   const start = b * BATCH;
   const end = Math.min(total, start + BATCH);
@@ -184,11 +196,38 @@ async function fetchBatch(grid, b, { signal, fetchImpl }) {
     f: 'json',
   });
   // POSTed because the lattice does not fit in a URL — a GET returns 414.
-  const res = await fetchImpl(ENDPOINT(), {
-    method: 'POST', body, signal,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  });
-  if (!res.ok) throw new Error(`elevation service returned HTTP ${res.status}`);
+  let res;
+  try {
+    res = await fetchImpl(ENDPOINT(), {
+      method: 'POST', body, signal,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        // Public services are entitled to know who is calling them.
+        'user-agent': 'TrailCam/1.0 (personal trail-camera tool)',
+      },
+    });
+  } catch (err) {
+    // A dropped connection is exactly the kind of thing worth one more try.
+    if (attempt < RETRIES && !signal?.aborted) {
+      await wait(500 * 2 ** attempt);
+      return fetchBatch(grid, b, { signal, fetchImpl, attempt: attempt + 1 });
+    }
+    throw new Error(`could not reach the elevation service: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    if (RETRY_STATUS.has(res.status) && attempt < RETRIES) {
+      const retryAfter = Number(res.headers?.get?.('retry-after'));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(10_000, retryAfter * 1000)
+        : 500 * 2 ** attempt;
+      await wait(delay);
+      return fetchBatch(grid, b, { signal, fetchImpl, attempt: attempt + 1 });
+    }
+    throw new Error(
+      `elevation service returned HTTP ${res.status}`
+      + (res.status === 429 ? ' (rate limited — try a smaller area)' : ''));
+  }
   const json = await res.json();
   // ArcGIS reports its own failures inside a 200, so the status code alone
   // would turn a broken service into a grid of quiet NaNs.

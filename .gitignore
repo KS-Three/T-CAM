@@ -1,0 +1,34 @@
+# THIS REPOSITORY IS PUBLIC.
+#
+# Everything this tool produces is sensitive: camera GPS positions are the
+# physical locations of your cameras, and the photos are what they saw. None of
+# it belongs in a public repo, so the sync output is excluded wholesale rather
+# than file by file — a rule that only listed today's filenames would quietly
+# stop covering a new one.
+spypoint-data/
+*/spypoint-data/
+
+# Belt and braces: even if output lands somewhere unexpected, or a run is
+# pointed elsewhere with --out, these patterns still catch it.
+cameras.raw.json
+cameras.csv
+photos.jsonl
+dashboard.html
+photos/
+*.jpg
+*.jpeg
+
+# Credentials. sync.cmd is the Task Scheduler wrapper, which holds the SpyPoint
+# password in plain text by necessity.
+sync.cmd
+sync.sh
+.env
+.env.*
+
+# Node / editor noise
+node_modules/
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

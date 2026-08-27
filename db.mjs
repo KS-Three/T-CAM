@@ -201,7 +201,44 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX weather_hour ON weather_hours(hour_utc);');
     },
   },
+  {
+    version: 2,
+    name: 'stands',
+    up: db => {
+      // Where you actually sit. Cameras tell you where deer are; a stand is
+      // where you can be, which is not the same place and is the thing a
+      // recommendation ultimately has to name.
+      //
+      // good_winds is a comma-separated list of compass points on which the
+      // stand is huntable — the wind carrying your scent AWAY from where deer
+      // come from. It is the single most important property of a stand and
+      // cannot be derived from anything the cameras report, so it is recorded
+      // by hand or left null.
+      db.exec(`
+        CREATE TABLE stands (
+          id          INTEGER PRIMARY KEY,
+          property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+          name        TEXT NOT NULL,
+          type        TEXT NOT NULL DEFAULT 'stand'
+                        CHECK (type IN ('stand', 'tripod', 'ground-blind',
+                                        'box-blind', 'saddle', 'other')),
+          lat         REAL NOT NULL,
+          lng         REAL NOT NULL,
+          good_winds  TEXT,
+          notes       TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX stands_property ON stands(property_id);');
+    },
+  },
 ];
+
+export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
+
+export const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -456,3 +493,109 @@ export const counts = db => ({
   bucks: db.prepare('SELECT COUNT(*) n FROM bucks').get().n,
   weatherHours: db.prepare('SELECT COUNT(*) n FROM weather_hours').get().n,
 });
+
+// ---------------------------------------------------------------------------
+// Stands
+// ---------------------------------------------------------------------------
+
+/** Normalize a wind list to canonical compass points, dropping anything unknown. */
+export function normalizeWinds(winds) {
+  if (!winds) return null;
+  const list = Array.isArray(winds) ? winds : String(winds).split(',');
+  const seen = [];
+  for (const w of list) {
+    const up = String(w).trim().toUpperCase();
+    if (COMPASS.includes(up) && !seen.includes(up)) seen.push(up);
+  }
+  return seen.length ? seen.join(',') : null;
+}
+
+export function createStand(db, { name, type = 'stand', lat, lng,
+  propertyId = null, goodWinds = null, notes = null }) {
+  if (!name || !String(name).trim()) throw new Error('a stand needs a name');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error('a stand needs coordinates');
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    throw new Error(`coordinates out of range: ${lat}, ${lng}`);
+  }
+  if (!STAND_TYPES.includes(type)) {
+    throw new Error(`unknown stand type "${type}" — one of ${STAND_TYPES.join(', ')}`);
+  }
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO stands (property_id, name, type, lat, lng, good_winds, notes, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)
+  `).run(propertyId, String(name).trim(), type, lat, lng,
+    normalizeWinds(goodWinds), notes, now, now);
+  return db.prepare('SELECT * FROM stands WHERE id = ?').get(info.lastInsertRowid);
+}
+
+/** Patch only the fields supplied, so a rename cannot silently clear the winds. */
+export function updateStand(db, id, patch = {}) {
+  const existing = db.prepare('SELECT * FROM stands WHERE id = ?').get(id);
+  if (!existing) throw new Error(`no stand with id ${id}`);
+
+  const next = {
+    name: patch.name !== undefined ? String(patch.name).trim() : existing.name,
+    type: patch.type !== undefined ? patch.type : existing.type,
+    lat: patch.lat !== undefined ? patch.lat : existing.lat,
+    lng: patch.lng !== undefined ? patch.lng : existing.lng,
+    property_id: patch.propertyId !== undefined ? patch.propertyId : existing.property_id,
+    good_winds: patch.goodWinds !== undefined ? normalizeWinds(patch.goodWinds) : existing.good_winds,
+    notes: patch.notes !== undefined ? patch.notes : existing.notes,
+  };
+  if (!next.name) throw new Error('a stand needs a name');
+  if (!STAND_TYPES.includes(next.type)) {
+    throw new Error(`unknown stand type "${next.type}" — one of ${STAND_TYPES.join(', ')}`);
+  }
+  if (!Number.isFinite(next.lat) || !Number.isFinite(next.lng)) {
+    throw new Error('a stand needs coordinates');
+  }
+
+  db.prepare(`
+    UPDATE stands SET name = ?, type = ?, lat = ?, lng = ?, property_id = ?,
+                      good_winds = ?, notes = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.name, next.type, next.lat, next.lng, next.property_id,
+    next.good_winds, next.notes, nowIso(), id);
+  return db.prepare('SELECT * FROM stands WHERE id = ?').get(id);
+}
+
+export function deleteStand(db, id) {
+  return db.prepare('DELETE FROM stands WHERE id = ?').run(id).changes > 0;
+}
+
+/**
+ * Stands with their property name and, for each, the cameras within reach and
+ * how far away they are. That link is what lets a recommendation move from
+ * "camera A has been busy" to "sit the stand that covers camera A".
+ */
+export function allStands(db, { nearMetres = 400 } = {}) {
+  const cams = db.prepare('SELECT id, name, lat, lng FROM cameras WHERE lat IS NOT NULL').all();
+  return db.prepare(`
+    SELECT s.*, p.name AS property_name
+    FROM stands s LEFT JOIN properties p ON p.id = s.property_id
+    ORDER BY p.name, s.name
+  `).all().map(s => ({
+    ...s,
+    winds: s.good_winds ? s.good_winds.split(',') : [],
+    nearbyCameras: cams
+      .map(c => ({ id: c.id, name: c.name, metres: Math.round(distanceM(s.lat, s.lng, c.lat, c.lng)) }))
+      .filter(c => c.metres <= nearMetres)
+      .sort((a, b) => a.metres - b.metres),
+  }));
+}
+
+/**
+ * Is this stand huntable on this wind? Unknown winds answer null rather than
+ * true: "I have not told it yet" and "yes" must not look the same, or the tool
+ * would recommend sitting somewhere the deer will smell you.
+ */
+export function standHuntableOn(stand, windFromDeg) {
+  const winds = stand.good_winds ? stand.good_winds.split(',') : [];
+  if (!winds.length) return null;
+  if (!Number.isFinite(windFromDeg)) return null;
+  const point = COMPASS[Math.round(((windFromDeg % 360) + 360) % 360 / 22.5) % 16];
+  return winds.includes(point);
+}

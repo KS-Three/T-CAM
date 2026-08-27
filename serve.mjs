@@ -26,7 +26,10 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { openDb, allCameras, counts } from './db.mjs';
+import {
+  openDb, allCameras, counts, allStands, createStand, updateStand, deleteStand,
+  STAND_TYPES, COMPASS,
+} from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 
 const argv = process.argv.slice(2);
@@ -110,7 +113,8 @@ export async function buildState(db, out) {
   const cameras = allCameras(db).map(cameraFromRow);
   const photos = recentPhotos(db);
   const plan = await readPlan(out);
-  return { generatedAt: new Date().toISOString(), cameras, photos, plan, counts: counts(db) };
+  const stands = allStands(db);
+  return { generatedAt: new Date().toISOString(), cameras, photos, stands, plan, counts: counts(db) };
 }
 
 const send = (res, code, type, body) => {
@@ -154,6 +158,27 @@ async function servePhoto(res, out, rel) {
   }
 }
 
+
+const MAX_BODY = 64 * 1024;
+
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_BODY) {
+        reject(new Error('request body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (!body.trim()) return resolve({});
+      try { resolve(JSON.parse(body)); } catch { reject(new Error('body was not valid JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
 export function createServer({ out = OPT.out } = {}) {
   let db;
   try {
@@ -168,7 +193,7 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const s = await buildState(db, out);
         return send(res, 200, 'text/html; charset=utf-8',
-          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan));
+          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands));
       }
       // The API boundary a phone app would later speak to.
       if (req.method === 'GET' && url.pathname === '/api/state') {
@@ -181,6 +206,52 @@ export function createServer({ out = OPT.out } = {}) {
         const limit = Math.min(1000, Number(url.searchParams.get('limit')) || 200);
         return sendJson(res, 200, recentPhotos(db, limit));
       }
+      // --- stands -------------------------------------------------------
+      if (url.pathname === '/api/stands') {
+        if (req.method === 'GET') return sendJson(res, 200, allStands(db));
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          try {
+            return sendJson(res, 201, createStand(db, {
+              name: b.name, type: b.type, lat: Number(b.lat), lng: Number(b.lng),
+              propertyId: b.propertyId ?? null, goodWinds: b.goodWinds ?? null,
+              notes: b.notes ?? null,
+            }));
+          } catch (err) {
+            // A bad stand is the caller's mistake, not a server fault, and the
+            // message says which field to fix.
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
+      const standMatch = url.pathname.match(/^\/api\/stands\/(\d+)$/);
+      if (standMatch) {
+        const id = Number(standMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            const patch = {};
+            for (const k of ['name', 'type', 'notes', 'goodWinds', 'propertyId']) {
+              if (b[k] !== undefined) patch[k] = b[k];
+            }
+            if (b.lat !== undefined) patch.lat = Number(b.lat);
+            if (b.lng !== undefined) patch.lng = Number(b.lng);
+            return sendJson(res, 200, updateStand(db, id, patch));
+          } catch (err) {
+            const missing = /no stand with id/.test(err.message);
+            return sendJson(res, missing ? 404 : 400, { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteStand(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: `no stand with id ${id}` });
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/stand-types') {
+        return sendJson(res, 200, { types: STAND_TYPES, winds: COMPASS });
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/health') {
         return sendJson(res, 200, { ok: true, out, ...counts(db) });
       }
@@ -189,6 +260,10 @@ export function createServer({ out = OPT.out } = {}) {
       }
       send(res, 404, 'text/plain', 'not found');
     } catch (err) {
+      // A malformed or oversized body is the caller's mistake, not a server
+      // fault, and deserves a 4xx that says which. Anything else is ours.
+      const clientFault = /valid JSON|body too large/.test(err.message);
+      if (clientFault) return sendJson(res, 400, { error: err.message });
       // A broken request must not take the server down mid-session.
       send(res, 500, 'text/plain', `error: ${err.message}`);
     }

@@ -181,6 +181,42 @@ and checked to be inside the photo directory before anything is read. A test
 sends the raw un-normalized bytes down a socket to prove the *server* refuses,
 rather than proving a polite HTTP client rewrote the path first.
 
+## Stands, tripods and blinds
+
+Cameras tell you where deer are; a stand is where *you* can be, and those are
+not the same place. Press **+ Add stand** on the map, click where it sits, and
+give it a name and type — ladder/hang-on, tripod, ground blind, box blind,
+saddle, or other. Stand pins are green teardrops against the cameras' round
+pins, so the two kinds are distinguishable by shape as well as colour. Click a
+pin to edit, move or delete it.
+
+Each stand automatically lists the cameras within 400 m and how far away they
+are. That is the link which turns *"camera A has been busy"* into *"sit the
+stand that covers camera A"*.
+
+### Good winds
+
+A stand can record the winds it is huntable on — the wind carrying your scent
+away from where deer come from. This is the single most important property of a
+stand and cannot be derived from anything the cameras report, so it is recorded
+by hand or left blank.
+
+**Blank means unknown, not "any wind".** A stand with no winds recorded answers
+`null` rather than `true`, because treating "I haven't said yet" as "yes" would
+send you to sit somewhere the deer will smell you. A test pins that behaviour.
+
+| Endpoint | |
+| --- | --- |
+| `GET /api/stands` | Every stand, with parsed winds and nearby cameras |
+| `POST /api/stands` | Drop a pin |
+| `PATCH /api/stands/:id` | Rename, move, retype, or change winds |
+| `DELETE /api/stands/:id` | Remove one |
+| `GET /api/stand-types` | The allowed types and compass points |
+
+Updates are partial, so a rename cannot silently clear the winds — a real risk,
+since that would quietly turn a known-good stand into one the tool refuses to
+recommend.
+
 ## Output
 
 ```

@@ -198,13 +198,18 @@ async function readPlan(dir) {
 // `plan` is optional and comes from hunt-planner.mjs by way of plan.json, so a
 // sync run picks up the last plan instead of wiping it off the page, and a
 // planner run rebuilds this same page. Either tool can be run first.
-function dashboardHtml(rows, photos, generatedAt, plan = null) {
+function dashboardHtml(rows, photos, generatedAt, plan = null, stands = []) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
     cameras: rows.map(r => ({ ...r, health: healthOf(r) })),
     photos,
     plan,
+    stands,
+    // Only a served page can save a pin; opened as a file there is nothing to
+    // POST to, so the UI hides the controls rather than offering a button that
+    // silently fails.
+    live: true,
   });
   return `<!doctype html>
 <html lang="en">
@@ -302,6 +307,47 @@ function dashboardHtml(rows, photos, generatedAt, plan = null) {
   .r-fair .score, .r-fair .rating { color: var(--warn); }
   .r-poor .score, .r-poor .rating { color: var(--muted); }
   .stale-note { color: var(--warn); font-size: 12px; margin: -4px 0 12px; }
+  /* Stand pins are a different SHAPE as well as colour: a teardrop against the
+     cameras' circles, so the two are told apart without relying on colour. */
+  .stand { position: absolute; width: 16px; height: 16px; cursor: pointer;
+           transform: translate(-50%, -100%) rotate(-45deg);
+           border: 2px solid #fff; border-radius: 50% 50% 50% 0;
+           background: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  .stand.sel { outline: 3px solid var(--warn); outline-offset: 2px; }
+  .slabel { position: absolute; transform: translate(-50%, -230%); font-size: 11px;
+            font-weight: 600; white-space: nowrap; padding: 1px 5px; border-radius: 4px;
+            background: rgba(0,0,0,.65); color: #fff; pointer-events: none; }
+  /* Top-LEFT: the zoom buttons own the top-right and the layer switcher the
+     bottom-left, so this is the only free corner. */
+  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex;
+              flex-direction: column; gap: 6px; }
+  .maptools button { padding: 7px 11px; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                     border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+                     background: var(--panel); color: var(--ink);
+                     box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  .maptools button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #map.placing { cursor: crosshair; }
+  .standform { position: absolute; left: 50%; top: 50%; z-index: 5;
+               transform: translate(-50%, -50%); width: min(340px, 90%);
+               background: var(--panel); border: 1px solid var(--line);
+               border-radius: 10px; padding: 16px; box-shadow: 0 6px 28px rgba(0,0,0,.4); }
+  .standform h3 { margin: 0 0 10px; font-size: 15px; }
+  .standform label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
+  .standform input, .standform select, .standform textarea {
+    width: 100%; padding: 7px 9px; font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  .winds { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 4px; }
+  .winds button { padding: 5px 0; font: 600 10px/1 ui-sans-serif, system-ui, sans-serif;
+                  border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
+                  background: var(--bg); color: var(--muted); }
+  .winds button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .formrow { display: flex; gap: 8px; margin-top: 14px; }
+  .formrow button { flex: 1; padding: 8px; font: 600 13px/1 ui-sans-serif, system-ui, sans-serif;
+                    border-radius: 6px; cursor: pointer; border: 1px solid var(--line);
+                    background: var(--bg); color: var(--ink); }
+  .formrow button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .formrow button.danger { color: var(--bad); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   /* Map-type control, positioned like Google's: a thumbnail in the lower-left
      showing what you would switch TO, with the full list on hover or tap. */
   .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
@@ -341,6 +387,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null) {
   <h2 class="section">Cameras</h2>
   <div id="map"><div id="tiles"></div><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">\u2212</button></div>
+    <div class="maptools"><button id="addStand" type="button">+ Add stand</button></div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
         <span id="layerLabel"></span>
@@ -493,6 +540,168 @@ function draw() {
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     pinsEl.append(lab, p);
   }
+
+  // Stands: teardrops rather than circles, so they read as a different KIND of
+  // thing than a camera even at a glance or in greyscale.
+  for (const s of STANDS) {
+    const x = projX(s.lng, zoom) - left, y = projY(s.lat, zoom) - top;
+    if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
+    const lab = el('div', 'slabel', s.name);
+    lab.style.left = x + 'px'; lab.style.top = y + 'px';
+    const pin = el('div', 'stand' + (editing && editing.id === s.id ? ' sel' : ''));
+    pin.style.left = x + 'px'; pin.style.top = y + 'px';
+    pin.title = s.name + ' \u2014 ' + s.type.replace('-', ' ')
+      + (s.winds && s.winds.length ? ' \u00b7 good on ' + s.winds.join(', ') : '')
+      + (s.nearbyCameras && s.nearbyCameras.length
+        ? ' \u00b7 covers ' + s.nearbyCameras.map(c => c.name + ' (' + c.metres + 'm)').join(', ')
+        : '');
+    pin.onclick = ev => { ev.stopPropagation(); openStandForm(s); };
+    pinsEl.append(lab, pin);
+  }
+}
+
+// ---- stands -----------------------------------------------------------
+let STANDS = D.stands || [];
+let placing = false;
+let editing = null;
+
+const WINDS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+const TYPES = [['stand','Ladder / hang-on'],['tripod','Tripod'],['ground-blind','Ground blind'],
+               ['box-blind','Box blind'],['saddle','Saddle'],['other','Other']];
+
+/** Screen pixel -> coordinates. The inverse of projX/projY, used when a click
+ *  on the map has to become a real position for a new pin. */
+function pixelToLatLng(px, py) {
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const n = TS * 2 ** zoom;
+  const cx = projX(centre.lng, zoom) - W / 2 + px;
+  const cy = projY(centre.lat, zoom) - H / 2 + py;
+  return {
+    lng: cx / n * 360 - 180,
+    lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * cy / n))) * 180 / Math.PI,
+  };
+}
+
+const addBtn = document.getElementById('addStand');
+if (!D.live) {
+  // Opened as a file rather than served: there is nothing to POST to, so do not
+  // offer a button that would fail silently.
+  addBtn.style.display = 'none';
+} else {
+  addBtn.onclick = ev => {
+    ev.stopPropagation();
+    placing = !placing;
+    addBtn.classList.toggle('on', placing);
+    addBtn.textContent = placing ? 'Click the map\u2026' : '+ Add stand';
+    mapEl.classList.toggle('placing', placing);
+  };
+}
+
+async function saveStand(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const msg = await res.json().catch(() => ({}));
+    throw new Error(msg.error || ('request failed: ' + res.status));
+  }
+  return res.status === 200 || res.status === 201 ? res.json() : null;
+}
+
+async function refreshStands() {
+  STANDS = await (await fetch('/api/stands')).json();
+  draw();
+}
+
+// The drop/edit form. A row with an id is an edit; {lat,lng} alone is new.
+function openStandForm(stand) {
+  document.querySelector('.standform')?.remove();
+  editing = stand.id ? stand : null;
+  const isNew = !stand.id;
+  const chosen = new Set(stand.winds || []);
+
+  const form = el('div', 'standform');
+  form.appendChild(el('h3', null, isNew ? 'New stand' : 'Edit stand'));
+
+  const name = document.createElement('input');
+  name.value = stand.name || '';
+  name.placeholder = 'East Ridge ladder';
+  form.append(el('label', null, 'Name'), name);
+
+  const type = document.createElement('select');
+  for (const [v, labelText] of TYPES) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = labelText;
+    if ((stand.type || 'stand') === v) o.selected = true;
+    type.appendChild(o);
+  }
+  form.append(el('label', null, 'Type'), type);
+
+  form.appendChild(el('label', null, 'Huntable on these winds (the wind comes FROM)'));
+  const windBox = el('div', 'winds');
+  for (const w of WINDS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = w;
+    b.className = chosen.has(w) ? 'on' : '';
+    b.onclick = () => {
+      if (chosen.has(w)) chosen.delete(w); else chosen.add(w);
+      b.classList.toggle('on');
+    };
+    windBox.appendChild(b);
+  }
+  form.appendChild(windBox);
+  form.appendChild(el('div', 'hint',
+    'Leave blank if unsure \u2014 the tool then says "unknown" rather than recommending it.'));
+
+  const notes = document.createElement('textarea');
+  notes.rows = 2; notes.value = stand.notes || '';
+  form.append(el('label', null, 'Notes'), notes);
+
+  const row = el('div', 'formrow');
+  const save = document.createElement('button');
+  save.className = 'primary'; save.textContent = isNew ? 'Drop pin' : 'Save';
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const body = {
+        name: name.value, type: type.value,
+        lat: stand.lat, lng: stand.lng,
+        goodWinds: [...chosen],
+        notes: notes.value || null,
+      };
+      if (isNew) await saveStand('POST', '/api/stands', body);
+      else await saveStand('PATCH', '/api/stands/' + stand.id, body);
+      form.remove(); editing = null;
+      await refreshStands();
+    } catch (err) {
+      save.disabled = false;
+      let e = form.querySelector('.stale-note');
+      if (!e) { e = el('div', 'stale-note'); form.appendChild(e); }
+      e.textContent = err.message;
+    }
+  };
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel';
+  cancel.onclick = () => { form.remove(); editing = null; draw(); };
+  row.append(save, cancel);
+
+  if (!isNew) {
+    const del = document.createElement('button');
+    del.className = 'danger'; del.textContent = 'Delete';
+    del.onclick = async () => {
+      if (!confirm('Delete ' + stand.name + '?')) return;
+      await saveStand('DELETE', '/api/stands/' + stand.id);
+      form.remove(); editing = null;
+      await refreshStands();
+    };
+    row.appendChild(del);
+  }
+  form.appendChild(row);
+  mapEl.appendChild(form);
+  name.focus();
+  draw();
 }
 
 // ---- map type control -------------------------------------------------
@@ -544,6 +753,19 @@ toggleEl.onclick = e => { e.stopPropagation(); layersEl.classList.add('open'); }
 layersEl.onmouseenter = () => layersEl.classList.add('open');
 layersEl.onmouseleave = () => layersEl.classList.remove('open');
 document.addEventListener('click', () => layersEl.classList.remove('open'));
+
+mapEl.addEventListener('click', e => {
+  if (!placing || e.target.closest('.zoom, .layers, .maptools, .standform, .stand')) return;
+  const r = mapEl.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  if (px < 0 || py < 0 || px > r.width || py > r.height) return;
+  const at = pixelToLatLng(px, py);
+  placing = false;
+  addBtn.classList.remove('on');
+  addBtn.textContent = '+ Add stand';
+  mapEl.classList.remove('placing');
+  openStandForm({ lat: at.lat, lng: at.lng });
+});
 
 let drag = null;
 mapEl.addEventListener('pointerdown', e => {

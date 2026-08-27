@@ -35,6 +35,8 @@ import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
+import { sourceDescriptors } from './tile-sources.mjs';
+import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
   slopeAspect, metresToFeet, planGrid, slopeAspectAt,
@@ -341,7 +343,8 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const s = await buildState(db, out);
         return send(res, 200, 'text/html; charset=utf-8',
-          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true, s.markers));
+          dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true, s.markers,
+                        sourceDescriptors({ proxied: true })));
       }
       // The API boundary a phone app would later speak to.
       if (req.method === 'GET' && url.pathname === '/api/state') {
@@ -450,6 +453,65 @@ export function createServer({ out = OPT.out } = {}) {
 
 
 
+
+      // --- map tiles ----------------------------------------------------
+      // Every tile the page draws comes through here, so a copy lands on disk
+      // on the way past and the same ground works later with no signal.
+      const tileMatch = url.pathname.match(/^\/tiles\/([a-z-]+)\/(\d+)\/(\d+)\/(\d+)$/);
+      if (req.method === 'GET' && tileMatch) {
+        const [, key, z, x, y] = tileMatch;
+        try {
+          const tile = await getTile(out, key, Number(z), Number(x), Number(y));
+          res.writeHead(200, {
+            'content-type': tile.contentType,
+            // Tiles are the one thing here worth caching in the browser too:
+            // they are immutable in practice and this is the offline path.
+            'cache-control': 'public, max-age=604800',
+            'x-tile-cache': tile.stale ? 'stale' : tile.cached ? 'hit' : 'miss',
+          });
+          return res.end(tile.body);
+        } catch (err) {
+          const bad = /unknown tile source|out of range/.test(err.message);
+          return sendJson(res, bad ? 400 : 502, { error: err.message });
+        }
+      }
+
+      // Save the current view for offline use. Bounded deliberately — see
+      // tile-cache.mjs on why bulk downloading is not simply allowed.
+      if (req.method === 'POST' && url.pathname === '/api/tiles/save') {
+        const b = await readJson(req);
+        const bounds = b.bounds ?? {};
+        const ok = ['west', 'south', 'east', 'north'].every(k => Number.isFinite(Number(bounds[k])));
+        if (!ok) return sendJson(res, 400, { error: 'bounds (west, south, east, north) are required' });
+        const zooms = Array.isArray(b.zooms) && b.zooms.length
+          ? b.zooms.map(Number).filter(z => Number.isInteger(z) && z >= 0 && z <= 22).slice(0, 6)
+          : [];
+        if (!zooms.length) return sendJson(res, 400, { error: 'at least one zoom level is required' });
+        const sources = Array.isArray(b.sources) && b.sources.length ? b.sources : ['satellite'];
+        try {
+          const result = await prefetch(out, {
+            bounds: {
+              west: Number(bounds.west), south: Number(bounds.south),
+              east: Number(bounds.east), north: Number(bounds.north),
+            },
+            zooms, sources,
+          });
+          return sendJson(res, 200, { ...result, max: PREFETCH_MAX_TILES });
+        } catch (err) {
+          return sendJson(res, 502, { error: err.message });
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/tiles/stats') {
+        return sendJson(res, 200, await cacheStats(out));
+      }
+      if (req.method === 'DELETE' && url.pathname === '/api/tiles') {
+        try {
+          return sendJson(res, 200, await clearCache(out, url.searchParams.get('source')));
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
       // Which stand, for a given sit. The planner says WHEN; this says WHERE.
       if (req.method === 'GET' && url.pathname === '/api/stand-plan') {
         const plan = await readPlan(out);

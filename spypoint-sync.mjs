@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
 import { openDb, upsertCamera, upsertPhoto, addDetection, counts } from './db.mjs';
+import { sourceDescriptors } from './tile-sources.mjs';
 
 // Re-exported from the provider rather than defined twice: two copies of the
 // same extraction logic is exactly how they drift apart.
@@ -198,7 +199,8 @@ async function readPlan(dir) {
 // `plan` is optional and comes from hunt-planner.mjs by way of plan.json, so a
 // sync run picks up the last plan instead of wiping it off the page, and a
 // planner run rebuilds this same page. Either tool can be run first.
-function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false, markers = []) {
+function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false,
+                       markers = [], tileSources = null) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
@@ -212,6 +214,11 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
     // the static dashboard the sync writes.
     live,
     markers,
+    // Where imagery comes from. The served page is handed templates pointing at
+    // its own server, so every tile is cached on the way past and the page
+    // needs no knowledge of upstream URLs; the static file gets the upstream
+    // templates because it has no server to ask.
+    tiles: tileSources ?? sourceDescriptors({ proxied: false }),
   });
   return `<!doctype html>
 <html lang="en">
@@ -476,6 +483,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
       <button id="whoOwns" type="button">Who owns this?</button>
       <button id="terrainBtn" type="button">Terrain</button>
       <button id="markBtn" type="button">+ Mark sign</button>
+      <button id="offlineBtn" type="button">Save offline</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -527,83 +535,27 @@ const TS = 256;
 // enough to pick out field edges, funnels and standing crops. USGS imagery was
 // measured too: sharper where it exists, but it 404s above z16 here, so it is
 // offered as an option rather than the default.
-const LAYERS = {
-  map: {
-    label: 'Map', alt: 'Satellite', maxZoom: 19,
-    url: (z, x, y) => 'https://tile.openstreetmap.org/' + z + '/' + x + '/' + y + '.png',
-    credit: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  },
-  satellite: {
-    label: 'Satellite', alt: 'Map', maxZoom: 19,
-    url: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x,
-    credit: 'Imagery © Esri, Maxar, Earthstar Geographics',
-  },
-  hybrid: {
-    label: 'Hybrid', alt: 'Map', maxZoom: 19,
-    url: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/' + z + '/' + y + '/' + x,
-    overlay: (z, x, y) => 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/' + z + '/' + y + '/' + x,
-    credit: 'Imagery © Esri, Maxar, Earthstar Geographics',
-  },
-  topo: {
-    label: 'Terrain', alt: 'Map', maxZoom: 17,
-    url: (z, x, y) => 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/' + z + '/' + y + '/' + x,
-    credit: 'Topo © <a href="https://www.usgs.gov/">USGS</a> The National Map',
-  },
-};
+// Imagery, as described by the server (see tile-sources.mjs). Templates are
+// expanded here with the same substitution the server uses, so a served page
+// asks its own cache and the static file talks to the tile services directly —
+// with one code path either way.
+const LAYERS = D.tiles.base;
+const OVERLAYS = D.tiles.overlays;
 
-/**
- * Wisconsin DNR overlays — the regulatory layers, free from the state.
- *
- * These are MapServers rather than tile caches, so there is no /tile/z/y/x to
- * ask for; each tile is an "export" of a bounding box. The box has to be given
- * in Web Mercator metres (bboxSR 3857) to line up with the base map, which is
- * why tileBounds3857 exists rather than passing degrees.
- *
- * Labels are deliberately narrow. "Public land" would be wrong and dangerously
- * so: VPA is the Voluntary Public Access programme — private land enrolled for
- * public hunting — not state land, and not every place you may legally hunt.
- * Nothing here replaces reading the regulations.
- */
-const OVERLAYS = {
-  vpa: {
-    label: 'VPA public access',
-    note: 'Private land enrolled in the DNR Voluntary Public Access programme. '
-      + 'Not all public land, and not a substitute for the regulations.',
-    service: 'WM_VPA/WM_VPA_HUNT_LEASE_LAND_WTM',
-    credit: 'Public access © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
-  },
-  cwd: {
-    label: 'CWD areas',
-    note: 'Chronic wasting disease management areas. Baiting and carcass '
-      + 'transport rules differ inside these.',
-    service: 'WM_CWD/WM_CWD_WTM_Ext',
-    credit: 'CWD areas © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
-  },
-  units: {
-    label: 'Deer zones',
-    note: 'DNR deer management zones — which unit your tag is valid in.',
-    service: 'WM_CWD/WM_DEER_MANAGEMENT_ZONES_WTM_Ext',
-    credit: 'Deer zones © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
-  },
-};
-
-// Web Mercator metres for one slippy tile. The projection constant is the
-// half-circumference of the earth in the same metres the base tiles use.
 const MERC = 20037508.342789244;
 function tileBounds3857(z, x, y) {
   const size = 2 * MERC / 2 ** z;
-  return [
-    -MERC + x * size,
-    MERC - (y + 1) * size,
-    -MERC + (x + 1) * size,
-    MERC - y * size,
-  ].join(',');
+  return [-MERC + x * size, MERC - (y + 1) * size,
+          -MERC + (x + 1) * size, MERC - y * size].join(',');
 }
+const expandTile = (tpl, z, x, y) => tpl
+  .replace('{z}', z).replace('{x}', x).replace('{y}', y)
+  .replace('{bbox3857}', () => tileBounds3857(z, x, y));
 
-const overlayUrl = (key, z, x, y) =>
-  'https://dnrmaps.wi.gov/arcgis/rest/services/' + OVERLAYS[key].service
-  + '/MapServer/export?bbox=' + tileBounds3857(z, x, y)
-  + '&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image';
+const layerUrl = (key, z, x, y) => expandTile(LAYERS[key].template, z, x, y);
+const referenceUrl = (key, z, x, y) => LAYERS[key].reference
+  ? expandTile(LAYERS[key].reference, z, x, y) : null;
+const overlayUrl = (key, z, x, y) => expandTile(OVERLAYS[key].template, z, x, y);
 
 // Remembered per browser, like the base layer.
 let overlayOn = new Set();
@@ -671,13 +623,14 @@ function draw() {
         tilesEl.appendChild(img);
       };
       const base = new Image();
-      base.src = L.url(zoom, wx, ty);
+      base.src = layerUrl(layerKey, zoom, wx, ty);
       place(base);
       // Hybrid draws place names and boundaries as a transparent PNG over the
       // imagery, in a second pass so it always lands on top.
-      if (L.overlay) {
+      const refUrl = referenceUrl(layerKey, zoom, wx, ty);
+      if (refUrl) {
         const ov = new Image();
-        ov.src = L.overlay(zoom, wx, ty);
+        ov.src = refUrl;
         ov.style.pointerEvents = 'none';
         place(ov);
       }
@@ -727,6 +680,69 @@ function draw() {
 
 
 
+
+
+// ---- offline ----------------------------------------------------------
+// Tiles you have looked at are already cached — every one came through this
+// server on its way to the page. This button is for the ground you have NOT
+// looked at yet: the view in front of you, a few zoom levels deep, saved
+// before you lose signal.
+const offlineBtn = document.getElementById('offlineBtn');
+
+function visibleBounds() {
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const nw = pixelToLatLng(0, 0), se = pixelToLatLng(W, H);
+  return { west: nw.lng, north: nw.lat, east: se.lng, south: se.lat };
+}
+
+offlineBtn.onclick = async ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  offlineBtn.disabled = true;
+  const label = offlineBtn.textContent;
+  offlineBtn.textContent = 'Saving\u2026';
+  try {
+    // This zoom and three closer: enough to walk in on, without pulling down
+    // a county. The server caps it regardless.
+    const zooms = [zoom, zoom + 1, zoom + 2, zoom + 3]
+      .filter(z => z <= LAYERS[layerKey].maxZoom);
+    const res = await fetch('/api/tiles/save', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        bounds: visibleBounds(), zooms,
+        sources: [layerKey, ...overlayOn],
+      }),
+    });
+    const r = await res.json();
+    if (!res.ok) throw new Error(r.error || 'save failed');
+    const stats = await (await fetch('/api/tiles/stats')).json();
+    const mb = (stats.bytes / 1048576).toFixed(1);
+    terrainNote(
+      '<b>Saved for offline.</b> ' + r.saved + ' new tiles, '
+      + r.alreadyHad + ' already held'
+      + (r.failed ? ', ' + r.failed + ' failed' : '') + '.<br>'
+      + 'Cache now holds ' + stats.tiles + ' tiles (' + mb + ' MB).'
+      // Both of these are said out loud rather than swallowed: a truncated
+      // download that reports success is how you end up in the woods with
+      // half a map.
+      + (r.capped
+        ? '<br><span class="warn">Stopped at the ' + r.max + '-tile limit \u2014 '
+          + r.skipped + ' tiles not saved. Zoom in and save a smaller area.</span>'
+        : '')
+      + r.refused.map(x => '<br><span class="warn">' + x.why + '</span>').join(''));
+  } catch (err) {
+    terrainNote('Could not save tiles: ' + err.message);
+  } finally {
+    offlineBtn.disabled = false;
+    offlineBtn.textContent = label;
+  }
+};
+if (!D.live) {
+  offlineBtn.disabled = true;
+  offlineBtn.title = 'Offline maps need the server';
+  offlineBtn.style.opacity = '0.6';
+  offlineBtn.style.cursor = 'not-allowed';
+}
 
 // ---- scouting markers -------------------------------------------------
 // Sign you found on the ground. Both paid apps are built around this layer,
@@ -1435,7 +1451,7 @@ const previewTile = key => {
   const x = Math.floor((centre.lng + 180) / 360 * n);
   const s = Math.sin(centre.lat * Math.PI / 180);
   const y = Math.floor((0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n);
-  return L.url(z, ((x % n) + n) % n, Math.max(0, Math.min(n - 1, y)));
+  return layerUrl(key, z, ((x % n) + n) % n, Math.max(0, Math.min(n - 1, y)));
 };
 
 function paintControl() {

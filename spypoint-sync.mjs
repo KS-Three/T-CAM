@@ -841,8 +841,27 @@ layersEl.onmouseenter = () => layersEl.classList.add('open');
 layersEl.onmouseleave = () => layersEl.classList.remove('open');
 document.addEventListener('click', () => layersEl.classList.remove('open'));
 
+/**
+ * Is this event on the map GROUND, rather than on something laid over it?
+ *
+ * Every control here — toolbar, zoom, layer switcher, stand form, parcel card,
+ * pins — is a child of #map, so both the click handler and the drag handler
+ * below have to tell "clicked the ground" from "pressed a button".
+ *
+ * This whitelists the background on purpose. It replaced two separate
+ * blacklists that had drifted: the drag handler still excluded only .zoom and
+ * .layers, so a pointerdown on any newer control started a map drag AND called
+ * setPointerCapture — which retargets the following click to #map. The button
+ * never received its own click, so "+ Add stand" and "Who owns this?" both did
+ * nothing, the stand form could not be typed into, and a stand pin could not
+ * be reopened. A whitelist cannot rot that way: a control added tomorrow is
+ * excluded by default rather than by someone remembering to add it.
+ */
+const onMapGround = t =>
+  t === mapEl || t === tilesEl || t === pinsEl || !!t.closest('#tiles');
+
 mapEl.addEventListener('click', e => {
-  if (e.target.closest('.zoom, .layers, .maptools, .standform, .stand, .parcelcard')) return;
+  if (!onMapGround(e.target)) return;
   if (identifying) {
     const r0 = mapEl.getBoundingClientRect();
     const ix = e.clientX - r0.left, iy = e.clientY - r0.top;
@@ -869,7 +888,9 @@ mapEl.addEventListener('click', e => {
 
 let drag = null;
 mapEl.addEventListener('pointerdown', e => {
-  if (e.target.closest('.zoom') || e.target.closest('.layers')) return;
+  // Same test as the click handler, deliberately: pressing a control must not
+  // start a drag, and must not capture the pointer away from that control.
+  if (!onMapGround(e.target)) return;
   drag = { x: e.clientX, y: e.clientY }; mapEl.classList.add('drag');
   mapEl.setPointerCapture(e.pointerId);
 });

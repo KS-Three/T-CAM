@@ -16,8 +16,8 @@ is *status*; that one is *why*.
 | **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 100 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
-| **Stands** — drop, name, type, move, delete, good-winds | Browser-verified: pin saves 0 m from the click |
-| **Parcel ownership** — click for owner, acres, class, county, mailing address | Live against the Wisconsin service at a real camera |
+| **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
+| **Parcel ownership** — click for owner, acres, class, county, mailing address | Live against the Wisconsin service at a real camera; button-to-card path re-verified with a real mouse |
 | **Hunt planner** — ranks sits by rut, fronts, pressure, wind, rain, moon | Unit-tested; live forecast fetch verified |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
@@ -86,3 +86,17 @@ be the same inputs in a better costume.
 - `Number(null)` is `0`, and 0,0 is a real place in the Atlantic. Missing
   coordinates must be rejected before conversion, not after.
 - Never edit a shipped migration — add another.
+- **Everything interactive on the map is a child of `#map`** — toolbar, stand
+  form, parcel card, pins. So the drag handler and the click handler both have
+  to tell a press on a control from a press on the ground, and they must use
+  the *same* test. They once did not: the drag handler's list was a stale
+  subset, so pressing any newer control started a drag and called
+  `setPointerCapture`, which retargets the following click to `#map` — the
+  button never saw its own click. Both toolbar buttons, the form's inputs and
+  reopening a pin were all dead at once. `onMapGround()` is now the single
+  shared predicate, and it whitelists the background rather than blacklisting
+  the overlays, so a control added later is safe without anyone remembering.
+- **A scripted `.click()` does not prove a button works.** The bug above was
+  invisible to `element.click()` — which dispatches straight at the element —
+  and only appeared under a real mouse press, because pointer capture is what
+  broke it. Verify map controls by driving the mouse.

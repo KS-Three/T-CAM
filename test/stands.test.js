@@ -269,3 +269,35 @@ test('a served page carries its stands into the rendered payload', async () => {
   const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, stands, true);
   assert.match(html, /East Ridge Ladder/);
 });
+
+test('map controls are not stolen by the drag handler', async () => {
+  // The bug this pins, and it killed every control on the map at once.
+  //
+  // The click handler and the pointerdown handler each carried their OWN list
+  // of "things on the map that are not the ground". When the toolbar was added,
+  // only the click handler's list was updated. So pressing "+ Add stand" ran
+  // the drag handler, which calls setPointerCapture on #map — and pointer
+  // capture retargets the following click to the capturing element. The button
+  // never received its own click. Same for "Who owns this?", the stand form's
+  // inputs, and reopening an existing pin.
+  //
+  // This is a STRUCTURAL check: it asserts the two handlers share one predicate
+  // rather than proving browser behaviour, which needs a real browser (verified
+  // by hand). Sharing the predicate is what makes the drift impossible.
+  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, [], true);
+
+  assert.equal((html.match(/const onMapGround =/g) || []).length, 1,
+    'exactly one definition of "is this the map ground"');
+
+  const click = html.match(/mapEl\.addEventListener\('click',[\s\S]*?\n\}\);/)?.[0] ?? '';
+  const down = html.match(/mapEl\.addEventListener\('pointerdown',[\s\S]*?\n\}\);/)?.[0] ?? '';
+  assert.ok(click && down, 'both handlers were found');
+  assert.match(click, /onMapGround\(e\.target\)/, 'the click handler uses the shared test');
+  assert.match(down, /onMapGround\(e\.target\)/,
+    'and so does the drag handler — a control must not start a drag or capture the pointer');
+
+  // The specific shape of the old bug: a hand-rolled subset in the drag path.
+  assert.doesNotMatch(down, /closest\(/,
+    'the drag handler must not grow its own exclusion list again');
+});

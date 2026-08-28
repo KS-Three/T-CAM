@@ -10,7 +10,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   laneGeometry, laneGeometries, huntableFromLanes, compareToManual,
-  windsForStand, LANE_SPREAD_DEG,
+  windsForStand, laneSpread, LANE_SPREAD_DEG,
+  MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG,
 } from '../coverage.mjs';
 import { CONE_HALF_ANGLE_DEG, scentReaches, COMPASS } from '../routes.mjs';
 import { mapStyles, mapScript } from '../map-view.mjs';
@@ -199,6 +200,12 @@ test('the copy the map runs derives exactly what Node derives', async () => {
     [lane(23, 15), lane(200, 300), lane(310, 65)],
     [lane(0), lane(45), lane(90), lane(135), lane(180), lane(225), lane(270), lane(315)],
     [],
+    // Widths, including ones outside the bounds: the clamp has to happen the
+    // same way on both sides, or a lane dragged to its limit would be drawn at
+    // one angle and judged at another.
+    [{ ...lane(0), spread: 45 }],
+    [{ ...lane(0), spread: 3 }, { ...lane(140, 90), spread: 70 }, lane(250)],
+    [{ ...lane(0), spread: 500 }, { ...lane(90), spread: 0.5 }],
   ];
   // Compared by value: the results carry nested objects from the vm's realm,
   // which a structural comparison rejects even when every field matches.
@@ -210,6 +217,24 @@ test('the copy the map runs derives exactly what Node derives', async () => {
   assert.deepStrictEqual(
     plain(browser.compareToManual(browser.huntableFromLanes(stand, [lane(0)]), ['N', 'S'])),
     plain(compareToManual(huntableFromLanes(stand, [lane(0)]), ['N', 'S'])));
+
+  // The width handles need these three in the browser to turn a drag into an
+  // angle. They are exported rather than reimplemented, so check they crossed.
+  assert.equal(typeof browser.bearing, 'function');
+  assert.equal(typeof browser.angleBetween, 'function');
+  assert.equal(typeof browser.laneSpread, 'function');
+  assert.equal(browser.MIN_LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG);
+  assert.equal(browser.MAX_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG);
+  assert.equal(browser.LANE_SPREAD_DEG, LANE_SPREAD_DEG);
+
+  // A handle held due east of a stand whose lane runs due north is a
+  // 90-degree drag, which the bounds pull back to the widest a lane may be.
+  const east = { lat: LAT, lng: LNG + 60 * M_LNG };
+  const off = browser.angleBetween(
+    browser.bearing(stand.lat, stand.lng, east.lat, east.lng),
+    browser.bearing(stand.lat, stand.lng, lane(0).to[1], lane(0).to[0]));
+  assert.ok(Math.abs(off - 90) < 0.5, `expected about 90, got ${off}`);
+  assert.equal(browser.laneSpread({ spread: off }), MAX_LANE_SPREAD_DEG);
 });
 
 test('the stand form can never grow past the map and lose its buttons', () => {
@@ -237,11 +262,18 @@ test('arming the trace moves the stand clear of the strip', () => {
   // Whichever edge the strip is pinned to it can land over the stand, and then
   // most of the ground you want to mark is behind it. Measured while driving
   // it: two clicks in three hit the panel instead of the map.
+  //
+  // This used to carry its own copy of the recentring arithmetic, offsetting
+  // by half the form's height on the assumption the form was always a strip
+  // along the bottom. It is now one of two shapes, so it asks the function
+  // that measures — and has to repaint first, because the class that turns the
+  // panel into the strip lands in that repaint.
   const trace = mapScript.slice(mapScript.indexOf('traceBtn.onclick'));
   const body = trace.slice(0, trace.indexOf('\n  };'));
-  assert.match(body, /form\.getBoundingClientRect\(\)\.height/, 'it measures the strip');
-  assert.match(body, /projY\(stand\.lat, zoom\) \+ strip \/ 2/, 'and offsets by half of it');
-  assert.match(body, /centre = \{/, 'then recentres');
+  const paint = body.indexOf('paintLanes()');
+  const recentre = body.indexOf('centreClearOfForm(form, stand)');
+  assert.ok(paint !== -1 && recentre !== -1, 'it repaints and recentres');
+  assert.ok(paint < recentre, 'and measures the strip it has become, not the panel it was');
 });
 
 test('the lane cone is filled by an inline style, not a fill attribute', () => {
@@ -256,11 +288,76 @@ test('the lane cone is filled by an inline style, not a fill attribute', () => {
   assert.match(mapStyles, /#contours path \{ fill: none/, 'the rule that would win still exists');
 });
 
-test('the cone is drawn at the same arc the wind derivation uses', () => {
-  // A wide cone over a narrow calculation would make the picture disagree with
-  // the model, and the picture is what you would believe.
-  const drawn = Number(mapScript.match(/const LANE_HALF_DEG = (\d+)/)[1]);
-  assert.equal(drawn, LANE_SPREAD_DEG);
+test('the cone is drawn at the arc the wind derivation uses, by asking it', () => {
+  // This used to compare two numbers and assert they matched. Now that a lane
+  // carries its own width there is no single number to compare, and copying
+  // the "spread or the default, clamped" rule into the drawing code is exactly
+  // how a picture starts disagreeing with the model behind it. So the map does
+  // not have that rule: it calls the one the derivation uses.
+  assert.match(mapScript, /const laneHalfDeg = l => COVER\.laneSpread\(l\)/,
+    'the map asks the model for the width');
+  assert.doesNotMatch(mapScript, /LANE_HALF_DEG/,
+    'and keeps no constant of its own that could drift');
+  // The handles turn a drag into an angle. Doing that with a second copy of
+  // the trigonometry is the same failure one step along.
+  assert.match(mapScript, /COVER\.bearing\(/, 'bearings come from the model too');
+  assert.match(mapScript, /COVER\.angleBetween\(/);
+});
+
+test('a lane keeps its own width, and falls back rather than storing one', () => {
+  assert.equal(laneSpread({ to: [0, 0] }), LANE_SPREAD_DEG, 'no width set means the default');
+  assert.equal(laneSpread({ to: [0, 0], spread: 25 }), 25);
+  // A width outside what a lane can sensibly be is pulled back to the bound,
+  // not honoured and not discarded: the drag that produced it still meant
+  // "wider" or "narrower".
+  assert.equal(laneSpread({ to: [0, 0], spread: 200 }), MAX_LANE_SPREAD_DEG);
+  assert.equal(laneSpread({ to: [0, 0], spread: 0.1 }), MIN_LANE_SPREAD_DEG);
+  // Not a number at all is not a width. Storing NaN as one would make every
+  // angular test false and quietly free up all sixteen winds.
+  assert.equal(laneSpread({ to: [0, 0], spread: 'wide' }), LANE_SPREAD_DEG);
+  assert.equal(laneSpread({ to: [0, 0], spread: null }), LANE_SPREAD_DEG);
+});
+
+test('the geometry reports the width actually used for that lane', () => {
+  const g = laneGeometry(stand, { ...lane(90), spread: 30 });
+  assert.equal(g.spreadDeg, 30);
+  assert.equal(laneGeometry(stand, lane(90)).spreadDeg, LANE_SPREAD_DEG);
+  // The fallback is overridable per call, which is what lets the derivation
+  // test a hypothetical width without rewriting the lanes.
+  assert.equal(laneGeometry(stand, lane(90), { spreadDeg: 4 }).spreadDeg, 4);
+});
+
+test('widening a lane rules out more winds, and only that lane widens', () => {
+  // The point of the handles: the shape you drew is the shape you are judged
+  // on. A lane you opened up to cover a whole field really does cost you the
+  // winds that blow across it.
+  const narrow = huntableFromLanes(stand, [{ ...lane(0), spread: 5 }]);
+  const wide = huntableFromLanes(stand, [{ ...lane(0), spread: 45 }]);
+  assert.ok(wide.winds.length < narrow.winds.length,
+    `wide ${wide.winds.length} should be fewer than narrow ${narrow.winds.length}`);
+  // Every wind the wide lane still allows was allowed when it was narrow —
+  // widening can only ever take winds away.
+  for (const w of wide.winds) assert.ok(narrow.winds.includes(w), w);
+
+  // Two lanes, one widened: the other keeps its own answer.
+  const mixed = huntableFromLanes(stand, [{ ...lane(0), spread: 45 }, lane(180)]);
+  assert.equal(mixed.lanes[0].spreadDeg, 45);
+  assert.equal(mixed.lanes[1].spreadDeg, LANE_SPREAD_DEG);
+});
+
+test('a widened lane blocks exactly the winds the geometry says it should', () => {
+  // Worked by hand rather than by re-running the implementation. A lane due
+  // north with a 40-degree half-angle is blocked by any wind whose downwind
+  // direction falls within 30 + 40 = 70 degrees of north — that is, a wind
+  // FROM within 70 degrees of SOUTH. S is 180; 110 through 250 inclusive.
+  const d = huntableFromLanes(stand, [{ ...lane(0), spread: 40 }]);
+  const blocked = new Set(d.blocked.map(b => b.point));
+  for (let i = 0; i < 16; i++) {
+    const from = i * 22.5;
+    const off = Math.abs(180 - from);
+    assert.equal(blocked.has(COMPASS[i]), off <= 70,
+      `${COMPASS[i]} (from ${from} degrees)`);
+  }
 });
 
 test('one fade per stand, scaled to its longest lane', () => {
@@ -271,4 +368,135 @@ test('one fade per stand, scaled to its longest lane', () => {
   assert.match(body, /gradientUnits="userSpaceOnUse"/, 'the fade is in map pixels');
   assert.match(body, /longest = Math\.max\(longest/, 'scaled to the longest lane');
   assert.match(body, /lanefade-' \+ key/, 'and keyed per stand');
+});
+
+// ---------------------------------------------------------------------------
+// The handles
+//
+// Three per lane on the stand whose form is open: a tip that moves the far end
+// and a pair on the rim that open and close the cone. These are checked as
+// source text rather than driven in a browser, which is a real limit — but the
+// specific ways this breaks are structural, and each of them shipped once in
+// some form already: geometry that goes stale, a target too small for a
+// finger, and a listener destroyed by the redraw it triggers.
+
+test('the handles are drawn from the open form, not the saved stand', () => {
+  // The map used to draw the SAVED lanes whenever a form was open but not
+  // armed for tracing. Widening a lane would then have shown nothing at all
+  // until after a save, which is the one moment the picture has to be live.
+  const fn = mapScript.slice(mapScript.indexOf('function lanePaths'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /if \(laneForm\) sets\.push/, 'the open form is a source of lanes');
+  assert.match(body, /laneForm\.standId && st\.id === laneForm\.standId/,
+    'and the saved copy of that same stand is skipped');
+  assert.doesNotMatch(body, /laneEdit/,
+    'drawing must not depend on the trace mode being armed');
+});
+
+test('each lane of the open form gets a tip and two width handles', () => {
+  const fn = mapScript.slice(mapScript.indexOf('function laneGrips'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  for (const kind of ["'left'", "'right'", "'tip'"]) {
+    assert.ok(body.includes('grip(') && body.includes(kind), `a ${kind} handle`);
+  }
+  // Which lane and which handle travel on the element, because the SVG is
+  // rebuilt on every draw and a closure over the index would not survive it.
+  assert.match(body, /data-lane="/);
+  assert.match(body, /data-grip="/);
+});
+
+test('the grab target is a finger wide even though the dot is not', () => {
+  // Used on a phone, in the cold, over the ground you are trying to point at.
+  // A five-pixel target cannot be hit; a sixteen-pixel dot covers the thing
+  // you are aiming for. So they are different circles.
+  const fn = mapScript.slice(mapScript.indexOf('function laneGrips'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  const grab = body.match(/const grab = Math\.max\((\d+), Math\.min\((\d+), r \* ([\d.]+)\)\)/);
+  assert.ok(grab, 'the grab radius is computed from the lane, not fixed');
+  assert.ok(Number(grab[2]) >= 14, `cap ${grab[2]} is too small for a fingertip`);
+  assert.match(body, /const dot = Math\.max/, 'and the visible dot is smaller');
+  assert.match(mapStyles, /circle\.lanegrip \{ fill: transparent/, 'the target is invisible');
+  assert.match(mapStyles, /circle\.lanegrip[^}]*pointer-events: all/,
+    'the overlay turns pointer-events off; the handles turn it back on');
+  assert.match(mapStyles, /circle\.lanegrip[^}]*touch-action: none/,
+    'or a drag on a phone scrolls the page instead');
+});
+
+test('the width handles stay clear of the tip at every width a lane can be', () => {
+  // Measured before this existed: on a default 20-degree cone the rim corners
+  // are a tenth of the lane's length from the tip — 10 pixels on a 60-pixel
+  // lane — so the tip's grab circle covered both, and a drag meant to widen
+  // the lane moved its far end instead. Verified by driving it in a browser.
+  //
+  // Pulling the width handles back along the edge fixes it, and this is the
+  // arithmetic that says by how much. The tip-to-handle distance scales with
+  // the lane; so does the grab radius; the first has to stay bigger.
+  const fn = mapScript.slice(mapScript.indexOf('const WIDTH_GRIP_AT'));
+  const k = Number(fn.match(/const WIDTH_GRIP_AT = ([\d.]+)/)[1]);
+  const g = fn.match(/const grab = Math\.max\(\d+, Math\.min\(\d+, r \* ([\d.]+)\)\)/);
+  const grabPerR = Number(g[1]);
+  for (const halfDeg of [MIN_LANE_SPREAD_DEG, LANE_SPREAD_DEG, 25, 45, MAX_LANE_SPREAD_DEG]) {
+    const h = halfDeg * Math.PI / 180;
+    // Distance from the tip (at radius 1, on the centre line) to a width
+    // handle (at radius k, h off it), in units of the lane's length.
+    const d = Math.hypot(k * Math.sin(h), 1 - k * Math.cos(h));
+    assert.ok(d > 2 * grabPerR,
+      `at ${halfDeg} degrees the handles are ${d.toFixed(3)}r apart `
+      + `but the grab circles span ${(2 * grabPerR).toFixed(3)}r`);
+  }
+});
+
+test('the stand form moves off the stand it is editing', () => {
+  // A panel in the middle of the map covers the stand you just clicked, so its
+  // handles are underneath it. Driven in a browser before this: the press
+  // landed on the tick grid and the cone never moved.
+  assert.match(mapStyles, /\.standform\.aside \{ left: 10px; top: 10px; transform: none/);
+  assert.match(mapStyles, /@media \(max-width: 700px\)[^]*?\.standform\.aside \{[^}]*bottom: 10px/,
+    'and becomes a bottom sheet where there is no room beside it');
+  assert.match(mapScript, /form\.classList\.add\('aside'\)/);
+  assert.match(mapScript, /centreClearOfForm\(form, stand\)/,
+    'and the map puts the stand in what is left');
+  // Measured from the form's real box: it grows with the number of lanes and
+  // changes shape on a phone, so a guess at its size would be wrong on both.
+  const fn = mapScript.slice(mapScript.indexOf('function centreClearOfForm'));
+  assert.match(fn.slice(0, 900), /form\.getBoundingClientRect\(\)/);
+});
+
+test('the drag is captured to the SVG, which survives its own redraw', () => {
+  // The handles are destroyed and recreated on every draw, including the draw
+  // the drag itself causes. A listener on the circle would be gone after the
+  // first move; on touch, where the pointer is implicitly captured to the
+  // original target, the rest of the gesture would go to a detached node.
+  assert.match(mapScript, /contoursEl\.addEventListener\('pointerdown'/);
+  assert.match(mapScript, /contoursEl\.addEventListener\('pointermove'/);
+  assert.match(mapScript, /contoursEl\.setPointerCapture/);
+  assert.match(mapScript, /contoursEl\.releasePointerCapture/);
+});
+
+test('a width drag reads an angle; only the tip moves the lane', () => {
+  const i = mapScript.indexOf("contoursEl.addEventListener('pointermove'");
+  const body = mapScript.slice(i, mapScript.indexOf('\n});', i));
+  assert.match(body, /gripDrag\.kind === 'tip'/);
+  assert.match(body, /lane\.to = \[at\.lng, at\.lat\]/, 'the tip moves the far end');
+  assert.match(body, /lane\.spread = /, 'a rim handle sets the width');
+  // The tip dragged onto the stand leaves no length and no bearing, and a lane
+  // with neither silently stops counting toward the winds.
+  assert.match(body, /if \(Math\.hypot\(px - ax, py - ay\) < 8\) return;/,
+    'a collapsed lane is refused, not stored');
+  // The clamp is the model's, not a second opinion.
+  assert.match(body, /COVER\.MAX_LANE_SPREAD_DEG/);
+  assert.match(body, /COVER\.MIN_LANE_SPREAD_DEG/);
+});
+
+test('every way out of the stand form clears what hangs off it', () => {
+  // Delete used to leave the map armed for tracing with no form to show for
+  // it, and the marker and route forms share the stand form's class, so
+  // opening one deleted the node and left the rest of the state behind.
+  const closes = mapScript.match(/closeStandForm\(\)/g) || [];
+  assert.ok(closes.length >= 6, `only ${closes.length} sites go through it`);
+  const fn = mapScript.slice(mapScript.indexOf('function closeStandForm'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  for (const cleared of ['editing', 'laneEdit', 'laneForm', 'gripDrag']) {
+    assert.match(body, new RegExp(cleared + ' = null'), `${cleared} is cleared`);
+  }
 });

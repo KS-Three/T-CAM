@@ -775,6 +775,19 @@ export function normalizeWinds(winds) {
  * Lanes in, JSON out. A lane whose endpoint is not a real coordinate is
  * refused rather than stored: Number(null) is 0 and 0,0 is in the Atlantic,
  * and a lane pointing there would quietly rule out half the compass.
+ *
+ * `spread` is the lane's own half-angle in degrees, written when the width
+ * handles have been dragged and left off entirely when they have not — so a
+ * lane traced before widening existed round-trips to the same bytes it always
+ * did, and reads back as "use the default" rather than as a stored 10 that
+ * would silently outlive any change to that default.
+ *
+ * The check here is loose on purpose: above 0 and below 90, which is what it
+ * takes for a cone to be a cone. The usable range is narrower and lives in
+ * coverage.mjs, where the map clamps a drag to it. This is guarding against
+ * nonsense arriving over the API; that is a judgement about what makes a
+ * sensible lane, and a validator that enforced the judgement would reject
+ * hand-edited data that is merely unusual.
  */
 export function normalizeLanes(lanes) {
   if (lanes === null || lanes === undefined) return null;
@@ -788,7 +801,15 @@ export function normalizeLanes(lanes) {
       throw new Error('each lane needs a [longitude, latitude] endpoint');
     }
     const label = l.label === undefined || l.label === null ? null : String(l.label).trim();
-    out.push({ to: [to[0], to[1]], label: label || null });
+    const lane = { to: [to[0], to[1]], label: label || null };
+    if (l.spread !== undefined && l.spread !== null) {
+      const spread = Number(l.spread);
+      if (!Number.isFinite(spread) || spread <= 0 || spread >= 90) {
+        throw new Error('a lane spread is a half-angle in degrees, above 0 and below 90');
+      }
+      lane.spread = Math.round(spread * 10) / 10;
+    }
+    out.push(lane);
   }
   return out.length ? JSON.stringify(out) : null;
 }
@@ -812,7 +833,7 @@ export function createStand(db, { name, type = 'stand', lat, lng,
     VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(propertyId, String(name).trim(), type, lat, lng,
     normalizeWinds(goodWinds), notes, normalizeLanes(lanes), now, now);
-  return db.prepare('SELECT * FROM stands WHERE id = ?').get(info.lastInsertRowid);
+  return standFromRow(db.prepare('SELECT * FROM stands WHERE id = ?').get(info.lastInsertRowid));
 }
 
 /** Patch only the fields supplied, so a rename cannot silently clear the winds. */
@@ -844,7 +865,7 @@ export function updateStand(db, id, patch = {}) {
     WHERE id = ?
   `).run(next.name, next.type, next.lat, next.lng, next.property_id,
     next.good_winds, next.notes, next.lanes, nowIso(), id);
-  return db.prepare('SELECT * FROM stands WHERE id = ?').get(id);
+  return standFromRow(db.prepare('SELECT * FROM stands WHERE id = ?').get(id));
 }
 
 export function deleteStand(db, id) {
@@ -856,6 +877,26 @@ export function deleteStand(db, id) {
  * how far away they are. That link is what lets a recommendation move from
  * "camera A has been busy" to "sit the stand that covers camera A".
  */
+/**
+ * A stand row with its two packed columns unpacked.
+ *
+ * Winds are stored comma-joined and lanes as JSON, which is right for SQLite
+ * and wrong for everything reading them. Unpacking in one place is what stops
+ * a POST answering with `lanes` as a string while a GET answers with an array
+ * — the same field, two types, on an interface whose stated job is to be the
+ * one a phone app later speaks to. The raw columns are kept alongside rather
+ * than replaced: existing callers read them, and dropping them to tidy up
+ * would be a breaking change for no gain.
+ */
+export function standFromRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    winds: row.good_winds ? row.good_winds.split(',') : [],
+    lanes: row.lanes ? JSON.parse(row.lanes) : [],
+  };
+}
+
 export function allStands(db, { nearMetres = 400 } = {}) {
   const cams = db.prepare('SELECT id, name, lat, lng FROM cameras WHERE lat IS NOT NULL').all();
   return db.prepare(`
@@ -863,12 +904,10 @@ export function allStands(db, { nearMetres = 400 } = {}) {
     FROM stands s LEFT JOIN properties p ON p.id = s.property_id
     ORDER BY p.name, s.name
   `).all().map(s => ({
-    ...s,
-    winds: s.good_winds ? s.good_winds.split(',') : [],
     // Parsed, not derived. Turning lanes into winds needs the scent geometry
     // in routes.mjs, which imports this file — so the derivation lives in
     // coverage.mjs and callers ask it. This layer only stores and returns.
-    lanes: s.lanes ? JSON.parse(s.lanes) : [],
+    ...standFromRow(s),
     nearbyCameras: cams
       .map(c => ({ id: c.id, name: c.name, metres: Math.round(distanceM(s.lat, s.lng, c.lat, c.lng)) }))
       .filter(c => c.metres <= nearMetres)

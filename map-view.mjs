@@ -104,6 +104,23 @@ export const mapStyles = `
                max-height: calc(100% - 20px); overflow-y: auto;
                background: var(--panel); border: 1px solid var(--line);
                border-radius: 10px; padding: 16px; box-shadow: 0 6px 28px rgba(0,0,0,.4); }
+  /* The stand form moves out of the middle.
+
+     Dead centre was right while this was a form you filled in and closed. It
+     is now a form you edit while dragging handles on the map behind it, and a
+     panel in the centre covers the stand you just clicked — so the handles are
+     underneath it. Measured with a real drag: the press landed on .winds, the
+     tick grid, and the cone never moved. Only the stand form gets this; the
+     marker and route forms share the class but not the problem. */
+  .standform.aside { left: 10px; top: 10px; transform: none;
+                     max-height: calc(100% - 20px); }
+  /* No room beside it on a phone, so it becomes a sheet along the bottom and
+     the stand is recentred above it — the same trade the tracing strip makes,
+     for the same reason. */
+  @media (max-width: 700px) {
+    .standform.aside { left: 10px; right: 10px; top: auto; bottom: 10px;
+                       width: auto; max-height: 60%; }
+  }
   .standform h3 { margin: 0 0 10px; font-size: 15px; }
   .standform label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
   .standform input, .standform select, .standform textarea {
@@ -223,6 +240,33 @@ export const mapStyles = `
      meant. */
   #contours circle.lanenode { fill: rgba(120,170,255,.9); stroke: rgba(10,25,70,.7);
                               stroke-width: 1; }
+  /* Handles on the lane whose form is open: one at the tip for how far the
+     shot goes, one on each rim edge for how wide it opens.
+
+     The grabbing circle is sixteen pixels and invisible; the dot you see is
+     five or six. That gap is deliberate — this gets used with cold fingers on
+     a phone, where a five-pixel target cannot be hit, while a sixteen-pixel
+     dot would cover the ground you are aiming at. pointer-events switches back
+     on here because the SVG above turns it off for everything.
+
+     touch-action:none stops the browser treating the drag as a page scroll,
+     which on a phone would move the whole dashboard instead of the handle. */
+  #contours circle.lanegrip { fill: transparent; stroke: none;
+                              pointer-events: all; touch-action: none; cursor: grab; }
+  #map.gripping #contours circle.lanegrip { cursor: grabbing; }
+  #contours circle.lanedot { fill: rgba(210,230,255,.95); stroke: rgba(10,25,70,.85);
+                             stroke-width: 1.4; pointer-events: none; }
+  /* The tip is the one that moves the lane itself, so it reads as the primary
+     handle; the width pair is drawn hollow so the two jobs are told apart
+     before you grab one rather than after. */
+  #contours circle.lanedot.tip { fill: rgba(255,235,140,.95); }
+  #contours circle.lanedot.left, #contours circle.lanedot.right {
+    fill: rgba(20,40,90,.55); stroke: rgba(210,230,255,.95); }
+  /* The cone's own edges, drawn only while its form is open. Faint and dashed:
+     they are there to show the width handles belong to the cone, not to put a
+     hard boundary on a shot that fades. */
+  #contours path.laneedge { fill: none; stroke: rgba(210,230,255,.55);
+                            stroke-width: 1.2; stroke-dasharray: 5 4; }
   /* Tracing puts the form away and moves it to a strip along the bottom.
      Measured while driving the feature: the full form covers 47% of the map,
      and a right-hand panel still swallowed two clicks out of three in a
@@ -257,6 +301,10 @@ export const mapStyles = `
   .lanerow { display: flex; gap: 8px; align-items: center; font-size: 12px; }
   .lanerow .dir { font-weight: 700; min-width: 34px; }
   .lanerow .len { color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* The opening angle, shown next to the distance because the two together are
+     the lane: how far the shot goes and how much of it you can swing on. */
+  .lanerow .wide { color: var(--muted); font-variant-numeric: tabular-nums;
+                   white-space: nowrap; }
   .lanerow input { flex: 1; padding: 3px 6px; font-size: 12px; }
   .lanerow button { border: 1px solid var(--line); background: var(--bg); color: var(--muted);
                     border-radius: 5px; cursor: pointer; padding: 2px 7px; font-size: 12px; }
@@ -670,7 +718,9 @@ if (!D.live) {
 }
 
 function openMarkerForm(marker) {
-  document.querySelector('.standform')?.remove();
+  // Shares the stand form's class and its place on the map, so opening one
+  // has to put the other away properly rather than just deleting the node.
+  closeStandForm();
   const isNew = !marker.id;
   const form = el('div', 'standform');
   form.appendChild(el('h3', null, isNew ? 'Mark sign' : 'Edit sign'));
@@ -814,7 +864,9 @@ async function finishRoute() {
 }
 
 function openRouteForm(points) {
-  document.querySelector('.standform')?.remove();
+  // Shares the stand form's class and its place on the map, so opening one
+  // has to put the other away properly rather than just deleting the node.
+  closeStandForm();
   const form = el('div', 'standform');
   form.appendChild(el('h3', null, 'Walk-in route'));
 
@@ -1027,6 +1079,35 @@ addEventListener('keydown', e => {
 // cannot correct.
 let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while tracing
 
+// The lanes belonging to the stand form that is currently open, whether or not
+// it is armed for tracing.
+//
+// This is separate from laneEdit for two reasons. Handles have to be grabbable
+// without arming the map, or adjusting a lane you already have would mean
+// entering a mode that drops a new one on the first stray click. And the map
+// used to draw the SAVED lanes whenever the form was open but not tracing, so
+// removing a lane redrew it and widening one would have shown nothing until
+// after a save — the form's copy is the live one, and this is what makes the
+// map read from it.
+let laneForm = null;    // { standId, stand: {lat,lng}, lanes: [], onChange }
+
+/**
+ * Put the stand form away and forget everything hanging off it.
+ *
+ * There are five ways out of that form — save, cancel, delete, opening another
+ * stand, and opening the marker or route form, which share its class — and
+ * before this they cleared different subsets of the state. Delete left the map
+ * still armed for tracing with no form to show for it.
+ */
+function closeStandForm() {
+  document.querySelector('.standform')?.remove();
+  editing = null;
+  laneEdit = null;
+  laneForm = null;
+  gripDrag = null;
+  mapEl.classList.remove('placing');
+}
+
 // Drawn as a cone rather than a line, because a lane is an area you can shoot
 // through, not a ray. Dark at the stand and fading out along it: past forty or
 // fifty yards the shot gets harder and the ground less certainly yours, and a
@@ -1037,48 +1118,129 @@ let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while traci
 // Giving each cone its own gradient would make a short lane fade as fast as a
 // long one, which would read as "less certain" when it is the opposite.
 //
-// The cone's half-angle is LANE_SPREAD_DEG — the same number the wind
-// derivation uses. Drawing a wide cone while computing from a narrow one is
-// how a picture starts disagreeing with the model behind it.
-const LANE_HALF_DEG = 10;
+// The cone's half-angle is the lane's own, and COVER.laneSpread is what
+// supplies it — the same function the wind derivation calls. Reading the width
+// here with a second copy of that rule is how a picture starts disagreeing
+// with the model behind it, and the picture is what you would believe.
+const laneHalfDeg = l => COVER.laneSpread(l);
+
+/** Screen bearing of a lane, in radians, measured the way a compass is. */
+const screenBearing = (ax, ay, ex, ey) => Math.atan2(ex - ax, ay - ey);
+
+/** A point on the cone's rim: t radians from north, r pixels out. */
+const rimPoint = (ax, ay, r, t) => [ax + Math.sin(t) * r, ay - Math.cos(t) * r];
 
 function conePath(ax, ay, ex, ey, halfDeg) {
-  const dx = ex - ax, dy = ey - ay;
-  const r = Math.hypot(dx, dy);
+  const r = Math.hypot(ex - ax, ey - ay);
   if (!(r > 1)) return null;
-  const a = Math.atan2(dx, -dy);                    // screen bearing, radians
+  const a = screenBearing(ax, ay, ex, ey);
   const h = halfDeg * Math.PI / 180;
-  const rim = t => [(ax + Math.sin(t) * r).toFixed(1), (ay - Math.cos(t) * r).toFixed(1)];
-  const [x1, y1] = rim(a - h);
-  const [x2, y2] = rim(a + h);
+  const [x1, y1] = rimPoint(ax, ay, r, a - h);
+  const [x2, y2] = rimPoint(ax, ay, r, a + h);
   // Sweep 1: bearing grows clockwise on screen, the same way SVG measures a
-  // positive sweep. Large-arc 0 because the cone is far under half a turn.
+  // positive sweep. Large-arc 0 while the cone stays under half a turn, which
+  // the spread bounds guarantee — 80 degrees either side is 160 of a possible
+  // 180. Computed rather than hard-coded anyway, because a bound that moves
+  // and a flag that does not is a bug nobody would look for here.
+  const large = 2 * halfDeg > 180 ? 1 : 0;
   return 'M' + ax.toFixed(1) + ' ' + ay.toFixed(1)
-    + 'L' + x1 + ' ' + y1
-    + 'A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 0 1 ' + x2 + ' ' + y2 + 'Z';
+    + 'L' + x1.toFixed(1) + ' ' + y1.toFixed(1)
+    + 'A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 ' + large + ' 1 '
+    + x2.toFixed(1) + ' ' + y2.toFixed(1) + 'Z';
+}
+
+/**
+ * The three handles on one lane of the open form.
+ *
+ * The tip carries the far end — drag it and the lane gets longer, shorter, or
+ * swings onto different ground. The two rim handles carry the width, and
+ * nothing else: a drag on one is read as an angle off the lane's bearing, so
+ * the cone opens and closes about a centre line that stays where you put it.
+ * Length and width being on separate handles is the whole point; a single
+ * corner handle that did both would make it impossible to widen a lane without
+ * also shortening it.
+ *
+ * Each handle is two circles. The visible one is small enough not to hide the
+ * ground it sits on; the invisible one under it is a fingertip wide, because
+ * this is used on a phone in the cold and a five-pixel target is not a target.
+ */
+// The width handles sit part of the way out the cone's edge, not at its far
+// corners. At the corners they would be a tenth of the lane's length from the
+// tip on a default 20-degree cone — measured: 10 pixels apart on a 60-pixel
+// lane, so the tip's grab circle covered both of them and the first width drag
+// dragged the tip instead. Pulled back to here they are 42% of the way out
+// from the tip, which stays clear at every width a lane may be set to.
+const WIDTH_GRIP_AT = 0.6;
+
+function laneGrips(ax, ay, l, i, left, top) {
+  const ex = projX(l.to[0], zoom) - left, ey = projY(l.to[1], zoom) - top;
+  const r = Math.hypot(ex - ax, ey - ay);
+  if (!(r > 1)) return [];
+  const a = screenBearing(ax, ay, ex, ey);
+  const h = laneHalfDeg(l) * Math.PI / 180;
+  // Grab circles scale with the lane, because their spacing does. A fixed
+  // sixteen pixels is right on a lane that fills the map and swallows all
+  // three handles on one drawn short; the cap keeps a fingertip target
+  // wherever there is room for one, and the floor keeps a very short lane
+  // grabbable at all rather than perfect.
+  const grab = Math.max(8, Math.min(16, r * 0.2));
+  const dot = Math.max(3, Math.min(6, r * 0.075));
+  const grip = (x, y, kind, vis) =>
+    '<circle class="lanegrip" data-lane="' + i + '" data-grip="' + kind + '"'
+    + ' cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="' + grab.toFixed(1) + '"></circle>'
+    + '<circle class="lanedot ' + kind + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1)
+    + '" r="' + vis.toFixed(1) + '"></circle>';
+  const [lex, ley] = rimPoint(ax, ay, r, a - h);
+  const [rex, rey] = rimPoint(ax, ay, r, a + h);
+  const [lx, ly] = rimPoint(ax, ay, r * WIDTH_GRIP_AT, a - h);
+  const [rx, ry] = rimPoint(ax, ay, r * WIDTH_GRIP_AT, a + h);
+  return [
+    // The rim edges, so the width handles read as sitting on the cone rather
+    // than floating beside it.
+    '<path class="laneedge" d="M' + ax.toFixed(1) + ' ' + ay.toFixed(1)
+      + 'L' + lex.toFixed(1) + ' ' + ley.toFixed(1) + '"></path>',
+    '<path class="laneedge" d="M' + ax.toFixed(1) + ' ' + ay.toFixed(1)
+      + 'L' + rex.toFixed(1) + ' ' + rey.toFixed(1) + '"></path>',
+    // The two width handles are close together on a narrow cone and that is
+    // harmless: they do the same job, and a drag on either is read as an angle
+    // off the centre line, so grabbing the "wrong" one still widens the lane
+    // the way you pulled. Only the tip does something different, and only the
+    // tip has to stay clear.
+    grip(lx, ly, 'left', dot * 0.85),
+    grip(rx, ry, 'right', dot * 0.85),
+    grip(ex, ey, 'tip', dot),
+  ];
 }
 
 function lanePaths(left, top) {
   const out = [];
   const sets = [];
-  if (laneEdit) sets.push({ from: laneEdit.stand, lanes: laneEdit.lanes, key: 'edit' });
+  // The open form's copy wins over the saved one for the stand it belongs to,
+  // armed or not: it is the array the handles and the Remove buttons mutate,
+  // and drawing the saved lanes beside it would show two answers at once.
+  if (laneForm) sets.push({ from: laneForm.stand, lanes: laneForm.lanes, key: 'edit', live: true });
   for (const st of STANDS) {
-    if (laneEdit && editing && st.id === editing.id) continue;   // being edited
+    if (laneForm && laneForm.standId && st.id === laneForm.standId) continue;
     if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes, key: 's' + st.id });
   }
-  for (const { from, lanes, key } of sets) {
+  for (const { from, lanes, key, live } of sets) {
     const ax = projX(from.lng, zoom) - left, ay = projY(from.lat, zoom) - top;
     const cones = [];
+    const grips = [];
     let longest = 0;
-    for (const l of lanes) {
-      if (!l || !Array.isArray(l.to)) continue;
+    lanes.forEach((l, i) => {
+      if (!l || !Array.isArray(l.to)) return;
       const ex = projX(l.to[0], zoom) - left, ey = projY(l.to[1], zoom) - top;
       longest = Math.max(longest, Math.hypot(ex - ax, ey - ay));
-      const d = conePath(ax, ay, ex, ey, LANE_HALF_DEG);
+      const d = conePath(ax, ay, ex, ey, laneHalfDeg(l));
       if (d) cones.push(d);
-      out.push('<circle class="lanenode" cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1)
+      if (live) grips.push(...laneGrips(ax, ay, l, i, left, top));
+      else out.push('<circle class="lanenode" cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1)
         + '" r="3"></circle>');
-    }
+    });
+    // Handles last, so they sit above every cone and stay grabbable where two
+    // lanes overlap.
+    if (grips.length) out.push(...grips);
     if (!cones.length) continue;
     const id = 'lanefade-' + key;
     out.unshift('<defs><radialGradient id="' + id + '" gradientUnits="userSpaceOnUse" cx="'
@@ -1702,8 +1864,39 @@ async function refreshStands() {
 }
 
 // The drop/edit form. A row with an id is an edit; {lat,lng} alone is new.
+/**
+ * Slide the map so a stand sits in the part of it the form does not cover.
+ *
+ * Opening a form over the thing it edits is only cosmetically wrong until the
+ * thing it edits has handles on it, and then it is the whole feature: a cone
+ * under the panel cannot be dragged, and nothing tells you why. The form moves
+ * to one side and this moves the stand into what is left — a map app moving a
+ * pin clear of a bottom sheet, which is the behaviour people already expect.
+ *
+ * Measured from the form's real box rather than a guess at its size, because
+ * it grows with the number of lanes and shrinks on a phone.
+ */
+function centreClearOfForm(form, at) {
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const map = mapEl.getBoundingClientRect();
+  const box = form.getBoundingClientRect();
+  // Beside the form where there is room for the stand plus some ground around
+  // it; above it when the form is a sheet along the bottom.
+  const beside = box.width < W * 0.6;
+  const tx = beside ? Math.min(W - 20, (box.right - map.left + W) / 2) : W / 2;
+  const ty = beside ? H / 2 : Math.max(20, (box.top - map.top) / 2);
+  const n = TS * 2 ** zoom;
+  const px = projX(at.lng, zoom) + (W / 2 - tx);
+  const py = projY(at.lat, zoom) + (H / 2 - ty);
+  centre = {
+    lng: px / n * 360 - 180,
+    lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * py / n))) * 180 / Math.PI,
+  };
+  draw();
+}
+
 function openStandForm(stand) {
-  document.querySelector('.standform')?.remove();
+  closeStandForm();
   editing = stand.id ? stand : null;
   const isNew = !stand.id;
   const chosen = new Set(stand.winds || []);
@@ -1733,7 +1926,13 @@ function openStandForm(stand) {
 
   // --- shooting lanes -------------------------------------------------------
   // The input you actually have. Mark where you can shoot; the winds follow.
-  const lanes = (stand.lanes || []).map(l => ({ to: l.to.slice(), label: l.label ?? null }));
+  const lanes = (stand.lanes || []).map(l => ({
+    to: l.to.slice(),
+    label: l.label ?? null,
+    // Copied only when the stand has one, so a lane never gains a stored width
+    // just by having its form opened.
+    ...(Number.isFinite(l.spread) ? { spread: l.spread } : {}),
+  }));
   form.insertBefore(el('label', null, 'Shooting lanes'), fields);
   const laneList = el('div', 'lanelist');
   const laneWinds = el('div', 'lanewinds');
@@ -1748,6 +1947,10 @@ function openStandForm(stand) {
       const r = el('div', 'lanerow');
       r.appendChild(el('span', 'dir', g.point));
       r.appendChild(el('span', 'len', g.metres + ' m'));
+      // The FULL opening, not the half-angle the model works in: "40 degrees
+      // wide" is what you would say standing in it, and the halving is an
+      // implementation detail nobody should have to hold in their head.
+      r.appendChild(el('span', 'wide', Math.round(g.spreadDeg * 2) + '\u00b0 wide'));
       const label = document.createElement('input');
       label.placeholder = 'name it (optional)';
       label.value = lanes[i].label || '';
@@ -1764,7 +1967,9 @@ function openStandForm(stand) {
     if (!derived) {
       laneWinds.appendChild(el('span', null,
         'None marked. Press Trace and click where you can shoot to \u2014 '
-        + 'one click per lane. The winds are worked out from them.'));
+        + 'one click per lane. Then drag the tip to change how far it reaches, '
+        + 'or either side handle to open it wider. The winds are worked out '
+        + 'from the shape.'));
     } else if (!derived.winds.length) {
       const n = el('span', 'no');
       n.textContent = derived.why;
@@ -1809,23 +2014,18 @@ function openStandForm(stand) {
     ev.stopPropagation();
     if (laneEdit) { laneEdit = null; paintLanes(); draw(); return; }
     clearMapModes('lane');
-    laneEdit = { stand: { lat: stand.lat, lng: stand.lng }, lanes, onChange: paintLanes };
+    laneEdit = laneForm;
     mapEl.classList.add('placing');
-    paintLanes();
     // Put the stand where you can see AND click around it. Whichever edge the
-    // strip is pinned to it can end up over the stand, and then most of the
+    // form is pinned to it can end up over the stand, and then most of the
     // ground you want to mark is behind it — which is exactly what happened:
-    // two clicks in three landed on the panel instead of the map. Recentre so
-    // the stand sits above the strip, the way a map app moves a pin clear of a
-    // bottom sheet.
-    const strip = form.getBoundingClientRect().height || 130;
-    const n = TS * 2 ** zoom;
-    const py = projY(stand.lat, zoom) + strip / 2;
-    centre = {
-      lng: stand.lng,
-      lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * py / n))) * 180 / Math.PI,
-    };
-    draw();
+    // two clicks in three landed on the panel instead of the map.
+    //
+    // paintLanes first: tracing collapses the form to a strip along the
+    // bottom, and the recentre has to be measured from that box rather than
+    // from the panel it just stopped being.
+    paintLanes();
+    centreClearOfForm(form, stand);
   };
   for (const n of [laneWinds, traceBtn, laneList]) form.insertBefore(n, fields);
 
@@ -1850,6 +2050,16 @@ function openStandForm(stand) {
     'Lanes decide the ranking where they are marked. Ticks are used when there '
     + 'are none, and are kept either way \u2014 they can hold something geometry '
     + 'cannot see, like a road you will not shoot toward.'));
+
+  // The map reads its lanes from here for as long as this form is open, armed
+  // for tracing or not, so the handles work on the array the Remove buttons and
+  // the label boxes are already editing.
+  laneForm = {
+    standId: stand.id || null,
+    stand: { lat: stand.lat, lng: stand.lng },
+    lanes,
+    onChange: paintLanes,
+  };
   paintLanes();
 
   const notes = document.createElement('textarea');
@@ -1871,7 +2081,7 @@ function openStandForm(stand) {
       };
       if (isNew) await apiWrite('POST', '/api/stands', body);
       else await apiWrite('PATCH', '/api/stands/' + stand.id, body);
-      form.remove(); editing = null; laneEdit = null;
+      closeStandForm();
       await refreshStands();
     } catch (err) {
       save.disabled = false;
@@ -1882,7 +2092,7 @@ function openStandForm(stand) {
   };
   const cancel = document.createElement('button');
   cancel.textContent = 'Cancel';
-  cancel.onclick = () => { form.remove(); editing = null; laneEdit = null; draw(); };
+  cancel.onclick = () => { closeStandForm(); draw(); };
   row.append(save, cancel);
 
   if (!isNew) {
@@ -1891,14 +2101,21 @@ function openStandForm(stand) {
     del.onclick = async () => {
       if (!confirm('Delete ' + stand.name + '?')) return;
       await apiWrite('DELETE', '/api/stands/' + stand.id);
-      form.remove(); editing = null;
+      closeStandForm();
       await refreshStands();
     };
     row.appendChild(del);
   }
   form.appendChild(row);
+  form.classList.add('aside');
   mapEl.appendChild(form);
-  name.focus();
+  // Measured after it is in the document, because its height depends on how
+  // many lanes it is listing and its width on the size of the screen.
+  centreClearOfForm(form, stand);
+  // Only a new stand needs the cursor put in the name box. On one you are
+  // editing it scrolls the panel down to that field — past the lane list and
+  // past Save — and on a phone it opens the keyboard over the map as well.
+  if (isNew) name.focus();
   draw();
 }
 // ---- map type control -------------------------------------------------
@@ -2059,6 +2276,77 @@ mapEl.addEventListener('click', e => {
   mapEl.classList.remove('placing');
   openStandForm({ lat: at.lat, lng: at.lng });
 });
+
+/**
+ * Dragging a lane handle.
+ *
+ * Listened for on the contours SVG rather than on the handles themselves,
+ * because that SVG is rebuilt wholesale on every draw — including the draw
+ * this drag causes. A listener on the circle would be destroyed by the first
+ * move, and on touch, where the browser captures the pointer to the original
+ * target implicitly, the rest of the gesture would then go to a detached node
+ * and simply stop arriving. Capturing to the SVG, which survives, is what
+ * makes this work with a finger at all.
+ *
+ * The SVG carries pointer-events:none so it cannot swallow presses meant for
+ * the ground; the handles switch it back on for themselves. Events still
+ * bubble up through it either way, which is what this relies on.
+ */
+let gripDrag = null;    // { i, kind } while a handle is held
+
+contoursEl.addEventListener('pointerdown', e => {
+  if (!laneForm) return;
+  const g = e.target.closest && e.target.closest('.lanegrip');
+  if (!g) return;
+  e.preventDefault();
+  gripDrag = { i: Number(g.dataset.lane), kind: g.dataset.grip };
+  // Capture is what makes touch work; a browser that refuses it still leaves a
+  // usable mouse drag through ordinary bubbling, so this must not abort the
+  // handler and leave the grip half-armed.
+  try { contoursEl.setPointerCapture(e.pointerId); } catch (err) { /* mouse still fine */ }
+  mapEl.classList.add('gripping');
+});
+
+contoursEl.addEventListener('pointermove', e => {
+  if (!gripDrag || !laneForm) return;
+  const lane = laneForm.lanes[gripDrag.i];
+  if (!lane || !Array.isArray(lane.to)) return;
+  const r = mapEl.getBoundingClientRect();
+  const at = pixelToLatLng(e.clientX - r.left, e.clientY - r.top);
+
+  if (gripDrag.kind === 'tip') {
+    // Dragged onto the stand there is no lane left: no length, no bearing, and
+    // a cone that collapses to nothing. Hold the last good position instead of
+    // storing a degenerate one — the alternative is a lane that silently stops
+    // counting toward the winds.
+    const ax = projX(laneForm.stand.lng, zoom), ay = projY(laneForm.stand.lat, zoom);
+    const px = projX(at.lng, zoom), py = projY(at.lat, zoom);
+    if (Math.hypot(px - ax, py - ay) < 8) return;
+    lane.to = [at.lng, at.lat];
+  } else {
+    // A width handle moves the EDGE, so what it means is the angle between the
+    // lane's centre line and where the finger is — never the distance, which
+    // is why the handle springs back to the rim rather than following out.
+    const held = COVER.bearing(laneForm.stand.lat, laneForm.stand.lng, at.lat, at.lng);
+    const centre = COVER.bearing(laneForm.stand.lat, laneForm.stand.lng, lane.to[1], lane.to[0]);
+    const off = COVER.angleBetween(held, centre);
+    const clamped = Math.min(COVER.MAX_LANE_SPREAD_DEG,
+      Math.max(COVER.MIN_LANE_SPREAD_DEG, off));
+    lane.spread = Math.round(clamped * 10) / 10;
+  }
+  laneForm.onChange();
+  draw();
+});
+
+for (const ev of ['pointerup', 'pointercancel']) {
+  contoursEl.addEventListener(ev, e => {
+    if (!gripDrag) return;
+    gripDrag = null;
+    mapEl.classList.remove('gripping');
+    try { contoursEl.releasePointerCapture(e.pointerId); } catch (err) { /* already gone */ }
+    draw();
+  });
+}
 
 let drag = null;
 // A pan ends in a click, and every map mode treats a click as "put something

@@ -53,10 +53,46 @@ import { distanceM } from './db.mjs';
  */
 export const LANE_SPREAD_DEG = 10;
 
+/**
+ * How far a lane's own width may be dragged.
+ *
+ * Ten degrees is only ever a starting guess — a cut through popple and a
+ * quarter-section of standing beans are not the same opening, and the whole
+ * reason for a handle is that you know which one you are sitting over. So a
+ * lane carries its own half-angle when you have set one, and falls back to the
+ * number above when you have not.
+ *
+ * The bounds are what stops the handle producing something that is no longer a
+ * lane. Below three degrees the cone is a line and the wind answer stops
+ * depending on the width at all; above eighty it is a 160-degree fan, which is
+ * a field you can see across rather than a shooting opportunity, and treating
+ * it as one lane would rule out nearly every wind for the wrong reason.
+ *
+ * These are the bounds the map clamps a drag to. The database's own check is
+ * deliberately looser (anything above 0 and below 90) — it is guarding against
+ * nonsense, not enforcing a judgement, and the two should not be confused.
+ */
+export const MIN_LANE_SPREAD_DEG = 3;
+export const MAX_LANE_SPREAD_DEG = 80;
+
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
-/** Where a lane points and how far it reaches. */
-export function laneGeometry(stand, lane) {
+/**
+ * A lane's half-angle: its own, clamped, or the default.
+ *
+ * One function rather than a `?? LANE_SPREAD_DEG` at each site, because the
+ * map draws the cone and this module derives the winds from it, and those two
+ * reading the width differently is exactly the disagreement the constant above
+ * exists to prevent.
+ */
+export function laneSpread(lane, fallback = LANE_SPREAD_DEG) {
+  const s = lane?.spread;
+  if (!isNum(s)) return fallback;
+  return Math.min(MAX_LANE_SPREAD_DEG, Math.max(MIN_LANE_SPREAD_DEG, s));
+}
+
+/** Where a lane points, how far it reaches, and how wide it opens. */
+export function laneGeometry(stand, lane, { spreadDeg = LANE_SPREAD_DEG } = {}) {
   const to = lane?.to;
   if (!Array.isArray(to) || !isNum(to[0]) || !isNum(to[1])) return null;
   if (!isNum(stand?.lat) || !isNum(stand?.lng)) return null;
@@ -67,11 +103,12 @@ export function laneGeometry(stand, lane) {
     bearingDeg: Math.round(deg * 10) / 10,
     point: COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16],
     metres: Math.round(distanceM(stand.lat, stand.lng, to[1], to[0])),
+    spreadDeg: laneSpread(lane, spreadDeg),
   };
 }
 
-export const laneGeometries = (stand, lanes = []) =>
-  lanes.map(l => laneGeometry(stand, l)).filter(Boolean);
+export const laneGeometries = (stand, lanes = [], opts = {}) =>
+  lanes.map(l => laneGeometry(stand, l, opts)).filter(Boolean);
 
 /**
  * Which winds this stand can be hunted on, given its lanes.
@@ -83,9 +120,8 @@ export const laneGeometries = (stand, lanes = []) =>
 export function huntableFromLanes(stand, lanes = [], {
   halfAngleDeg = CONE_HALF_ANGLE_DEG, spreadDeg = LANE_SPREAD_DEG,
 } = {}) {
-  const geo = laneGeometries(stand, lanes);
+  const geo = laneGeometries(stand, lanes, { spreadDeg });
   if (!geo.length) return null;
-  const reach = halfAngleDeg + spreadDeg;
 
   const winds = [], blocked = [];
   for (let i = 0; i < 16; i++) {
@@ -95,8 +131,11 @@ export function huntableFromLanes(stand, lanes = [], {
     // one worth naming when explaining a refusal.
     let worst = null;
     for (const g of geo) {
+      // Each lane is tested against its OWN width. A wide lane rules out more
+      // winds than a narrow one, which is the entire point of being able to
+      // widen it: the shape you drew is the shape you are judged on.
       const off = angleBetween(downwind, g.bearingDeg);
-      if (off <= reach && (!worst || off < worst.offDeg)) {
+      if (off <= halfAngleDeg + g.spreadDeg && (!worst || off < worst.offDeg)) {
         worst = { offDeg: Math.round(off), lane: g };
       }
     }
@@ -107,6 +146,8 @@ export function huntableFromLanes(stand, lanes = [], {
   return {
     winds, blocked,
     lanes: geo,
+    // spreadDeg is the FALLBACK, not a description of the lanes: each geometry
+    // above carries the width actually used for it.
     halfAngleDeg, spreadDeg,
     longestM: Math.max(...geo.map(g => g.metres)),
     // Said in the terms you would use standing under the tree.
@@ -185,7 +226,9 @@ export function windsForStand(stand, { halfAngleDeg = CONE_HALF_ANGLE_DEG } = {}
  * the result and checks it against them on the same lanes.
  */
 export function browserSource(globalName = 'COVER') {
-  const consts = { CONE_HALF_ANGLE_DEG, LANE_SPREAD_DEG };
+  const consts = {
+    CONE_HALF_ANGLE_DEG, LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG,
+  };
   const body = [
     `const COMPASS = ${JSON.stringify(COMPASS)};`,
     ...Object.entries(consts).map(([k, v]) => `const ${k} = ${v};`),
@@ -193,11 +236,18 @@ export function browserSource(globalName = 'COVER') {
     `const distanceM = ${distanceM.toString()};`,
     `const bearing = ${bearing.toString()};`,
     `const angleBetween = ${angleBetween.toString()};`,
+    `const laneSpread = ${laneSpread.toString()};`,
     `const laneGeometry = ${laneGeometry.toString()};`,
     `const laneGeometries = ${laneGeometries.toString()};`,
     `const huntableFromLanes = ${huntableFromLanes.toString()};`,
     `const compareToManual = ${compareToManual.toString()};`,
-    'return { laneGeometry, laneGeometries, huntableFromLanes, compareToManual };',
+    // bearing, angleBetween and the spread bounds go across too: the map has to
+    // turn a dragged handle into a half-angle, and doing that with its own copy
+    // of the trigonometry is how the cone you drag and the cone that decides
+    // the winds start to differ.
+    'return { laneGeometry, laneGeometries, huntableFromLanes, compareToManual,'
+    + ' laneSpread, bearing, angleBetween,'
+    + ' LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG };',
   ].join('\n');
   return `const ${globalName} = (function () {\n${body}\n})();`;
 }

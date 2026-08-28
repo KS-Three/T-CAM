@@ -371,3 +371,106 @@ test('a plan with no start time loses the time, not the headline', async () => {
   assert.match(html, /s\.date \|\| 'date not recorded'/,
     'and falls back to the date the plan always carries');
 });
+
+// ---------------------------------------------------------------------------
+// Shooting lanes, and the width each one carries
+//
+// Lanes went in without a persistence test of their own, which was already a
+// gap; adding a per-lane width to the stored shape made it one worth closing.
+// The failure to guard against is silent: a width that does not round-trip
+// leaves a cone drawn at one angle and judged at another, and nothing looks
+// wrong on the map.
+
+test('a lane round-trips through the database with its width', () => {
+  const db = fresh();
+  const s = createStand(db, {
+    name: 'Creek ladder', lat: 44.12, lng: -90.65,
+    lanes: [
+      { to: [-90.649, 44.121], label: 'The opening', spread: 22.5 },
+      { to: [-90.651, 44.119], label: null },
+    ],
+  });
+  const [back] = allStands(db);
+  assert.equal(back.lanes.length, 2);
+  assert.equal(back.lanes[0].spread, 22.5);
+  assert.equal(back.lanes[0].label, 'The opening');
+  // The second lane was never widened, so it must come back with no width at
+  // all rather than a stored copy of today's default — which would outlive any
+  // change to that default and quietly disagree with every lane traced after.
+  assert.equal('spread' in back.lanes[1], false);
+  assert.equal(s.id, back.id);
+});
+
+test('a width is rounded to a tenth, the way a dragged handle produces one', () => {
+  const db = fresh();
+  createStand(db, {
+    name: 'Oak point', lat: 44.12, lng: -90.65,
+    lanes: [{ to: [-90.649, 44.121], spread: 17.348219 }],
+  });
+  assert.equal(allStands(db)[0].lanes[0].spread, 17.3);
+});
+
+test('a width that is not an angle is refused rather than stored', () => {
+  const db = fresh();
+  for (const spread of [0, -5, 90, 180, 'wide', NaN, Infinity]) {
+    assert.throws(
+      () => createStand(db, {
+        name: 'Bad', lat: 44.12, lng: -90.65,
+        lanes: [{ to: [-90.649, 44.121], spread }],
+      }),
+      /half-angle in degrees/,
+      `spread ${String(spread)} should be refused`,
+    );
+  }
+});
+
+test('patching the lanes replaces them, and leaves the ticked winds alone', () => {
+  const db = fresh();
+  const s = createStand(db, {
+    name: 'East field box', lat: 44.12, lng: -90.65, goodWinds: ['NW', 'W'],
+    lanes: [{ to: [-90.649, 44.121], spread: 12 }],
+  });
+  updateStand(db, s.id, { lanes: [{ to: [-90.648, 44.122], spread: 40 }] });
+  const [back] = allStands(db);
+  assert.equal(back.lanes.length, 1);
+  assert.equal(back.lanes[0].spread, 40);
+  assert.equal(back.good_winds, 'NW,W', 'a lane edit must not clear the ticks');
+});
+
+test('the API carries a lane width in and back out, and derives from it', async t => {
+  const { call } = await serving(t);
+  // Due north, wide enough that the derived winds cannot match the default.
+  const created = await (await call('POST', '/api/stands', {
+    name: 'Saddle', type: 'stand', lat: 44.12, lng: -90.65,
+    lanes: [{ to: [-90.65, 44.1245], spread: 45 }],
+  })).json();
+  assert.equal(created.lanes[0].spread, 45);
+
+  const [listed] = await (await call('GET', '/api/stands')).json();
+  assert.equal(listed.lanes[0].spread, 45);
+  assert.equal(listed.windSource, 'lanes');
+  // A 45-degree half-angle plus the 30-degree plume blocks any wind from
+  // within 75 degrees of south, which is everything from SSE round to SSW.
+  for (const w of ['S', 'SSE', 'SE', 'SSW', 'SW']) {
+    assert.ok(!listed.effectiveWinds.includes(w), `${w} should be blocked`);
+  }
+  assert.ok(listed.effectiveWinds.includes('N'), 'N blows down the back of you');
+
+  const patched = await (await call('PATCH', `/api/stands/${created.id}`, {
+    lanes: [{ to: [-90.65, 44.1245], spread: 5 }],
+  })).json();
+  assert.equal(patched.lanes[0].spread, 5);
+  // Narrowed, the same lane gives those winds back.
+  const [again] = await (await call('GET', '/api/stands')).json();
+  assert.ok(again.effectiveWinds.includes('SE'), 'a narrow lane frees SE again');
+});
+
+test('a bad lane width is a 400 from the API, not a 500', async t => {
+  const { call } = await serving(t);
+  const res = await call('POST', '/api/stands', {
+    name: 'Bad', type: 'stand', lat: 44.12, lng: -90.65,
+    lanes: [{ to: [-90.65, 44.1245], spread: 400 }],
+  });
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /half-angle in degrees/);
+});

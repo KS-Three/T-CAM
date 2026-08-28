@@ -268,11 +268,48 @@ by hand or left blank.
 `null` rather than `true`, because treating "I haven't said yet" as "yes" would
 send you to sit somewhere the deer will smell you. A test pins that behaviour.
 
+### Shooting lanes, which is where the winds now come from
+
+Ticking sixteen boxes asks the wrong question. You do not know a stand's winds
+directly; you know where you can see and shoot from it — the lane cut through
+the popple, the field edge, the opening over the crossing — and the winds follow
+from that. Ticking boxes is doing that derivation in your head, every time, and
+getting it slightly wrong.
+
+So mark the shape instead. Open a stand, press **Trace a lane**, and click where
+you can shoot to. Each lane is drawn as a cone from the stand, dark at your feet
+and fading out along it, because past forty or fifty yards the shot gets harder
+and a wedge of flat colour would claim a confidence the distance does not
+support.
+
+Each lane carries **three handles**, and they do different jobs on purpose:
+
+- the **tip** moves the far end — how far the shot reaches, and which way it
+  points;
+- the **two side handles** open and close the cone, and change nothing else. The
+  centre line stays where you put it.
+
+Widening a lane really does cost you winds. Scent travels downwind, and a stand
+is unhuntable on a wind whose downwind direction falls within the plume's
+half-angle of any lane's bearing — so the wider you open a lane, the more of the
+compass blows your scent across ground you are watching. The winds are
+recomputed as you drag, because a derivation you only see after saving is one
+you cannot correct.
+
+A lane you have never widened stores no width at all and uses the default, so
+changing that default later moves every lane that was never adjusted and leaves
+alone every lane that was.
+
+The ticked winds are kept either way. They are used when a stand has no lanes,
+and where both exist the disagreement is reported rather than resolved — a
+hand-picked set can hold something geometry cannot see, like a road you will not
+shoot toward, and it can equally be a guess made once and never revisited.
+
 | Endpoint | |
 | --- | --- |
-| `GET /api/stands` | Every stand, with parsed winds and nearby cameras |
+| `GET /api/stands` | Every stand, with parsed winds, lanes, the winds those lanes imply, and nearby cameras |
 | `POST /api/stands` | Drop a pin |
-| `PATCH /api/stands/:id` | Rename, move, retype, or change winds |
+| `PATCH /api/stands/:id` | Rename, move, retype, or change winds or lanes |
 | `DELETE /api/stands/:id` | Remove one |
 | `GET /api/stand-types` | The allowed types and compass points |
 

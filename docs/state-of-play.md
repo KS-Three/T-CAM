@@ -13,7 +13,7 @@ is *status*; that one is *why*.
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 236 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 267 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
@@ -27,6 +27,8 @@ is *status*; that one is *why*.
 | **Offline map cache** — tiles kept on disk, bounded "save this view" | Browser-verified: the page contacts no external host directly |
 | **Review screen** (`/review`) — visits, tagging, bucks, keyboard-driven | Driven end to end in a browser against generated stand-in frames |
 | **Wind history** — which winds blow during season, and what each stand is worth | Live: 9,751 huntable hours across 7 seasons at the property |
+| **Walk-in routes** — draw the approach, judged against the wind like a stand | Browser-verified end to end; geometry checked against hand-reasoned cases |
+| **Collar ingest** (`calibrate-planner.mjs`) — reads a published GPS dataset | Verified against a fixture with a planted effect; **awaiting the real file** |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -123,18 +125,35 @@ Consequences, all of them deliberate in the code:
 
 ## Next, in order
 
-1. **Entry and exit routes** — draw the walk-in to each stand and check it
-   against the wind for that sit. The classic way a good stand is ruined.
-2. **Calibrate the planner from collar data** — needs the Dryad files fetched
-   by hand (see above). Take the shape of weather relationships only; leave the
-   rut calendar alone.
-3. **Photos land** → verify the download path against real images, then fit the
+1. **Run the collar calibration** once `collar-data/RateofMovementData.csv` is
+   downloaded — `node calibrate-planner.mjs --inspect` first, to confirm the
+   detected columns before trusting any number it prints.
+2. **Photos land** → verify the download path against real images, then fit the
    review screen to their actual shape. It is built and driven, but against
    generated frames, so expect adjustment around real timestamps and any
    species tags SpyPoint's own AI attaches.
-4. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
-5. Moultrie, if a capture arrives.
-6. Historical imagery, if a working NAIP endpoint can be found.
+3. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
+4. Moultrie, if a capture arrives.
+5. Historical imagery, if a working NAIP endpoint can be found.
+
+## The structural debt worth naming
+
+`spypoint-sync.mjs` is **2,408 lines**, and most of that is not sync — it is the
+entire dashboard, markup, CSS and application script, inside one template
+literal. The UI has grown a long way past what that file was for: terrain,
+features, parcels, markers, routes, the wind rose, the stand ranking.
+
+That single template literal is the direct cause of a recurring class of bug.
+Escapes inside it resolve when the PAGE IS BUILT rather than when the browser
+reads it, so a one-backslash newline becomes a real line break and a stray
+backtick closes the literal — each of which makes the whole dashboard a syntax
+error while `node --check` on the module still passes. It has happened three
+times. `test/dashboard-script.test.js` now catches it, but catching is not the
+same as preventing.
+
+Splitting the dashboard into its own module (as `review-page.mjs` already is)
+would remove the class rather than keep testing for it. It delivers nothing
+visible, which is exactly why it keeps not happening.
 
 ## Things that will bite you
 
@@ -146,8 +165,13 @@ Consequences, all of them deliberate in the code:
 - Requesting a field the parcel layer lacks rejects the *whole* query with
   "Invalid query parameters". The published schema says `CNTYNAME`; the live
   layer has `CONAME`.
-- `Number(null)` is `0`, and 0,0 is a real place in the Atlantic. Missing
-  coordinates must be rejected before conversion, not after.
+- `Number(null)` is `0`, and 0,0 is a real place in the Atlantic. Missing values
+  must be rejected BEFORE conversion, not after. This has now bitten three
+  separate times — the parcel lookup, route points, and a blank movement rate in
+  the collar loader, where `Number('')` became "this deer did not move" and
+  dragged every median down. One of the three sat directly under a comment
+  warning about exactly this: writing the trap down is not the same as obeying
+  it.
 - Never edit a shipped migration — add another.
 - **The dashboard is theme-aware** — light by default, dark under
   `prefers-color-scheme`. A colour hardcoded in chart code is therefore wrong in

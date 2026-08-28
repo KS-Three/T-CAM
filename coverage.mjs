@@ -38,13 +38,20 @@ import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG } from './routes.mj
 import { distanceM } from './db.mjs';
 
 /**
- * A lane is not infinitely thin, but it is close enough that its own width
- * barely matters: a five-metre lane at forty metres subtends about seven
- * degrees, against a scent plume modelled at sixty. The plume dominates, so
- * lane width is folded in as a small constant rather than measured — measuring
- * it would imply a precision the plume model does not have.
+ * Half the angular width of a lane — the arc you can actually shoot through,
+ * not the width of the cut itself.
+ *
+ * Ten degrees is a twenty-degree cone, which is about what an opening gives
+ * you once you can swing: roughly nineteen metres of frontage at fifty. It is
+ * a defensible middle rather than a measurement, and it is deliberately the
+ * SAME number the map draws. Drawing a wide cone while computing winds from a
+ * narrow one would make the picture disagree with the model, and the picture
+ * is what you would believe.
+ *
+ * The scent plume still dominates: thirty degrees either side against this
+ * ten, so a lane's own width moves the wind answer only at the margins.
  */
-export const LANE_SPREAD_DEG = 5;
+export const LANE_SPREAD_DEG = 10;
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 

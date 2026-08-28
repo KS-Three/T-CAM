@@ -243,3 +243,32 @@ test('arming the trace moves the stand clear of the strip', () => {
   assert.match(body, /projY\(stand\.lat, zoom\) \+ strip \/ 2/, 'and offsets by half of it');
   assert.match(body, /centre = \{/, 'then recentres');
 });
+
+test('the lane cone is filled by an inline style, not a fill attribute', () => {
+  // #contours carries a blanket "path { fill: none }" for the contour lines,
+  // and a CSS declaration beats a presentation attribute. With fill="url(...)"
+  // the map drew four geometrically perfect cones filled with nothing at all —
+  // invisible, no error, nothing in the DOM to suggest a problem. Only looking
+  // at it found this.
+  assert.match(mapScript, /style="fill:url\(#/, 'the fill is inline');
+  assert.doesNotMatch(mapScript, /<path class="lane" fill="url/,
+    'not a presentation attribute the stylesheet would override');
+  assert.match(mapStyles, /#contours path \{ fill: none/, 'the rule that would win still exists');
+});
+
+test('the cone is drawn at the same arc the wind derivation uses', () => {
+  // A wide cone over a narrow calculation would make the picture disagree with
+  // the model, and the picture is what you would believe.
+  const drawn = Number(mapScript.match(/const LANE_HALF_DEG = (\d+)/)[1]);
+  assert.equal(drawn, LANE_SPREAD_DEG);
+});
+
+test('one fade per stand, scaled to its longest lane', () => {
+  // Per-cone gradients would make a short lane fade as fast as a long one,
+  // reading as "less certain" when it is the opposite.
+  const fn = mapScript.slice(mapScript.indexOf('function lanePaths'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /gradientUnits="userSpaceOnUse"/, 'the fade is in map pixels');
+  assert.match(body, /longest = Math\.max\(longest/, 'scaled to the longest lane');
+  assert.match(body, /lanefade-' \+ key/, 'and keyed per stand');
+});

@@ -206,9 +206,23 @@ export const mapStyles = `
   /* Shooting lanes. Drawn from the stand outward, with a node at the far end
      where the shot ends — the two together read as "I can shoot to there",
      which a bare line does not. */
-  #contours path.lane { stroke: rgba(255,140,80,.95); stroke-width: 2.4; fill: none;
-                        stroke-linecap: round; }
-  #contours circle.lane { fill: rgba(255,140,80,.95); stroke: rgba(50,20,0,.6); stroke-width: 1; }
+  /* The cone is filled by a gradient defined per stand; the stops carry the
+     colour so it stays in one place and follows the theme. No outline: an edge
+     would draw a hard boundary where the whole point is that the shot fades
+     out rather than stopping. */
+  #contours path.lane { stroke: none; }
+  #contours stop.lane-near { stop-color: #1b4fd8; stop-opacity: .72; }
+  #contours stop.lane-mid  { stop-color: #2f6be0; stop-opacity: .34; }
+  #contours stop.lane-far  { stop-color: #4a86ec; stop-opacity: 0; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) #contours stop.lane-near { stop-color: #3f7dff; stop-opacity: .70; }
+    :root:not([data-theme="light"]) #contours stop.lane-mid  { stop-color: #5a92ff; stop-opacity: .32; }
+  }
+  /* The far end still gets a dot: it is where the shot ends, and while tracing
+     it is the thing you look at to judge whether the lane went where you
+     meant. */
+  #contours circle.lanenode { fill: rgba(120,170,255,.9); stroke: rgba(10,25,70,.7);
+                              stroke-width: 1; }
   /* Tracing puts the form away and moves it to a strip along the bottom.
      Measured while driving the feature: the full form covers 47% of the map,
      and a right-hand panel still swallowed two clicks out of three in a
@@ -1013,22 +1027,71 @@ addEventListener('keydown', e => {
 // cannot correct.
 let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while tracing
 
+// Drawn as a cone rather than a line, because a lane is an area you can shoot
+// through, not a ray. Dark at the stand and fading out along it: past forty or
+// fifty yards the shot gets harder and the ground less certainly yours, and a
+// wedge of flat colour claims a confidence the distance does not support.
+//
+// The fade is one radial gradient per stand, centred on the stand and scaled
+// to its longest lane, so every cone fades on the same true-distance scale.
+// Giving each cone its own gradient would make a short lane fade as fast as a
+// long one, which would read as "less certain" when it is the opposite.
+//
+// The cone's half-angle is LANE_SPREAD_DEG — the same number the wind
+// derivation uses. Drawing a wide cone while computing from a narrow one is
+// how a picture starts disagreeing with the model behind it.
+const LANE_HALF_DEG = 10;
+
+function conePath(ax, ay, ex, ey, halfDeg) {
+  const dx = ex - ax, dy = ey - ay;
+  const r = Math.hypot(dx, dy);
+  if (!(r > 1)) return null;
+  const a = Math.atan2(dx, -dy);                    // screen bearing, radians
+  const h = halfDeg * Math.PI / 180;
+  const rim = t => [(ax + Math.sin(t) * r).toFixed(1), (ay - Math.cos(t) * r).toFixed(1)];
+  const [x1, y1] = rim(a - h);
+  const [x2, y2] = rim(a + h);
+  // Sweep 1: bearing grows clockwise on screen, the same way SVG measures a
+  // positive sweep. Large-arc 0 because the cone is far under half a turn.
+  return 'M' + ax.toFixed(1) + ' ' + ay.toFixed(1)
+    + 'L' + x1 + ' ' + y1
+    + 'A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 0 1 ' + x2 + ' ' + y2 + 'Z';
+}
+
 function lanePaths(left, top) {
   const out = [];
   const sets = [];
-  if (laneEdit) sets.push({ from: laneEdit.stand, lanes: laneEdit.lanes });
+  if (laneEdit) sets.push({ from: laneEdit.stand, lanes: laneEdit.lanes, key: 'edit' });
   for (const st of STANDS) {
     if (laneEdit && editing && st.id === editing.id) continue;   // being edited
-    if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes });
+    if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes, key: 's' + st.id });
   }
-  for (const { from, lanes } of sets) {
+  for (const { from, lanes, key } of sets) {
+    const ax = projX(from.lng, zoom) - left, ay = projY(from.lat, zoom) - top;
+    const cones = [];
+    let longest = 0;
     for (const l of lanes) {
       if (!l || !Array.isArray(l.to)) continue;
-      out.push('<path class="lane" d="'
-        + svgPath([[from.lng, from.lat], l.to], left, top, false) + '"></path>');
-      const x = projX(l.to[0], zoom) - left, y = projY(l.to[1], zoom) - top;
-      out.push('<circle class="lane" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1)
-        + '" r="3.5"></circle>');
+      const ex = projX(l.to[0], zoom) - left, ey = projY(l.to[1], zoom) - top;
+      longest = Math.max(longest, Math.hypot(ex - ax, ey - ay));
+      const d = conePath(ax, ay, ex, ey, LANE_HALF_DEG);
+      if (d) cones.push(d);
+      out.push('<circle class="lanenode" cx="' + ex.toFixed(1) + '" cy="' + ey.toFixed(1)
+        + '" r="3"></circle>');
+    }
+    if (!cones.length) continue;
+    const id = 'lanefade-' + key;
+    out.unshift('<defs><radialGradient id="' + id + '" gradientUnits="userSpaceOnUse" cx="'
+      + ax.toFixed(1) + '" cy="' + ay.toFixed(1) + '" r="' + Math.max(1, longest).toFixed(1)
+      + '"><stop offset="0" class="lane-near"/><stop offset="0.55" class="lane-mid"/>'
+      + '<stop offset="1" class="lane-far"/></radialGradient></defs>');
+    for (const d of cones) {
+      // Inline style, not a fill attribute. The overlay carries a blanket
+      // "#contours path { fill: none }" for the contour lines, and a CSS
+      // declaration beats a presentation attribute — so fill="url(...)" drew
+      // four perfectly correct cones filled with nothing at all. An inline
+      // style outranks the stylesheet and the gradient shows.
+      out.push('<path class="lane" style="fill:url(#' + id + ')" d="' + d + '"></path>');
     }
   }
   return out;

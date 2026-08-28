@@ -347,3 +347,27 @@ test('the measure tool ships the same arithmetic the tests check', async () => {
   assert.match(html, /ringArea/, 'including the spherical area');
   assert.match(html, /MEASURE\.measure\(/, 'and the map calls it');
 });
+
+test('a plan with no start time loses the time, not the headline', async () => {
+  // It printed "Invalid Date · AM from Invalid Date" — twice per row, in the
+  // largest text on the page. The date and window are always present, so a
+  // missing or unparseable start instant costs only the start time. Same
+  // reasoning as the `parts` fallback directly below it in the source.
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
+  const sit = extra => ({
+    date: '2026-11-09', window: 'AM', rating: 'PRIME', total: 52, camera: 'Creek',
+    windDir: 315, windFrom: 'NW', wind: 9, temp: 33, rut: 'Chasing', moon: 'full',
+    parts: [], ...extra,
+  });
+  const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', {
+    generatedAt: '2026-08-27T12:00:00.000Z',
+    sits: [sit(), sit({ start: 'not a time' }), sit({ start: '2026-11-09T11:30:00Z' })],
+  }, [], true);
+
+  // The guard is in the emitted script, so check the branch is actually there.
+  assert.match(html, /Invalid Date/, 'the comment naming the bug survives');
+  assert.match(html, /const timed = when && !isNaN\(when\)/,
+    'the row asks whether the instant parsed before formatting it');
+  assert.match(html, /s\.date \|\| 'date not recorded'/,
+    'and falls back to the date the plan always carries');
+});

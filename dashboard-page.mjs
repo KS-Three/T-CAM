@@ -604,11 +604,25 @@ if (!D.plan || !D.plan.sits || !D.plan.sits.length) {
     sc.appendChild(el('div', 'score', String(Math.round(s.total))));
     sc.appendChild(el('span', 'rating', s.rating));
     const body = el('div');
-    const when = new Date(s.start);
+    // A plan may carry no usable start instant — an older planner, a hand-edited
+    // file, a partial write. That should cost you the START TIME, not put
+    // "Invalid Date" in the headline twice, which is what it did. The date and
+    // window are always present, so they are what the row is built from.
+    const when = s.start ? new Date(s.start) : null;
+    const timed = when && !isNaN(when);
+    // Rendered on the property's clock where the plan recorded one, so the day
+    // does not shift for a reader in another timezone.
+    const opts = s.timezone ? { timeZone: s.timezone } : {};
+    const day = timed
+      ? when.toLocaleDateString(undefined,
+          Object.assign({ weekday: 'long', month: 'short', day: 'numeric' }, opts))
+      : (s.date || 'date not recorded');
     body.appendChild(el('div', 'when',
-      when.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
-      + ' · ' + s.window + ' from '
-      + when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      day + ' · ' + s.window
+      + (timed
+        ? ' from ' + when.toLocaleTimeString(undefined,
+            Object.assign({ hour: 'numeric', minute: '2-digit' }, opts))
+        : '')
       + ' · ' + s.camera));
     body.appendChild(el('div', 'cond',
       Math.round(s.temp) + '°F · wind ' + s.windFrom + ' ' + Math.round(s.wind)

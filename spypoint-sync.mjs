@@ -231,12 +231,23 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
     --bg: #f6f7f5; --panel: #fff; --ink: #1a1c19; --muted: #5d6159;
     --line: #dcdfd8; --ok: #2f7d4f; --warn: #b06d15; --bad: #b3352b;
     --accent: #375a3f;
+    /* Wind-rose ramp, light surface. Five steps rather than six: six single-hue
+       steps cannot both clear the 2:1 floor against white AND keep visible
+       lightness gaps between them — the validator rejected that, at 1.36:1. */
+    --rose-1: #8fbc7c; --rose-2: #6fa25c; --rose-3: #4f8842;
+    --rose-4: #356e2d; --rose-5: #1e541c;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #14160f; --panel: #1d2018; --ink: #e8eae2; --muted: #9aa08f;
       --line: #2f3428; --ok: #6bbb85; --warn: #e0a850; --bad: #e8776b;
       --accent: #8fbf9c;
+      /* Dark mode gets its OWN steps, validated against the dark panel — not
+         the light ramp flipped. On a dark surface more-is-lighter, so the ramp
+         runs the other way. Both sets pass: monotone lightness, gaps >= 0.06,
+         the step nearest the surface clearing it (2.18:1 light, 2.05:1 dark). */
+      --rose-1: #3c5733; --rose-2: #547548; --rose-3: #6d9360;
+      --rose-4: #8ab179; --rose-5: #a9cf96;
     }
   }
   * { box-sizing: border-box; }
@@ -387,6 +398,35 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
                  box-shadow: 0 2px 10px rgba(0,0,0,.35); }
   .terrainnote b { color: var(--ink); }
+  /* Wind rose. One series comparing magnitude by direction, so the colour job is
+     SEQUENTIAL — a single hue, light to dark, not a set of categorical hues.
+     Green to match this page rather than the reference blue, and both the light
+     and dark ramps were run through the palette validator against the panel
+     they actually sit on (see --rose-* above). The first attempt was validated
+     against a dark surface this page does not use and failed outright on the
+     real one, which is the argument for computing it rather than judging it. */
+  .windwrap { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px;
+              align-items: start; }
+  @media (max-width: 720px) { .windwrap { grid-template-columns: 1fr; } }
+  .rose { width: 300px; height: 300px; max-width: 100%; }
+  .rose .ring { fill: none; stroke: var(--line); stroke-width: 1; }
+  .rose .spoke { stroke: var(--line); stroke-width: 1; }
+  .rose text { fill: var(--muted); font-size: 10px; text-anchor: middle;
+               dominant-baseline: middle; }
+  .rose text.cardinal { fill: var(--ink); font-size: 11px; font-weight: 600; }
+  .rose path.petal { stroke: var(--panel); stroke-width: 2; cursor: help; }
+  .rose path.petal:hover { stroke: var(--ink); }
+  .windbars { display: flex; flex-direction: column; gap: 7px; }
+  .wbar { display: grid; grid-template-columns: 132px 1fr 74px; gap: 10px;
+          align-items: center; font-size: 13px; }
+  .wbar .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wbar .track { height: 9px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+  .wbar .fill { height: 100%; border-radius: 5px; background: var(--accent); }
+  .wbar .val { text-align: right; color: var(--muted); font-size: 12px; }
+  .wbar.unset .val { color: var(--warn); }
+  .windnote { margin-top: 12px; font-size: 13px; color: var(--muted); }
+  .windnote b { color: var(--ink); }
+  .windnote .gap { color: var(--warn); }
   .reviewlink { font-size: 12px; font-weight: 400; color: var(--accent);
                 text-decoration: none; margin-left: 10px; }
   .sitplan { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
@@ -479,6 +519,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <div id="alerts"></div>
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
   <div id="planArea"></div>
+  <h2 class="section">Which stands earn their keep</h2>
+  <div id="windArea"></div>
   <h2 class="section">Review photos <a class="reviewlink" id="reviewLink" href="/review">tag what is in them &rarr;</a></h2>
   <div id="reviewArea"></div>
   <h2 class="section">Where to sit</h2>
@@ -895,6 +937,143 @@ function openMarkerForm(marker) {
   name.focus();
 }
 
+
+
+// ---- which stands earn their keep -------------------------------------
+// A stand's good winds decide whether you can sit it TONIGHT. This answers the
+// other question: across a whole season, how often is it huntable at all? On
+// Kent's ground the westerly quadrant carries most of the huntable hours, so a
+// WNW stand earns its keep and an easterly one sits idle.
+const windArea = document.getElementById('windArea');
+
+// Sequential ramp, read from the theme so light and dark each get their own
+// validated steps. One hue on purpose: this is a single series comparing
+// MAGNITUDE, which is a sequential job — sixteen different hues would imply
+// sixteen different KINDS of thing rather than sixteen amounts of one.
+const ROSE_RAMP = ['var(--rose-1)', 'var(--rose-2)', 'var(--rose-3)',
+                   'var(--rose-4)', 'var(--rose-5)'];
+
+function roseSvg(ranked, size) {
+  const cx = size / 2, cy = size / 2;
+  const pad = 26;
+  const rMax = size / 2 - pad;
+  const peak = Math.max(...ranked.map(r => r.pct), 1);
+  const byPoint = Object.fromEntries(ranked.map(r => [r.point, r.pct]));
+  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+
+  const parts = [];
+  // Grid first, so it sits UNDER the data and stays recessive.
+  for (const frac of [0.5, 1]) {
+    parts.push('<circle class="ring" cx="' + cx + '" cy="' + cy + '" r="' + (rMax * frac).toFixed(1) + '"></circle>');
+  }
+  for (let i = 0; i < 4; i++) {
+    const a = i * Math.PI / 2 - Math.PI / 2;
+    parts.push('<line class="spoke" x1="' + cx + '" y1="' + cy
+      + '" x2="' + (cx + Math.cos(a) * rMax).toFixed(1)
+      + '" y2="' + (cy + Math.sin(a) * rMax).toFixed(1) + '"></line>');
+  }
+
+  // A 2px surface gap between neighbouring petals, as the mark spec asks: the
+  // stroke is the panel colour, so adjacent fills never touch.
+  const step = 2 * Math.PI / 16;
+  points.forEach((p, i) => {
+    const pct = byPoint[p] ?? 0;
+    if (pct <= 0) return;
+    const r = rMax * (pct / peak);
+    const mid = i * step - Math.PI / 2;
+    const a0 = mid - step / 2, a1 = mid + step / 2;
+    const x0 = cx + Math.cos(a0) * r, y0 = cy + Math.sin(a0) * r;
+    const x1 = cx + Math.cos(a1) * r, y1 = cy + Math.sin(a1) * r;
+    const shade = ROSE_RAMP[Math.min(ROSE_RAMP.length - 1,
+      Math.floor((pct / peak) * ROSE_RAMP.length))];
+    parts.push('<path class="petal" fill="' + shade + '" d="M' + cx + ' ' + cy
+      + ' L' + x0.toFixed(1) + ' ' + y0.toFixed(1)
+      + ' A' + r.toFixed(1) + ' ' + r.toFixed(1) + ' 0 0 1 ' + x1.toFixed(1) + ' ' + y1.toFixed(1)
+      + ' Z"><title>' + p + ' \u2014 ' + pct + '% of huntable hours</title></path>');
+  });
+
+  // Cardinals only. A label on all sixteen is the "number on every point"
+  // anti-pattern; the exact values live in the hover and in the list beside it.
+  [['N', 0], ['E', 1], ['S', 2], ['W', 3]].forEach(([label, i]) => {
+    const a = i * Math.PI / 2 - Math.PI / 2;
+    parts.push('<text class="cardinal" x="' + (cx + Math.cos(a) * (rMax + 13)).toFixed(1)
+      + '" y="' + (cy + Math.sin(a) * (rMax + 13)).toFixed(1) + '">' + label + '</text>');
+  });
+  return '<svg class="rose" viewBox="0 0 ' + size + ' ' + size + '" role="img" '
+    + 'aria-label="How often each wind blows during huntable hours">' + parts.join('') + '</svg>';
+}
+
+async function loadWindHistory() {
+  if (!D.live) {
+    windArea.appendChild(el('div', 'empty', 'Wind history needs the server.'));
+    return;
+  }
+  windArea.appendChild(el('div', 'empty', 'Reading seven years of weather history\u2026'));
+  let w;
+  try {
+    const res = await fetch('/api/wind-history');
+    w = await res.json();
+    if (!res.ok) throw new Error(w.error || 'wind history failed');
+  } catch (err) {
+    windArea.textContent = '';
+    windArea.appendChild(el('div', 'empty', 'Wind history unavailable: ' + err.message));
+    return;
+  }
+  windArea.textContent = '';
+
+  const wrap = el('div', 'windwrap');
+  const rose = el('div');
+  rose.innerHTML = roseSvg(w.ranked, 300);
+  rose.appendChild(el('div', 'windnote',
+    w.hours.toLocaleString() + ' huntable hours across ' + w.years + ' seasons'));
+  wrap.appendChild(rose);
+
+  const right = el('div');
+  const bars = el('div', 'windbars');
+  const cov = w.coverage;
+  const peak = Math.max(...cov.stands.map(s => s.pct || 0), 1);
+  for (const st of cov.stands) {
+    const row = el('div', 'wbar' + (st.pct === null ? ' unset' : ''));
+    row.appendChild(el('div', 'nm', st.name));
+    const track = el('div', 'track');
+    const fill = el('div', 'fill');
+    fill.style.width = st.pct === null ? '0%' : (100 * st.pct / peak) + '%';
+    track.appendChild(fill);
+    row.appendChild(track);
+    // Unknown is shown as unknown. A stand whose winds have not been recorded
+    // is not a stand that is huntable zero percent of the time.
+    row.appendChild(el('div', 'val', st.pct === null ? 'winds not set' : st.pct + '%'));
+    row.title = st.pct === null
+      ? 'Set this stand\u2019s good winds and it can be ranked'
+      : st.winds.join(', ') + ' \u2014 AM ' + st.amPct + '%, PM ' + st.pmPct + '%';
+    bars.appendChild(row);
+  }
+  right.appendChild(bars);
+
+  const note = el('div', 'windnote');
+  if (cov.seasonCovered !== null) {
+    note.innerHTML = 'Your stands cover <b>' + cov.seasonCovered
+      + '%</b> of huntable hours between them.';
+  }
+  if (cov.gaps.length) {
+    const g = el('div', 'gap');
+    g.textContent = 'No stand works on '
+      + cov.gaps.map(x => x.point + ' (' + x.pct + '%)').join(', ')
+      + ' \u2014 together '
+      + Math.round(10 * cov.gaps.reduce((a, x) => a + x.pct, 0)) / 10
+      + '% of the season.';
+    note.appendChild(g);
+  }
+  if (cov.unsetStands) {
+    note.appendChild(el('div', null,
+      plural(cov.unsetStands, 'stand') + ' still ' + (cov.unsetStands === 1 ? 'has' : 'have')
+      + ' no winds recorded, so ' + (cov.unsetStands === 1 ? 'it is' : 'they are') + ' not counted.'));
+  }
+  right.appendChild(note);
+  wrap.appendChild(right);
+  windArea.appendChild(wrap);
+}
+loadWindHistory();
 
 // ---- review queue -----------------------------------------------------
 // A pointer to the screen where photos become data. Everything downstream —

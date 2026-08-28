@@ -325,6 +325,33 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX visits_reviewed ON visits(reviewed_at);');
     },
   },
+  {
+    version: 6,
+    name: 'wind climatology cache',
+    up: db => {
+      // How often each wind blows here during season, computed from seven years
+      // of hourly archive data. History does not change, so this is fetched
+      // once and kept: the raw pull is roughly a megabyte per year and a couple
+      // of seconds, and the result is a few hundred bytes.
+      //
+      // Keyed by rounded coordinates because two stands on the same property
+      // share a climatology — the wind does not know where the property line
+      // is, and fetching per stand would multiply the requests for identical
+      // answers.
+      db.exec(`
+        CREATE TABLE wind_climatology (
+          id          INTEGER PRIMARY KEY,
+          lat         REAL NOT NULL,
+          lng         REAL NOT NULL,
+          months      TEXT NOT NULL,
+          years       INTEGER NOT NULL,
+          fetched_at  TEXT NOT NULL,
+          data        TEXT NOT NULL,
+          UNIQUE (lat, lng, months, years)
+        );
+      `);
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1053,4 +1080,33 @@ export function recentDetectionCounts(db, { days = 30, species = 'deer', now = n
     GROUP BY p.camera_id
   `).all(...(species ? [since, species] : [since]));
   return Object.fromEntries(rows.map(r => [r.camera_id, Number(r.n)]));
+}
+
+// ---------------------------------------------------------------------------
+// Wind climatology
+// ---------------------------------------------------------------------------
+
+// Rounded to about a kilometre. Everything on one property shares a wind
+// climate, and keying finer would refetch a megabyte of history to answer the
+// same question about the far side of a field.
+const climKey = (lat, lng) => [Math.round(lat * 100) / 100, Math.round(lng * 100) / 100];
+
+export function saveWindClimatology(db, lat, lng, months, years, data) {
+  const [la, ln] = climKey(lat, lng);
+  db.prepare(`
+    INSERT INTO wind_climatology (lat, lng, months, years, fetched_at, data)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (lat, lng, months, years)
+    DO UPDATE SET fetched_at = excluded.fetched_at, data = excluded.data
+  `).run(la, ln, months.join(','), years, nowIso(), JSON.stringify(data));
+  return windClimatology(db, lat, lng, months, years);
+}
+
+export function windClimatology(db, lat, lng, months, years) {
+  const [la, ln] = climKey(lat, lng);
+  const row = db.prepare(`
+    SELECT * FROM wind_climatology WHERE lat = ? AND lng = ? AND months = ? AND years = ?
+  `).get(la, ln, months.join(','), years);
+  if (!row) return null;
+  return { ...JSON.parse(row.data), fetchedAt: row.fetched_at, cached: true };
 }

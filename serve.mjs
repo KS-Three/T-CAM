@@ -33,6 +33,7 @@ import {
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS,
+  saveWindClimatology, windClimatology,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
@@ -40,6 +41,9 @@ import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { reviewHtml } from './review-page.mjs';
+import {
+  fetchArchive, climatology, standCoverage, SEASON_MONTHS,
+} from './wind-history.mjs';
 import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
@@ -354,6 +358,37 @@ function standTerrainLookup(db) {
   };
 }
 
+
+// In-flight climatology fetches, shared the same way terrain's are: seven years
+// of hourly archive is a slow pull and two tabs must not both make it.
+const windInFlight = new Map();
+
+/**
+ * How often each wind blows here during season, and what that is worth to each
+ * stand.
+ *
+ * Cached permanently once fetched, because history does not change.
+ */
+export async function windHistoryFor(db, { lat, lng, years = 7, months = SEASON_MONTHS }) {
+  let clim = windClimatology(db, lat, lng, months, years);
+  if (!clim) {
+    const key = `${lat.toFixed(2)},${lng.toFixed(2)},${months.join('')},${years}`;
+    if (!windInFlight.has(key)) {
+      windInFlight.set(key, (async () => {
+        const archives = await fetchArchive(lat, lng, { years, months });
+        const computed = climatology(archives, { months });
+        if (!computed.hours) {
+          throw new Error('the weather archive returned no usable hours for this place');
+        }
+        saveWindClimatology(db, lat, lng, months, years, computed);
+        return { ...computed, cached: false };
+      })().finally(() => windInFlight.delete(key)));
+    }
+    clim = await windInFlight.get(key);
+  }
+  return { ...clim, coverage: standCoverage(allStands(db), clim) };
+}
+
 const MAX_BODY = 64 * 1024;
 
 function readJson(req) {
@@ -456,6 +491,33 @@ export function createServer({ out = OPT.out } = {}) {
       }
 
 
+
+      // Which winds actually blow here during season, and what that is worth to
+      // each stand. Answers "which stands earn their keep", which is a
+      // different question from "can I sit there this evening".
+      if (req.method === 'GET' && url.pathname === '/api/wind-history') {
+        const cams = allCameras(db).filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng));
+        const stands = allStands(db);
+        // Defaults to the middle of your own ground rather than making the page
+        // supply coordinates it would have to invent.
+        const spots = [...cams, ...stands];
+        const lat = Number(url.searchParams.get('lat'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lat, 0) / spots.length : NaN);
+        const lng = Number(url.searchParams.get('lng'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lng, 0) / spots.length : NaN);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return sendJson(res, 400, {
+            error: 'no location yet — none of your cameras or stands has coordinates',
+          });
+        }
+        const years = Math.min(15, Math.max(1, Number(url.searchParams.get('years')) || 7));
+        try {
+          return sendJson(res, 200, await windHistoryFor(db, { lat, lng, years }));
+        } catch (err) {
+          console.error(`\n  Wind history failed at ${lat},${lng}: ${err.message}\n`);
+          return sendJson(res, 502, { error: err.message });
+        }
+      }
       // --- review: visits, detections, bucks ------------------------------
       //
       // A VISIT is the unit you tag, not a photo. These cameras fire two frames

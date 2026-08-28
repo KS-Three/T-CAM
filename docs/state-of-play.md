@@ -13,7 +13,7 @@ is *status*; that one is *why*.
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 189 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 236 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
@@ -25,6 +25,8 @@ is *status*; that one is *why*.
 | **Parcel boundaries drawn**, DNR VPA / CWD / deer-zone overlays | Live against both services, browser-verified |
 | **Scouting markers** — rubs, scrapes, beds, trails, plots, water, access | Browser-verified end to end with a real mouse |
 | **Offline map cache** — tiles kept on disk, bounded "save this view" | Browser-verified: the page contacts no external host directly |
+| **Review screen** (`/review`) — visits, tagging, bucks, keyboard-driven | Driven end to end in a browser against generated stand-in frames |
+| **Wind history** — which winds blow during season, and what each stand is worth | Live: 9,751 huntable hours across 7 seasons at the property |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -41,15 +43,42 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
   JSON API is the boundary it would speak to.
 - **Steps 4 and 5** of the build plan: the tagging screen, then analysis.
 
-## Unfinished research
+## Public GPS collar data — answered 2026-08-28
 
-**Public GPS collar datasets.** Spartan Forge trains its movement prediction on
-university collar data; the question was whether comparable open data exists.
-[Movebank](https://datarepository.movebank.org/) is the obvious repository and
-its web front end responds, but its study API **timed out** from this
-environment, so nothing was actually retrieved. Genuinely unknown whether
-usable white-tailed deer datasets are published there under a permissive
-licence. Not attempted beyond that.
+The open question from the first week: Spartan Forge trains movement prediction
+on university collar data, and it was unknown whether comparable open data
+exists. **It does.**
+
+Nine white-tailed deer GPS datasets on [Dryad](https://datadryad.org), all
+**CC0** (public domain). The directly relevant ones:
+
+| Dataset | Why it matters |
+| --- | --- |
+| *Spatiotemporal patterns of male and female white-tailed deer on a hunted landscape* (2022) | Carries a 23 MB `RateofMovementData.csv`. Sexes separated, and on **hunted** ground |
+| *Does temporary baiting affect deer space use and movement?* (Jan 2026) | Recent, and movement sampled at camera-survey intervals |
+| *Reproductive effort of males in scramble competition polygyny* | Buck movement through the rut |
+
+Movebank is reachable but its study API needs an account; Dryad's catalogue API
+answers freely, though **file downloads sit behind a bot challenge** — they
+download fine from a browser, not from a script here.
+
+**What this can and cannot be used for**, because the distinction decides
+whether it is worth the effort:
+
+- It **cannot** say where your deer are. These are other deer, in Alabama,
+  Georgia, Canada and Florida, in other years, on other ground. Buying or
+  downloading the files does not change that, and the movement-prediction row
+  in the comparison table below stays a "no".
+- It **can** replace the planner's hand-picked weights with measured effect
+  sizes. `hunt-planner.mjs` scores sits using numbers chosen by judgement — rut
+  phase 2–24, cold front, pressure trend, wind, rain, moon "deliberately
+  small". A movement-rate dataset measures how much movement actually rises
+  with a temperature drop, and how little the moon actually matters.
+- Caveat that limits it: southern deer rut at different dates and in different
+  heat than Wisconsin deer. The **shape** of a weather relationship transfers;
+  the **timing** of the rut calendar does not, and must stay as it is.
+
+That is calibrating WHEN, not predicting WHERE.
 
 ## What the paid apps do that this does not
 
@@ -65,6 +94,7 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 | Scouting waypoints | Both, core | **Yes, and dated — sign ages and fades** |
 | Public land / CWD / deer zones | onX layer set | **Yes, from WI DNR** |
 | Offline maps | onX paid tier | **Yes — viewed tiles always, bounded pre-fetch** |
+| Which stands are worth having | Neither, directly | **Yes — season-long wind frequency per stand, and the gaps** |
 | Historical imagery | Spartan Forge: 10 years UAV | No (NAIP endpoint timed out; unverified) |
 | Movement prediction | Spartan Forge: neural net on university collar data | **No, and cannot match it** — the planner is weather + rut + your own cameras, and says so |
 | Pin sharing with partners | Spartan Forge | No |
@@ -93,15 +123,18 @@ Consequences, all of them deliberate in the code:
 
 ## Next, in order
 
-1. **Photos land** → verify the download path against real images, then build
-   the tagging screen (step 4). Burst grouping should pay immediately: the
-   cameras fire two frames per trigger. Note that stand ranking already has
-   camera-detection scoring wired up and returning zero; it starts working the
-   day photos exist.
-2. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
-3. **Finish the collar-data question** from a machine that can reach Movebank.
-4. Moultrie, if a capture arrives.
-5. Historical imagery, if a working NAIP endpoint can be found.
+1. **Entry and exit routes** — draw the walk-in to each stand and check it
+   against the wind for that sit. The classic way a good stand is ruined.
+2. **Calibrate the planner from collar data** — needs the Dryad files fetched
+   by hand (see above). Take the shape of weather relationships only; leave the
+   rut calendar alone.
+3. **Photos land** → verify the download path against real images, then fit the
+   review screen to their actual shape. It is built and driven, but against
+   generated frames, so expect adjustment around real timestamps and any
+   species tags SpyPoint's own AI attaches.
+4. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
+5. Moultrie, if a capture arrives.
+6. Historical imagery, if a working NAIP endpoint can be found.
 
 ## Things that will bite you
 
@@ -116,6 +149,13 @@ Consequences, all of them deliberate in the code:
 - `Number(null)` is `0`, and 0,0 is a real place in the Atlantic. Missing
   coordinates must be rejected before conversion, not after.
 - Never edit a shipped migration — add another.
+- **The dashboard is theme-aware** — light by default, dark under
+  `prefers-color-scheme`. A colour hardcoded in chart code is therefore wrong in
+  one of the two modes. The wind rose's ramp lives in the theme's custom
+  properties (`--rose-1..5`) with separately validated steps per mode; the first
+  version was validated against a dark surface the page does not use and came
+  out at 1.36:1 against the real white panel, well under the floor. Run
+  `dataviz/scripts/validate_palette.js` rather than judging it by eye.
 - **The page script is emitted from a template literal, and that is a trap.**
   An escape written with one backslash resolves when the PAGE IS BUILT, not
   when the browser reads it: a single-escaped newline becomes a real line break

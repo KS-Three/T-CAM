@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs/promises';
 import { dashboardHtml } from '../dashboard-page.mjs';
 import { reviewHtml } from '../review-page.mjs';
 import { tonightHtml } from '../tonight-page.mjs';
@@ -91,4 +92,61 @@ test('the tonight page ships one script and no stray markup', () => {
   // literal had closed early and the rest of the page followed it out.
   assert.ok(!script.includes('`'), 'no backtick escaped into the page');
   assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test('the map is its own module, and the dashboard only composes it', async () => {
+  // Split out 2026-08-28. The check is structural, like the whitelist and
+  // mode-disarm tests: it asserts the map's code is not back in the dashboard,
+  // which is the drift that would undo the split one convenient edit at a time.
+  const { mapStyles, mapMarkup, mapScript } = await import('../map-view.mjs');
+  const dash = await fs.readFile(new URL('../dashboard-page.mjs', import.meta.url), 'utf8');
+
+  for (const marker of ['tileBounds3857', 'refreshMarkers', 'clearMapModes',
+    'drawMarkers', 'lookupParcel', 'measurePaths', 'openStandForm']) {
+    assert.ok(mapScript.includes(marker), `${marker} lives in the map module`);
+    assert.ok(!dash.includes(marker), `${marker} is NOT still in the dashboard`);
+  }
+
+  // The dashboard composes the three pieces rather than owning them.
+  for (const piece of ['${mapStyles}', '${mapMarkup}', '${mapScript}']) {
+    assert.ok(dash.includes(piece), `the dashboard interpolates ${piece}`);
+  }
+
+  // String.raw keeps escapes literal, which is the point of moving it — but a
+  // backtick still closes the literal, so there must be none in what is
+  // WRITTEN. The evaluated string does contain backticks, arriving through the
+  // measure geometry that is interpolated in, and those are harmless: an
+  // interpolated value is inserted after the literal has been parsed.
+  const source = await fs.readFile(new URL('../map-view.mjs', import.meta.url), 'utf8');
+  const written = source.slice(source.indexOf('export const mapMarkup'));
+  const literals = written.split('String.raw`').slice(1).map(part => part.split('\n`;')[0]);
+  assert.equal(literals.length, 2, 'the markup and the script are both raw literals');
+  for (const lit of literals) {
+    assert.ok(!lit.includes('`'), 'no backtick written inside a raw literal');
+  }
+
+  // The zoom-out label is markup, not a JS string, so there is no parser to
+  // resolve a \u escape for it. It must be an HTML entity or the character.
+  assert.doesNotMatch(mapMarkup, /\\u[0-9a-fA-F]{4}/,
+    'markup carries no unresolved escape');
+  assert.match(mapStyles, /#map \{/, 'the map owns its own styles');
+});
+
+test('the split did not drop anything from the page', async () => {
+  // Composed page vs. a snapshot taken before the split: identical line for
+  // line once \uXXXX escapes are resolved, which is the only spelling that
+  // changed when the map script moved into a String.raw literal.
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const html = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z', null, [], true, []);
+  for (const id of ['tiles', 'terrain', 'contours', 'pins', 'zin', 'zout',
+    'addStand', 'whoOwns', 'terrainBtn', 'markBtn', 'offlineBtn', 'routeBtn',
+    'measureBtn', 'layerToggle', 'layerMenu', 'credit']) {
+    assert.ok(html.includes('id="' + id + '"'), `#${id} survived the split`);
+  }
+  assert.ok(html.includes('&minus;'), 'the zoom-out label is an entity now');
+  // Markup and styles only — stopping short of the JSON payload, whose < and &
+  // are escaped as \\u003c and \\u0026 on purpose so no name can close the block.
+  const markup = html.slice(0, html.indexOf('<script type="application/json"'));
+  assert.doesNotMatch(markup, /\\u[0-9a-fA-F]{4}/,
+    'no unresolved escape reached the markup, where nothing would resolve it');
 });

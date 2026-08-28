@@ -249,7 +249,7 @@ test('the Add stand button is only offered on a page that can actually save', as
   // sync writes also showed the button. A file:// page has no server to POST
   // to, so pressing it did nothing at all — the worst kind of broken, because
   // it looks like a working control.
-  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
   const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
 
   const staticPage = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z', null, []);
@@ -263,7 +263,7 @@ test('the Add stand button is only offered on a page that can actually save', as
 });
 
 test('a served page carries its stands into the rendered payload', async () => {
-  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
   const stands = [{ id: 1, name: 'East Ridge Ladder', type: 'tripod',
     lat: 44.1, lng: -90.6, winds: ['NW'], nearbyCameras: [] }];
   const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, stands, true);
@@ -284,7 +284,7 @@ test('map controls are not stolen by the drag handler', async () => {
   // This is a STRUCTURAL check: it asserts the two handlers share one predicate
   // rather than proving browser behaviour, which needs a real browser (verified
   // by hand). Sharing the predicate is what makes the drift impossible.
-  const { dashboardHtml } = await import('../spypoint-sync.mjs');
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
   const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, [], true);
 
   assert.equal((html.match(/const onMapGround =/g) || []).length, 1,

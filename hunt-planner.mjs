@@ -35,7 +35,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 // Safe to import: spypoint-sync only runs a sync when invoked as a program, so
 // pulling in its helpers here never touches the network or asks for credentials.
-import { cameraSummary, dashboardHtml, PLAN_FILE } from './spypoint-sync.mjs';
+import { cameraSummary, PLAN_FILE } from './spypoint-sync.mjs';
+import { dashboardHtml } from './dashboard-page.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);

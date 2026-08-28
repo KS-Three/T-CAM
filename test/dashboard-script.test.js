@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { dashboardHtml } from '../spypoint-sync.mjs';
+import { dashboardHtml } from '../dashboard-page.mjs';
 import { PROVIDERS } from '../providers/index.mjs';
 import { FLEX_M } from '../fixtures/cameras.js';
 

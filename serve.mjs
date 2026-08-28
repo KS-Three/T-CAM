@@ -36,7 +36,8 @@ import {
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
 } from './db.mjs';
-import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
+import { dashboardHtml } from './dashboard-page.mjs';
+import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';

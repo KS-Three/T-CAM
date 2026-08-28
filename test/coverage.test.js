@@ -500,3 +500,61 @@ test('every way out of the stand form clears what hangs off it', () => {
     assert.match(body, new RegExp(cleared + ' = null'), `${cleared} is cleared`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// The tick-boxes are gone
+//
+// Kent's call, 2026-08-28: two inputs for one answer is how they drift apart,
+// and the boxes were the worse of the two — they asked you to do in your head
+// the derivation the lanes do exactly. What is NOT gone is the data, because a
+// stand ticked before lanes existed is still ranked on it.
+
+test('the stand form no longer offers sixteen boxes to tick', () => {
+  assert.doesNotMatch(mapScript, /const WINDS = \['N','NNE'/,
+    'the compass list the grid was built from is gone');
+  assert.doesNotMatch(mapScript, /el\('div', 'winds'\)/, 'and so is the grid');
+  assert.doesNotMatch(mapStyles, /\.winds button/, 'and the styling that dressed it');
+  // Nothing else built a wind grid, so a leftover rule would be dead weight
+  // that reads as a live control to the next person.
+  assert.doesNotMatch(mapStyles, /\.winds \{ display: grid/);
+});
+
+test('winds ticked before lanes are shown, explained and clearable', () => {
+  // Removing the only editor for a field that still drives the ranking would
+  // leave a wrong set permanently unfixable, so the read-out carries a way out.
+  const i = mapScript.indexOf('winds ticked before there were lanes');
+  assert.ok(i > 0, 'the block exists');
+  const body = mapScript.slice(i, i + 2200);
+  assert.match(body, /if \(chosen\.size\)/, 'shown only where there is something to show');
+  assert.match(body, /Winds ticked before lanes/);
+  assert.match(body, /Clear them/);
+  assert.match(body, /chosen\.clear\(\)/);
+  // The heading has to go with it, or it outlives the thing it heads and the
+  // form reads as having lost its contents. Caught in a browser.
+  assert.match(body, /oldLabel\.remove\(\)/);
+  // Both halves of the truth, because which one applies changes the meaning.
+  assert.match(body, /this stand has lanes, and they decide/);
+  assert.match(body, /there are no lanes yet/);
+  assert.doesNotMatch(body, /apiWrite|fetch\(/,
+    'clearing waits for Save like every other field, rather than writing at once');
+});
+
+test('a stand pin names the winds it is judged on, not the ones ticked', () => {
+  // With lanes deciding, a tooltip built from the ticked set would disagree
+  // with the ranking on any stand carrying both.
+  assert.match(mapScript, /const pinWinds = s\.effectiveWinds && s\.effectiveWinds\.length/);
+  assert.match(mapScript, /pinWinds && pinWinds\.length \? ' \\u00b7 good on ' \+ pinWinds/);
+});
+
+test('a stand ticked before lanes existed is still ranked on those winds', () => {
+  // The data outlives the control. Deleting the column to tidy up would have
+  // silently un-ranked every stand that works today.
+  const ticked = { lat: LAT, lng: LNG, winds: ['NW', 'W'] };
+  const w = windsForStand(ticked);
+  assert.equal(w.source, 'ticked');
+  assert.deepEqual(w.winds, ['NW', 'W']);
+
+  // And a lane, once traced, takes over from it without being asked to.
+  const both = { ...ticked, lanes: [lane(0)] };
+  assert.equal(windsForStand(both).source, 'lanes');
+});

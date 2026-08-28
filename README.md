@@ -259,22 +259,24 @@ stand that covers camera A"*.
 
 ### Good winds
 
-A stand can record the winds it is huntable on — the wind carrying your scent
-away from where deer come from. This is the single most important property of a
-stand and cannot be derived from anything the cameras report, so it is recorded
-by hand or left blank.
+The winds a stand is huntable on — the wind carrying your scent away from where
+deer come from — are the single most important thing about it, and cannot be
+derived from anything the cameras report.
 
-**Blank means unknown, not "any wind".** A stand with no winds recorded answers
-`null` rather than `true`, because treating "I haven't said yet" as "yes" would
-send you to sit somewhere the deer will smell you. A test pins that behaviour.
+**Blank means unknown, not "any wind".** A stand with no winds answers `null`
+rather than `true`, because treating "I haven't said yet" as "yes" would send
+you to sit somewhere the deer will smell you. A test pins that behaviour.
 
-### Shooting lanes, which is where the winds now come from
+### Shooting lanes, which is where the winds come from
 
-Ticking sixteen boxes asks the wrong question. You do not know a stand's winds
-directly; you know where you can see and shoot from it — the lane cut through
-the popple, the field edge, the opening over the crossing — and the winds follow
-from that. Ticking boxes is doing that derivation in your head, every time, and
-getting it slightly wrong.
+There used to be sixteen tick-boxes. They asked the wrong question. You do not
+know a stand's winds directly; you know where you can see and shoot from it —
+the lane cut through the popple, the field edge, the opening over the crossing —
+and the winds follow from that. Ticking boxes was doing that derivation in your
+head, every time, and getting it slightly wrong.
+
+**The boxes are gone** (2026-08-28). Two inputs for one answer is how they drift
+apart, and the boxes were the worse of the two.
 
 So mark the shape instead. Open a stand, press **Trace a lane**, and click where
 you can shoot to. Each lane is drawn as a cone from the stand, dark at your feet
@@ -300,10 +302,14 @@ A lane you have never widened stores no width at all and uses the default, so
 changing that default later moves every lane that was never adjusted and leaves
 alone every lane that was.
 
-The ticked winds are kept either way. They are used when a stand has no lanes,
-and where both exist the disagreement is reported rather than resolved — a
-hand-picked set can hold something geometry cannot see, like a road you will not
-shoot toward, and it can equally be a guess made once and never revisited.
+**Winds ticked before the boxes went are kept**, because a stand ticked back
+then is still ranked on them when it has no lanes — dropping the column to tidy
+up would have silently un-ranked stands that work today. The stand form shows
+them read-only, says whether they are being used, and offers to clear them:
+removing the only editor for a field that still drives the ranking would
+otherwise leave a wrong set permanently unfixable. Where a stand carries both,
+the disagreement is reported rather than resolved. Trace a lane and it takes
+over without being asked to.
 
 | Endpoint | |
 | --- | --- |

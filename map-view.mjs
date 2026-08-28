@@ -178,11 +178,17 @@ export const mapStyles = `
   .measurebox .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
   #contours path.measure.ring { fill: rgba(255,235,120,.14); }
   .terrainnote .warn { color: var(--warn); }
-  .winds { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 4px; }
-  .winds button { padding: 5px 0; font: 600 10px/1 ui-sans-serif, system-ui, sans-serif;
-                  border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
-                  background: var(--bg); color: var(--muted); }
-  .winds button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* What is left of the sixteen tick-boxes: a read-out of what a stand was
+     ticked with before lanes existed, and a way to drop it. Deliberately not
+     styled as an input — it is not one any more. */
+  .oldwinds { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line);
+              border-radius: 6px; background: var(--bg); }
+  .oldwinds b { font-size: 13px; }
+  .oldwinds .hint { margin: 4px 0 7px; }
+  .oldwinds button { border: 1px solid var(--line); background: var(--panel);
+                     color: var(--muted); border-radius: 5px; padding: 4px 9px;
+                     font: inherit; font-size: 12px; cursor: pointer; }
+  .oldwinds button:hover { color: var(--bad); border-color: var(--bad); }
   .parcelcard .row { display: flex; justify-content: space-between; gap: 12px;
                      padding: 3px 0; color: var(--muted); }
   .parcelcard .row b { color: var(--ink); font-weight: 600; text-align: right; }
@@ -573,8 +579,12 @@ function draw() {
     lab.style.left = x + 'px'; lab.style.top = y + 'px';
     const pin = el('div', 'stand' + (editing && editing.id === s.id ? ' sel' : ''));
     pin.style.left = x + 'px'; pin.style.top = y + 'px';
+    // The winds this stand is actually judged on, which since the tick-boxes
+    // went is the lanes wherever they exist. Showing the ticked set here would
+    // have the tooltip disagree with the ranking on any stand carrying both.
+    const pinWinds = s.effectiveWinds && s.effectiveWinds.length ? s.effectiveWinds : s.winds;
     pin.title = s.name + ' \u2014 ' + s.type.replace('-', ' ')
-      + (s.winds && s.winds.length ? ' \u00b7 good on ' + s.winds.join(', ') : '')
+      + (pinWinds && pinWinds.length ? ' \u00b7 good on ' + pinWinds.join(', ') : '')
       + (s.nearbyCameras && s.nearbyCameras.length
         ? ' \u00b7 covers ' + s.nearbyCameras.map(c => c.name + ' (' + c.metres + 'm)').join(', ')
         : '');
@@ -1726,7 +1736,6 @@ let STANDS = D.stands || [];
 let placing = false;
 let editing = null;
 
-const WINDS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 const TYPES = [['stand','Ladder / hang-on'],['tripod','Tripod'],['ground-blind','Ground blind'],
                ['box-blind','Box blind'],['saddle','Saddle'],['other','Other']];
 
@@ -1993,10 +2002,12 @@ function openStandForm(stand) {
         w.style.color = 'var(--warn)';
         laneWinds.appendChild(w);
       }
-      // Only where a hand-picked set exists to disagree with.
+      // Only where an older ticked set exists to disagree with. It no longer
+      // competes for the answer — the lanes have it — so this is reported as
+      // something to look at rather than something to reconcile.
       const cmp = COVER.compareToManual(derived, [...chosen]);
       if (cmp && cmp.agree === false) {
-        const d = el('div', null, cmp.why);
+        const d = el('div', null, 'Different from what was ticked before: ' + cmp.why);
         d.style.marginTop = '4px';
         d.style.color = 'var(--warn)';
         laneWinds.appendChild(d);
@@ -2029,27 +2040,44 @@ function openStandForm(stand) {
   };
   for (const n of [laneWinds, traceBtn, laneList]) form.insertBefore(n, fields);
 
-  // --- ticked winds, now the fallback rather than the input -----------------
-  fields.appendChild(el('label', null, lanes.length
-    ? 'Or override by hand (the wind comes FROM)'
-    : 'Huntable on these winds (the wind comes FROM)'));
-  const windBox = el('div', 'winds');
-  for (const w of WINDS) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.textContent = w;
-    b.className = chosen.has(w) ? 'on' : '';
-    b.onclick = () => {
-      if (chosen.has(w)) chosen.delete(w); else chosen.add(w);
-      b.classList.toggle('on');
+  // --- winds ticked before there were lanes ---------------------------------
+  //
+  // The sixteen tick-boxes are gone (Kent's call, 2026-08-28). Two inputs for
+  // one answer is how they drift apart, and the boxes were always the worse of
+  // the two: they asked you to do in your head the derivation the lanes do
+  // exactly.
+  //
+  // What is NOT gone is the data. A stand ticked before lanes existed is still
+  // ranked on those winds when it has no lanes, so deleting the column would
+  // silently un-rank stands that work today. They are shown, read-only, with
+  // where they came from — and with a way to clear them, because removing the
+  // only editor for a field that still drives the ranking would otherwise
+  // leave a wrong set permanently unfixable.
+  if (chosen.size) {
+    // The label is held rather than dropped straight into the form, because
+    // Clear has to take it away too — otherwise the heading outlives the thing
+    // it heads and the form reads as having lost its contents.
+    const oldLabel = el('label', null, 'Winds ticked before lanes');
+    fields.appendChild(oldLabel);
+    const old = el('div', 'oldwinds');
+    old.appendChild(el('b', null, [...chosen].join(', ')));
+    old.appendChild(el('div', 'hint', lanes.length
+      ? 'Not used \u2014 this stand has lanes, and they decide. Kept in case '
+        + 'they hold something the geometry cannot see.'
+      : 'Used for now, because there are no lanes yet. Trace one and it takes '
+        + 'over.'));
+    const drop = document.createElement('button');
+    drop.type = 'button'; drop.textContent = 'Clear them';
+    drop.onclick = () => {
+      chosen.clear();
+      oldLabel.remove();
+      old.remove();
+      // Nothing is written until Save, the same as every other field here.
       paintLanes();
     };
-    windBox.appendChild(b);
+    old.appendChild(drop);
+    fields.appendChild(old);
   }
-  fields.appendChild(windBox);
-  fields.appendChild(el('div', 'hint',
-    'Lanes decide the ranking where they are marked. Ticks are used when there '
-    + 'are none, and are kept either way \u2014 they can hold something geometry '
-    + 'cannot see, like a road you will not shoot toward.'));
 
   // The map reads its lanes from here for as long as this form is open, armed
   // for tracing or not, so the handles work on the array the Remove buttons and

@@ -242,12 +242,18 @@ default", so changing that default later moves every lane nobody adjusted and
 leaves alone every lane somebody did. A stored copy of today's number would
 outlive any change to it and quietly disagree with lanes traced after.
 
-**The ticked winds are kept, not replaced.** They are used where a stand has no
-lanes, and where both exist the disagreement is REPORTED rather than resolved. A
-hand-picked set can hold something geometry cannot see — a thermal that always
-drains one way, a road you will not shoot toward — and it can equally be a guess
-made once and never revisited. You have stood in the tree; the arithmetic has
-not.
+**The tick-boxes are gone; the data they wrote is not.** A stand ticked before
+lanes existed is still ranked on those winds when it has no lanes, so dropping
+the `good_winds` column to tidy up would have silently un-ranked stands that
+work today. The form shows them read-only, says whether they are in use, and
+offers to clear them — removing the only editor for a field that still drives
+the ranking would otherwise leave a wrong set permanently unfixable. Where a
+stand carries both, the disagreement is REPORTED rather than resolved; tracing a
+lane takes over without being asked to.
+
+The stand pin's tooltip names the winds a stand is JUDGED on, not what it was
+ticked with. Built from the ticked set it would disagree with the ranking on any
+stand carrying both.
 
 Bounds: a half-angle under 3 degrees is a line, over 80 is a 160-degree fan you
 can see across rather than shoot down. The map clamps a drag to those; the
@@ -274,11 +280,9 @@ against nonsense arriving over the API, not enforcing a judgement.
 6. Moultrie, if a capture arrives.
 7. Historical imagery, if a working NAIP endpoint can be found.
 
-**Open, and Kent's to settle:** whether the sixteen wind tick-boxes should
-disappear entirely once a stand has lanes. They currently stay, relabelled "Or
-override by hand", because a ticked set can hold something geometry cannot see.
-The argument for removing them is that two inputs for one answer is how they
-drift apart. Not decided; do not decide it in passing.
+**Settled 2026-08-28: the sixteen wind tick-boxes are gone.** Kent's call. Two
+inputs for one answer is how they drift apart, and the boxes were the worse of
+the two. Lanes are now the only way to record what a stand can be hunted on.
 
 ## The structural debt worth naming
 

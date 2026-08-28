@@ -106,49 +106,6 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
 <title>Trail Cameras</title>
 <style>
   ${mapStyles}
-  /* Top-LEFT: the zoom buttons own the top-right and the layer switcher the
-     bottom-left, so this is the only free corner. */
-  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex;
-              flex-direction: column; gap: 6px; }
-  /* The terrain layers cover the whole map, so they MUST not take clicks —
-     without pointer-events:none they would swallow every press meant for the
-     ground and break stand placement and ownership lookup alike. */
-  #terrain, #contours { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
-                        pointer-events: none; display: none; }
-  /* Drainages and ridges are drawn in different colours AND different dash
-     patterns, so they stay distinguishable printed, in bright sun, or by
-     someone who does not separate blue from tan easily. */
-  #contours path.drain { stroke: rgba(120,190,255,.95); stroke-width: 2.4; stroke-linecap: round; }
-  /* A walk-in route. Drawn heavier than a contour and in a colour used for
-     nothing else on the map, because it is the only line you put there
-     yourself. */
-  #contours path.route { stroke: rgba(190,140,255,.95); stroke-width: 3; fill: none;
-                         stroke-linecap: round; stroke-linejoin: round; }
-  /* The measuring readout. Sits under the tip rather than beside it, because
-     the numbers change on every click and a moving box beside a moving box is
-     hard to read. */
-  .measurebox { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
-                z-index: 6; background: var(--panel); border: 1px solid var(--line);
-                border-radius: 8px; padding: 8px 14px; color: var(--ink);
-                box-shadow: 0 2px 12px rgba(0,0,0,.35); text-align: center;
-                min-width: 190px; }
-  /* Top-RIGHT, below the zoom buttons. It used to sit bottom-left, which was
-     fine with three toolbar buttons and started covering the fifth one when the
-     toolbar grew. The bottom-right corner is spoken for by the parcel card. */
-  .terrainnote { position: absolute; right: 10px; top: 84px; z-index: 4; max-width: 250px;
-                 max-height: calc(100% - 190px); overflow-y: auto;
-                 background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-                 padding: 8px 10px; font-size: 11px; color: var(--muted);
-                 box-shadow: 0 2px 10px rgba(0,0,0,.35); }
-  /* Bottom-right: the toolbar owns the top-left, zoom the top-right and the
-     layer switcher the bottom-left, so this is the last free corner. */
-  .parcelcard { position: absolute; right: 10px; bottom: 10px; z-index: 5;
-                width: min(300px, calc(100% - 20px)); background: var(--panel);
-                border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
-                box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
-  /* Map-type control, positioned like Google's: a thumbnail in the lower-left
-     showing what you would switch TO, with the full list on hover or tap. */
-  .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
   :root {
     --bg: #f6f7f5; --panel: #fff; --ink: #1a1c19; --muted: #5d6159;
     --line: #dcdfd8; --ok: #2f7d4f; --warn: #b06d15; --bad: #b3352b;
@@ -235,18 +192,6 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .r-fair .score, .r-fair .rating { color: var(--warn); }
   .r-poor .score, .r-poor .rating { color: var(--muted); }
   .stale-note { color: var(--warn); font-size: 12px; margin: -4px 0 12px; }
-  /* Stand pins are a different SHAPE as well as colour: a teardrop against the
-     cameras' circles, so the two are told apart without relying on colour. */
-  .stand { position: absolute; width: 16px; height: 16px; cursor: pointer;
-           transform: translate(-50%, -100%) rotate(-45deg);
-           border: 2px solid #fff; border-radius: 50% 50% 50% 0;
-           background: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
-  /* Sign markers carry a LETTER as well as a colour, so a rub and a scrape are
-     told apart on a sunlit phone screen and in greyscale. */
-  .mark { position: absolute; width: 18px; height: 18px; cursor: pointer;
-          transform: translate(-50%, -50%); border-radius: 4px; border: 2px solid #fff;
-          font: 700 10px/14px ui-sans-serif, system-ui, sans-serif; text-align: center;
-          color: #10240f; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
   /* Wind rose. One series comparing magnitude by direction, so the colour job is
      SEQUENTIAL — a single hue, light to dark, not a set of categorical hues.
      Green to match this page rather than the reference blue, and both the light

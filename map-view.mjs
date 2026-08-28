@@ -166,6 +166,95 @@ export const mapStyles = `
   .layers.open .layermenu { display: flex; }
   .layers.open .swatch { visibility: hidden; }
   .layermenu button.on { border-color: var(--accent); }
+  /* Top-LEFT: the zoom buttons own the top-right and the layer switcher the
+     bottom-left, so this is the only free corner. */
+  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex;
+              flex-direction: column; gap: 6px; }
+  /* The terrain layers cover the whole map, so they MUST not take clicks —
+     without pointer-events:none they would swallow every press meant for the
+     ground and break stand placement and ownership lookup alike. */
+  #terrain, #contours { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+                        pointer-events: none; display: none; }
+  /* Drainages and ridges are drawn in different colours AND different dash
+     patterns, so they stay distinguishable printed, in bright sun, or by
+     someone who does not separate blue from tan easily. */
+  #contours path.drain { stroke: rgba(120,190,255,.95); stroke-width: 2.4; stroke-linecap: round; }
+  /* A walk-in route. Drawn heavier than a contour and in a colour used for
+     nothing else on the map, because it is the only line you put there
+     yourself. */
+  #contours path.route { stroke: rgba(190,140,255,.95); stroke-width: 3; fill: none;
+                         stroke-linecap: round; stroke-linejoin: round; }
+  /* The measuring readout. Sits under the tip rather than beside it, because
+     the numbers change on every click and a moving box beside a moving box is
+     hard to read. */
+  /* Suggested stands. Deliberately a different SHAPE from a real stand pin,
+     not merely a different colour: these are places to go and walk, and one
+     must never be mistaken at a glance for somewhere you actually hunt. */
+  .sugg { position: absolute; width: 20px; height: 20px; cursor: pointer; z-index: 3;
+          transform: translate(-50%, -50%); border-radius: 3px;
+          background: rgba(255,225,120,.30); border: 2px dashed #d9a441; }
+  .sugg.sel { background: rgba(255,225,120,.65); border-style: solid; }
+  .sugglabel { position: absolute; transform: translate(-50%, -50%); font-size: 11px;
+               font-weight: 700; line-height: 1; color: #241c05; z-index: 4;
+               pointer-events: none; }
+  /* The line from a suggestion to the ground it watches. Without it the pin is
+     a dot in a field, and the thing you most need to see — which way you would
+     be looking — is invisible. */
+  #contours path.sugg-look { stroke: rgba(217,164,65,.9); stroke-width: 2.2; fill: none;
+                             stroke-dasharray: 5 4; }
+  .suggcard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 290px;
+              max-width: calc(100% - 20px); max-height: 62%; overflow: auto;
+              background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+              padding: 12px 14px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  .suggcard h4 { margin: 0 0 2px; font-size: 14px; padding-right: 18px; }
+  .suggcard .meta { color: var(--muted); font-size: 12px; }
+  .suggcard ul { margin: 8px 0 0; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
+  .suggcard li.minus { color: var(--warn); }
+  .suggcard .caveat { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+                      color: var(--muted); font-size: 11.5px; }
+  .suggcard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                     background: none; border: 0; color: var(--muted); font-size: 17px; }
+  .suggcard .pick { display: flex; gap: 8px; margin-top: 10px; }
+  .suggcard .pick button { flex: 1; padding: 7px; border-radius: 6px;
+                           font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                           border: 1px solid var(--line); background: var(--bg);
+                           color: var(--ink); cursor: pointer; }
+  .suggcard .pick button.primary { background: var(--accent); color: #fff;
+                                   border-color: var(--accent); }
+  .measurebox { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+                z-index: 6; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 8px; padding: 8px 14px; color: var(--ink);
+                box-shadow: 0 2px 12px rgba(0,0,0,.35); text-align: center;
+                min-width: 190px; }
+  /* Top-RIGHT, below the zoom buttons. It used to sit bottom-left, which was
+     fine with three toolbar buttons and started covering the fifth one when the
+     toolbar grew. The bottom-right corner is spoken for by the parcel card. */
+  .terrainnote { position: absolute; right: 10px; top: 84px; z-index: 4; max-width: 250px;
+                 max-height: calc(100% - 190px); overflow-y: auto;
+                 background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 8px 10px; font-size: 11px; color: var(--muted);
+                 box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  /* Bottom-right: the toolbar owns the top-left, zoom the top-right and the
+     layer switcher the bottom-left, so this is the last free corner. */
+  .parcelcard { position: absolute; right: 10px; bottom: 10px; z-index: 5;
+                width: min(300px, calc(100% - 20px)); background: var(--panel);
+                border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
+                box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  /* Map-type control, positioned like Google's: a thumbnail in the lower-left
+     showing what you would switch TO, with the full list on hover or tap. */
+  .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
+  /* Stand pins are a different SHAPE as well as colour: a teardrop against the
+     cameras' circles, so the two are told apart without relying on colour. */
+  .stand { position: absolute; width: 16px; height: 16px; cursor: pointer;
+           transform: translate(-50%, -100%) rotate(-45deg);
+           border: 2px solid #fff; border-radius: 50% 50% 50% 0;
+           background: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  /* Sign markers carry a LETTER as well as a colour, so a rub and a scrape are
+     told apart on a sunlit phone screen and in greyscale. */
+  .mark { position: absolute; width: 18px; height: 18px; cursor: pointer;
+          transform: translate(-50%, -50%); border-radius: 4px; border: 2px solid #fff;
+          font: 700 10px/14px ui-sans-serif, system-ui, sans-serif; text-align: center;
+          color: #10240f; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
 `;
 
 export const mapMarkup = String.raw`
@@ -179,6 +268,7 @@ export const mapMarkup = String.raw`
       <button id="offlineBtn" type="button">Save offline</button>
       <button id="routeBtn" type="button">+ Walk-in route</button>
       <button id="measureBtn" type="button">Measure</button>
+      <button id="suggestBtn" type="button">Suggest a stand</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -366,6 +456,7 @@ function draw() {
   }
 
   drawMarkers(left, top, W, H);
+  drawSuggestions(left, top, W, H);
 }
 // ---- offline ----------------------------------------------------------
 // Tiles you have looked at are already cached — every one came through this
@@ -837,6 +928,157 @@ addEventListener('keydown', e => {
     draw();
   }
 });
+// ---- suggest a stand ---------------------------------------------------
+// Everything this needs was already on the map and never put together: the
+// landforms from the terrain layer, the winds no stand covers from the wind
+// history, and the sign you have marked. A suggestion is a piece of ground
+// PLUS the side of it the wind lets you sit — the same saddle gives a
+// different stand depending on which side you hang, and which side is decided
+// by the winds you are currently missing.
+//
+// Drawn as dashed squares, not teardrops: one must never be mistaken at a
+// glance for somewhere you actually hunt.
+let SUGGESTIONS = [];
+let suggestSel = null;
+const suggestBtn = document.getElementById('suggestBtn');
+
+function suggestPaths(left, top) {
+  // The line from each suggestion to the ground it watches. Without it the pin
+  // is a dot in a field and the thing you most need to see — which way you
+  // would be looking — is invisible.
+  return SUGGESTIONS.map(c => '<path class="sugg-look" d="'
+    + svgPath([[c.lng, c.lat], [c.feature.lng, c.feature.lat]], left, top, false)
+    + '"></path>');
+}
+
+function drawSuggestions(left, top, W, H) {
+  for (const c of SUGGESTIONS) {
+    const x = projX(c.lng, zoom) - left, y = projY(c.lat, zoom) - top;
+    if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
+    // Just the rank. Five labels reading "WNW - 13 winds" pile on top of each
+    // other and say nothing you can act on without opening the card anyway.
+    const lab = el('div', 'sugglabel', String(SUGGESTIONS.indexOf(c) + 1));
+    lab.style.left = x + 'px'; lab.style.top = y + 'px';
+    const pin = el('div', 'sugg' + (suggestSel === c ? ' sel' : ''));
+    pin.style.left = x + 'px'; pin.style.top = y + 'px';
+    pin.title = 'Suggested: looking ' + c.facing + ' at a ' + c.feature.kind;
+    pin.onclick = ev => { ev.stopPropagation(); suggestSel = c; showSuggestion(c); draw(); };
+    pinsEl.append(lab, pin);
+  }
+}
+
+function closeSuggestCard() {
+  document.querySelector('.suggcard')?.remove();
+}
+
+function showSuggestion(c) {
+  closeSuggestCard();
+  const card = el('div', 'suggcard');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
+  x.onclick = ev => { ev.stopPropagation(); suggestSel = null; closeSuggestCard(); draw(); };
+  card.appendChild(x);
+
+  card.appendChild(el('h4', null, '#' + (SUGGESTIONS.indexOf(c) + 1) + ' \u2014 looking '
+    + c.facing + ' at a ' + c.feature.kind));
+  card.appendChild(el('div', 'meta',
+    c.setbackM + ' m back \u00b7 huntable on ' + c.winds.length + ' of 16 winds'
+    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')));
+
+  const ul = el('ul');
+  for (const r of c.reasons) {
+    const li = el('li', r.points < 0 ? 'minus' : null, r.why);
+    ul.appendChild(li);
+  }
+  card.appendChild(ul);
+
+  const winds = el('div', 'meta');
+  winds.style.marginTop = '8px';
+  winds.textContent = 'Good winds: ' + c.winds.join(', ');
+  card.appendChild(winds);
+
+  const pick = el('div', 'pick');
+  const hang = document.createElement('button');
+  hang.className = 'primary';
+  hang.textContent = 'Hang it here';
+  hang.onclick = ev => {
+    ev.stopPropagation();
+    // Straight into the normal stand form, with the winds already ticked. The
+    // suggestion is a starting point you then edit, not a stand.
+    closeSuggestCard();
+    openStandForm({ lat: c.lat, lng: c.lng, winds: c.winds, type: 'stand' });
+  };
+  const drop = document.createElement('button');
+  drop.textContent = 'Not this one';
+  drop.onclick = ev => {
+    ev.stopPropagation();
+    SUGGESTIONS = SUGGESTIONS.filter(s => s !== c);
+    suggestSel = null;
+    closeSuggestCard();
+    draw();
+  };
+  pick.append(hang, drop);
+  card.appendChild(pick);
+
+  if (SUGGEST_CAVEAT) card.appendChild(el('div', 'caveat', SUGGEST_CAVEAT));
+  mapEl.appendChild(card);
+}
+
+let SUGGEST_CAVEAT = null;
+
+async function loadSuggestions() {
+  suggestBtn.disabled = true;
+  suggestBtn.textContent = 'Thinking\u2026';
+  terrainNote('Reading the ground and your wind history\u2026');
+  try {
+    const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6);
+    const body = await (await fetch('/api/suggest-stands' + q)).json();
+    SUGGESTIONS = body.candidates || [];
+    SUGGEST_CAVEAT = body.caveat || null;
+    const lines = [];
+    if (SUGGESTIONS.length) {
+      lines.push('<b>' + SUGGESTIONS.length + ' spot'
+        + (SUGGESTIONS.length === 1 ? '' : 's') + ' worth walking.</b> Tap one for why.');
+    }
+    if (body.note) lines.push(body.note);
+    for (const n of body.notes || []) lines.push(n);
+    if (!body.windHistoryLoaded && SUGGESTIONS.length) {
+      lines.push('No wind history cached yet \u2014 load "Which stands earn their keep" '
+        + 'and press this again to rank by the winds you are missing.');
+    }
+    terrainNote(lines.join('<br>') || 'Nothing to suggest here.');
+    suggestBtn.classList.toggle('on', SUGGESTIONS.length > 0);
+    draw();
+  } catch (err) {
+    terrainNote('Could not work out suggestions: ' + err.message);
+  } finally {
+    suggestBtn.disabled = false;
+    suggestBtn.textContent = SUGGESTIONS.length ? 'Clear suggestions' : 'Suggest a stand';
+  }
+}
+
+suggestBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  if (SUGGESTIONS.length) {
+    SUGGESTIONS = [];
+    suggestSel = null;
+    closeSuggestCard();
+    suggestBtn.classList.remove('on');
+    suggestBtn.textContent = 'Suggest a stand';
+    terrainNote(null);
+    draw();
+    return;
+  }
+  loadSuggestions();
+};
+if (!D.live) {
+  suggestBtn.disabled = true;
+  suggestBtn.title = 'Suggestions need the server';
+  suggestBtn.style.opacity = '0.6';
+  suggestBtn.style.cursor = 'not-allowed';
+}
+
 // ---- terrain ----------------------------------------------------------
 // The ground itself, from free USGS LiDAR. This is the layer the paid apps
 // charge for, and on subtle ground it is the one that actually tells you where
@@ -1027,7 +1269,9 @@ function parcelPaths(left, top) {
   const out = PARCEL_RINGS
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
-  return out.concat(routePaths(left, top)).concat(measurePaths(left, top));
+  return out.concat(routePaths(left, top))
+    .concat(measurePaths(left, top))
+    .concat(suggestPaths(left, top));
 }
 
 /** The parcel boundary alone, when the terrain layer is off. */

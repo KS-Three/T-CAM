@@ -41,6 +41,7 @@ import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
+import { suggestStands } from './stand-suggester.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
@@ -936,6 +937,68 @@ export function createServer({ out = OPT.out } = {}) {
         });
       }
 
+      // Where to hang the next stand.
+      //
+      // Everything this needs was already being computed separately: the
+      // landforms from the terrain module, the winds no stand covers from the
+      // wind history, and the sign from the markers. The work is putting them
+      // together, and the answer is a shortlist to go and walk rather than a
+      // decision — which every response says out loud.
+      if (req.method === 'GET' && url.pathname === '/api/suggest-stands') {
+        const stands = allStands(db);
+        const cams = allCameras(db).filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng));
+        const spots = [...cams, ...stands];
+        const lat = Number(url.searchParams.get('lat'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lat, 0) / spots.length : NaN);
+        const lng = Number(url.searchParams.get('lng'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lng, 0) / spots.length : NaN);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return sendJson(res, 400, {
+            error: 'no location yet — drop a stand on the map first',
+          });
+        }
+        const radiusM = Math.min(1200, Math.max(150, Number(url.searchParams.get('radius')) || 500));
+
+        // Terrain is the one slow input, and it is cached forever once fetched
+        // because the ground does not move. Everything else is local.
+        let terrain = null;
+        try {
+          terrain = await terrainFor(db, { lat, lng, radiusM });
+        } catch (err) {
+          return sendJson(res, 502, { error: `terrain could not be read: ${err.message}` });
+        }
+        if (!terrain?.covered) {
+          return sendJson(res, 200, {
+            candidates: [],
+            note: terrain?.why ?? 'No LiDAR coverage on this ground, so there are no '
+              + 'landforms to work from.',
+          });
+        }
+
+        // Wind coverage only if it is already cached — this endpoint must not
+        // block on a seven-year archive pull. Without it the suggester ranks on
+        // ground and sign alone, and says so rather than quietly changing what
+        // its numbers mean.
+        let clim = null;
+        try {
+          clim = windClimatology(db, lat, lng, SEASON_MONTHS, 7);
+        } catch { clim = null; }
+        const coverage = clim ? standCoverage(stands, clim) : null;
+
+        const result = suggestStands({
+          features: terrain.features,
+          stands,
+          markers: allMarkers(db),
+          gaps: coverage?.gaps ?? [],
+          climatology: clim,
+          limit: Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5)),
+        });
+        return sendJson(res, 200, {
+          ...result,
+          at: { lat, lng, radiusM },
+          windHistoryLoaded: !!clim,
+        });
+      }
       // The shape of the ground, from free USGS LiDAR.
       //
       // Fetching is slow — about 25 seconds for a 600 m square, across five

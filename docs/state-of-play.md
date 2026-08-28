@@ -13,7 +13,7 @@ is *status*; that one is *why*.
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits | 376 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits | 393 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
@@ -34,6 +34,8 @@ is *status*; that one is *why*.
 | **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
 | **Stand suggester** — where to hang the next one, and which side of it | Live against USGS terrain at the property; wind geometry cross-checked against `routes.mjs` on every candidate × all 16 winds |
 | **Sit journal** (`/journal`) — what actually happened, and what it may claim | 29 tests, most of them about refusing to answer; the whole loop driven in a browser |
+| **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Tested against stub owners; `?parcels=off` for outside Wisconsin |
+| **Offline** — /tonight, the map and sit logging with no server reachable | Driven end to end: server killed, page served by the worker, sit queued, server restarted, sit arrived |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.

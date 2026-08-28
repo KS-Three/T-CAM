@@ -134,7 +134,11 @@ export function browserSource(globalName = 'MEASURE') {
   const body = [
     ...Object.entries(consts).map(([k, v]) => `const ${k} = ${v};`),
     ...Object.entries(fns).map(([k, f]) => `const ${k} = ${f.toString()};`),
-    `return { ${Object.keys(fns).join(', ')} };`,
+    // The unit constants cross as well as the functions. The map has to turn a
+    // number of yards typed into a lane's reach box into metres, which is what
+    // everything downstream measures in, and a second 0.9144 written on the
+    // page is how the distance you typed stops being the distance you get.
+    `return { ${Object.keys(fns).join(', ')}, M_PER_YARD, M_PER_FOOT, M2_PER_ACRE };`,
   ].join('\n');
   return `const ${globalName} = (function () {\n${body}\n})();`;
 }

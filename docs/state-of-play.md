@@ -67,6 +67,7 @@ Rules for anything added from here:
 | **Track recording** — record the walk in off the phone's GPS, judged against the route you drew | Driven in a browser with real geolocation and with a scripted 3-minute walk: 180 fixes, teleport and bad fix both rejected, 275 m, compared to the route on save |
 | **Shooting lanes** — mark where you can shoot; the winds are derived from the shape, not ticked | Cross-checked against `routes.mjs`, which computes scent independently, on every lane bearing × all 16 winds; the browser copy compiled in a vm and compared to Node's on the same lanes |
 | **Lane handles** — drag the tip for reach, either side handle for width | Driven in a browser with a real mouse: 20° → 91° wide, then 52 m → 82 m with the width unchanged, saved, reopened from the server |
+| **Lane sizes typed, in yards** — how far out and how wide across the end, rather than dragged at | Driven in a browser against the real server: 85 yd out and 62 yd across typed into the form, stored as a 20° half-angle, reloaded and reopened unchanged; the widened lane cost two winds |
 | **Build stamp** — the server says which commit it is running, and whether the files have moved on since | Verified live: banner names the branch and sha, `/api/health` flipped to `stale: true` naming the touched file |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on

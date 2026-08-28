@@ -291,6 +291,41 @@ Each lane carries **three handles**, and they do different jobs on purpose:
 - the **two side handles** open and close the cone, and change nothing else. The
   centre line stays where you put it.
 
+#### Or just say the numbers
+
+Handles put a lane roughly where it goes, and rough is their limit. You already
+know this one runs eighty-five yards to the field edge and opens about thirty
+across at the end, because you have walked it — and until 2026-08-28 the only
+way to say so was to drag until a readout happened to agree with the figure
+already in your head.
+
+So every lane's row in the form carries **two boxes: how far out, and how wide
+across the end**, both in yards.
+
+- **Yards, not metres.** Everything stored and computed stays metric, the way
+  the rest of the program does. Yards are the last step before a number is
+  shown and the first after one is typed, which is the call
+  [`measure.mjs`](measure.mjs) already made for the same reason: the answers get
+  used in American conversations.
+- **Yards across, not degrees.** The stored width is a half-angle, which is the
+  right thing to *store* — it is what the wind test needs and it does not change
+  when the lane gets longer. It is the wrong thing to *ask for*. Nobody under a
+  tree knows an opening in degrees. The angle is still shown beside the box,
+  because it is the part that stays put: a lane is a cone, so lengthening one
+  widens it on the ground.
+- **Typing a distance does not swing the lane.** It slides the far end along the
+  bearing the lane already has. Aiming it somewhere else is the tip handle's
+  job, and mixing the two would be the single corner handle all over again.
+- **A width no lane could open to is pulled back rather than refused**, and the
+  box shows what it landed on, so the number you are looking at is always the
+  number the winds were computed from.
+
+The cone also **says its own reach on the ground**, next to its tip, and says
+its width there instead while a width handle is held. The form has the same two
+numbers, and that was not enough: while you drag your eyes are on the cone, and
+while tracing the form is a strip along the bottom whose row for this lane may
+have scrolled out of it.
+
 Widening a lane really does cost you winds. Scent travels downwind, and a stand
 is unhuntable on a wind whose downwind direction falls within the plume's
 half-angle of any lane's bearing — so the wider you open a lane, the more of the
@@ -298,9 +333,10 @@ compass blows your scent across ground you are watching. The winds are
 recomputed as you drag, because a derivation you only see after saving is one
 you cannot correct.
 
-A lane you have never widened stores no width at all and uses the default, so
-changing that default later moves every lane that was never adjusted and leaves
-alone every lane that was.
+A lane you have never set a width on stores no width at all and uses the
+default, so changing that default later moves every lane that was never adjusted
+and leaves alone every lane that was. Dragging a side handle or typing in the
+width box both count as setting one.
 
 **Winds ticked before the boxes went are kept**, because a stand ticked back
 then is still ranked on them when it has no lanes — dropping the column to tidy
@@ -313,7 +349,7 @@ over without being asked to.
 
 | Endpoint | |
 | --- | --- |
-| `GET /api/stands` | Every stand, with parsed winds, lanes, the winds those lanes imply, and nearby cameras |
+| `GET /api/stands` | Every stand, with parsed winds, lanes, the winds those lanes imply (each with its bearing, reach and width across the end), and nearby cameras |
 | `POST /api/stands` | Drop a pin |
 | `PATCH /api/stands/:id` | Rename, move, retype, or change winds or lanes |
 | `DELETE /api/stands/:id` | Remove one |

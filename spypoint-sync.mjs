@@ -1007,9 +1007,13 @@ function terrainRequestForView() {
   const mpp = 156543.03392 * Math.cos(centre.lat * Math.PI / 180) / 2 ** zoom;
   const halfSpan = Math.max(W, H) / 2 * mpp;
   const radius = Math.min(1500, Math.max(150, Math.round(halfSpan)));
-  // Aim for about 120 cells across, so a patch is ~14k samples whatever its
-  // size. The server clamps spacing to 5 m at the finest regardless.
-  const spacing = Math.min(50, Math.max(5, Math.round(2 * radius / 120)));
+  // Aim for about 90 cells across. The wait is ENTIRELY round trips — measured
+  // at 95% of it, with all the hillshade, contour and feature maths together
+  // costing 146 ms — so the sample count is what decides how long you stare at
+  // the button. 90 across is ~8k samples and 9 requests where 120 was ~14k and
+  // 15, for a spacing of about 10 m on a typical view: still finer than the
+  // structure being drawn, since a 2 ft draw is tens of metres wide.
+  const spacing = Math.min(50, Math.max(5, Math.round(2 * radius / 90)));
   return { radius, spacing };
 }
 
@@ -1026,9 +1030,19 @@ async function loadTerrain() {
   terrainLoading = true;
   const { radius, spacing } = terrainRequestForView();
   terrainBtn.textContent = 'Reading ground\u2026';
-  terrainNote('Fetching LiDAR elevation from USGS for about '
-    + (radius >= 1000 ? (radius * 2 / 1000).toFixed(1) + ' km' : radius * 2 + ' m')
-    + ' of ground. A few seconds the first time, then it is cached and instant.');
+  // A ticking counter, because the whole wait is round trips to USGS and the
+  // server cannot answer until they are all done. Without it a ten-second fetch
+  // on a slower connection is indistinguishable from a hung button — which is
+  // exactly how the first version got reported as broken.
+  const started = Date.now();
+  const area = radius >= 1000 ? (radius * 2 / 1000).toFixed(1) + ' km' : radius * 2 + ' m';
+  const tick = () => terrainNote(
+    'Reading LiDAR elevation from USGS for about ' + area + ' of ground\u2026 <b>'
+    + ((Date.now() - started) / 1000).toFixed(0) + 's</b><br>'
+    + 'Nearly all of this is waiting on the elevation service. '
+    + 'Once fetched, this ground is cached and redraws instantly.');
+  tick();
+  const ticker = setInterval(tick, 1000);
   try {
     const res = await fetch('/api/terrain?lat=' + centre.lat + '&lng=' + centre.lng
       + '&radius=' + radius + '&spacing=' + spacing);
@@ -1079,6 +1093,7 @@ async function loadTerrain() {
     terrainNote('Terrain unavailable: ' + err.message);
     terrainOn = false;
   } finally {
+    clearInterval(ticker);
     terrainLoading = false;
     terrainBtn.textContent = 'Terrain';
     terrainBtn.classList.toggle('on', terrainOn);

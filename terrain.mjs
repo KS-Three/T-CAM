@@ -131,7 +131,7 @@ export function parseElevation(v) {
  */
 export async function fetchElevationGrid(bounds, {
   spacingM = 10, signal, onProgress = null, fetchImpl = globalThis.fetch,
-  concurrency = 3,
+  concurrency = 4,
 } = {}) {
   const grid = planGrid(bounds, spacingM);
   const total = grid.cols * grid.rows;
@@ -147,12 +147,15 @@ export async function fetchElevationGrid(bounds, {
 
   const batches = Math.ceil(total / BATCH);
 
-  // Batches run several at a time. Sequentially, a patch covering a zoomed-out
-  // map is fifteen round trips and about a minute of staring at a button —
-  // long enough that the first version felt broken. Three at a time still cuts
-  // that by most of its length while staying polite to a free public service
-  // reached from a home connection; it is a deliberate ceiling, not a value to
-  // raise casually.
+  // Batches run several at a time, because the round trips ARE the wait:
+  // measured at 95% of it, against 146 ms for every piece of terrain maths
+  // combined. Sequentially a typical patch was about a minute of staring at a
+  // button — long enough that the first version felt broken.
+  //
+  // Four at a time. It was briefly three, out of caution about rate limiting a
+  // free service; the retry-with-backoff below now handles a 429 properly, so
+  // the caution is spent in the right place and the ceiling can go back up.
+  // It is still a deliberate ceiling and not a value to raise casually.
   let done = 0;
   let next = 0;
   const worker = async () => {

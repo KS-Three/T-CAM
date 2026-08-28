@@ -256,13 +256,33 @@ const projY = (lat, z) => {
   return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TS * 2 ** z;
 };
 
-let zoom = 16, centre = { lat: 0, lng: 0 };
-if (located.length) {
-  const lats = located.map(c => c.lat), lngs = located.map(c => c.lng);
+// Where to point the map when it opens.
+//
+// This used to frame the cameras and nothing else, and if no camera reported
+// GPS the map replaced itself with a one-line apology — taking every stand,
+// marker, route and the measure tool down with it. That is backwards: a camera
+// is one of the things ON the map, not the reason there is one. Somebody who
+// has dropped four stands and no cameras has MORE to look at, not less.
+//
+// So it frames everything with coordinates, and the map is always drawn.
+const framePoints = [
+  ...located.map(c => [c.lng, c.lat]),
+  ...(D.stands || []).map(s => [s.lng, s.lat]),
+  ...(D.markers || []).map(m => [m.lng, m.lat]),
+].filter(([lng, lat]) => typeof lat === 'number' && typeof lng === 'number');
+
+// Nothing placed at all: the continental US, wide, so panning to your ground
+// and dropping the first stand is possible rather than blocked.
+let zoom = 4, centre = { lat: 39.5, lng: -98.35 };
+if (framePoints.length) {
+  const lats = framePoints.map(p => p[1]), lngs = framePoints.map(p => p[0]);
   const [m1, m2] = [Math.min(...lats), Math.max(...lats)];
   const [n1, n2] = [Math.min(...lngs), Math.max(...lngs)];
   centre = { lat: (m1 + m2) / 2, lng: (n1 + n2) / 2 };
-  // Widest zoom whose pixel span still fits, so every camera lands on screen.
+  // Widest zoom whose pixel span still fits, so everything lands on screen.
+  // A single point has no span, so this settles at 18 and is then clamped by
+  // the layer's own maximum when the first draw happens.
+  zoom = 16;
   for (let z = 18; z >= 2; z--) {
     const w = Math.abs(projX(n2, z) - projX(n1, z)), h = Math.abs(projY(m1, z) - projY(m2, z));
     if (w < mapEl.clientWidth - 90 && h < mapEl.clientHeight - 90) { zoom = z; break; }
@@ -1508,6 +1528,16 @@ mapEl.addEventListener('wheel', e => {
   setZoom(zoom + (e.deltaY < 0 ? 1 : -1));
 }, { passive: false });
 addEventListener('resize', draw);
-if (located.length) { paintControl(); draw(); }
-else mapEl.innerHTML = '<div style="padding:20px;color:#888">No camera reported GPS coordinates.</div>';
+paintControl();
+draw();
+// Said once, in the note strip, rather than by hiding the map. Both facts are
+// worth telling apart: a camera that has not reported GPS is a camera problem,
+// and having nothing placed at all is a "drop your first pin" problem.
+if (!framePoints.length) {
+  terrainNote('Nothing has coordinates yet. Pan to your ground and press '
+    + '<b>+ Add stand</b>, or run a sync once a camera reports GPS.');
+} else if (!located.length) {
+  terrainNote('No camera has reported GPS, so the map is framed on your stands '
+    + 'and markers instead.');
+}
 `;

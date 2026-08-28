@@ -34,6 +34,7 @@ import {
   detectionsForVisit, addDetection, updateDetection, deleteDetection,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS,
   saveWindClimatology, windClimatology,
+  allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
@@ -44,6 +45,7 @@ import { reviewHtml } from './review-page.mjs';
 import {
   fetchArchive, climatology, standCoverage, SEASON_MONTHS,
 } from './wind-history.mjs';
+import { assessRoute, routeWinds, routeLength } from './routes.mjs';
 import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
@@ -625,6 +627,60 @@ export function createServer({ out = OPT.out } = {}) {
           }
         }
       }
+
+      // --- entry and exit routes ------------------------------------------
+      // How you get to a stand. Judged the same way the stand is: against the
+      // wind, because walking to a good stand across the ground you are about
+      // to hunt is how a good stand gets wasted.
+      if (url.pathname === '/api/routes') {
+        if (req.method === 'GET') {
+          const stands = allStands(db);
+          return sendJson(res, 200, allRoutes(db).map(r => {
+            const stand = stands.find(x => x.id === r.stand_id) ?? null;
+            return {
+              ...r,
+              lengthM: routeLength(r.points),
+              // Which winds this walk is clean on, worked out when the route is
+              // CUT rather than only on the morning you use it — which is when
+              // you can still move it.
+              winds: stand ? routeWinds(r.points, stand) : null,
+            };
+          }));
+        }
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          try {
+            return sendJson(res, 201, createRoute(db, {
+              standId: b.standId ?? null, name: b.name ?? null,
+              points: b.points, notes: b.notes ?? null,
+            }));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
+      const routeMatch = url.pathname.match(/^\/api\/routes\/(\d+)$/);
+      if (routeMatch) {
+        const id = Number(routeMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            const patch = {};
+            for (const k of ['standId', 'name', 'points', 'notes']) {
+              if (b[k] !== undefined) patch[k] = b[k];
+            }
+            return sendJson(res, 200, updateRoute(db, id, patch));
+          } catch (err) {
+            return sendJson(res, /no route with id/.test(err.message) ? 404 : 400,
+              { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteRoute(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: `no route with id ${id}` });
+        }
+      }
       // --- scouting markers ---------------------------------------------
       // Sign found on the ground. Same shape as stands deliberately: one CRUD
       // pattern for everything the map lets you place.
@@ -753,8 +809,25 @@ export function createServer({ out = OPT.out } = {}) {
         const terrainAt = standTerrainLookup(db);
         const hasTerrain = stands.some(st => terrainAt(st) !== null);
         const howMany = Math.min(10, Math.max(1, Number(url.searchParams.get('sits')) || 3));
+        const allStandRows = stands;
         const sits = (plan?.sits ?? []).slice(0, howMany).map(sit => {
-          const ranked = rankStands({ stands, sit, terrainAt });
+          const ranked = rankStands({ stands, sit, terrainAt }).map(r => {
+            const routes = routesForStand(db, r.id);
+            if (!routes.length) return r;
+            const stand = allStandRows.find(s => s.id === r.id);
+            // The best of the available walks: having one clean route is what
+            // matters, not whether every route is clean.
+            const verdicts = routes.map(rt => ({
+              id: rt.id, name: rt.name,
+              ...assessRoute(rt, {
+                stand,
+                others: allStandRows.filter(s => s.id !== r.id),
+                windFromDeg: sit.windDir,
+              }),
+            }));
+            const best = verdicts.find(v => v.ok === true) ?? verdicts[0];
+            return { ...r, routes: verdicts, walk: best };
+          });
           return {
             date: sit.date, window: sit.window, rating: sit.rating,
             score: sit.total, windFrom: sit.windFrom, rut: sit.rut,

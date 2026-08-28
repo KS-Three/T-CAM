@@ -389,6 +389,16 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
              background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
   #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
                           stroke-dasharray: none; }
+  /* A walk-in route. Drawn heavier than a contour and in a colour used for
+     nothing else on the map, because it is the only line you put there
+     yourself. */
+  #contours path.route { stroke: rgba(190,140,255,.95); stroke-width: 3; fill: none;
+                         stroke-linecap: round; stroke-linejoin: round; }
+  #contours path.route.draft { stroke-dasharray: 6 5; }
+  .routetip { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+              z-index: 6; background: var(--panel); border: 1px solid var(--accent);
+              border-radius: 8px; padding: 7px 12px; font-size: 12px; color: var(--ink);
+              box-shadow: 0 2px 12px rgba(0,0,0,.35); }
   /* Top-RIGHT, below the zoom buttons. It used to sit bottom-left, which was
      fine with three toolbar buttons and started covering the fifth one when the
      toolbar grew. The bottom-right corner is spoken for by the parcel card. */
@@ -534,6 +544,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
       <button id="terrainBtn" type="button">Terrain</button>
       <button id="markBtn" type="button">+ Mark sign</button>
       <button id="offlineBtn" type="button">Save offline</button>
+      <button id="routeBtn" type="button">+ Walk-in route</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -939,6 +950,150 @@ function openMarkerForm(marker) {
 
 
 
+
+// ---- walk-in routes ---------------------------------------------------
+// The classic way a good stand is wasted: not sitting it on the wrong wind, but
+// walking to it across the ground you were about to hunt. A route is judged the
+// same way a stand is — against the wind — and the two have to agree.
+let ROUTES = [];
+let drawing = null;      // the route being drawn: { standId, points: [] }
+const routeBtn = document.getElementById('routeBtn');
+
+async function refreshRoutes() {
+  ROUTES = await (await fetch('/api/routes')).json();
+  draw();
+}
+
+function routePaths(left, top) {
+  const out = [];
+  for (const r of ROUTES) {
+    if (!r.points || r.points.length < 2) continue;
+    out.push('<path class="route" d="' + svgPath(r.points, left, top, false) + '"></path>');
+  }
+  if (drawing && drawing.points.length >= 2) {
+    out.push('<path class="route draft" d="' + svgPath(drawing.points, left, top, false) + '"></path>');
+  }
+  return out;
+}
+
+function routeTip(text) {
+  document.querySelector('.routetip')?.remove();
+  if (!text) return;
+  const t = el('div', 'routetip');
+  t.innerHTML = text;
+  mapEl.appendChild(t);
+}
+
+routeBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  if (drawing) return finishRoute();
+  if (!STANDS.length) {
+    return terrainNote('Drop a stand first \u2014 a route is the way in to one, '
+      + 'so there is nothing to judge it against until a stand exists.');
+  }
+  // Turn off the other map modes, so a click means one thing.
+  if (placing) addBtn.onclick(new Event('click'));
+  if (marking) markBtn.onclick(new Event('click'));
+  if (identifying) ownBtn.onclick(new Event('click'));
+  drawing = { standId: null, points: [] };
+  routeBtn.classList.add('on');
+  routeBtn.textContent = 'Finish route';
+  mapEl.classList.add('placing');
+  routeTip('Click along your walk in. <b>Enter</b> or <b>Finish route</b> when done, '
+    + '<b>Esc</b> to cancel.');
+};
+if (!D.live) {
+  routeBtn.disabled = true;
+  routeBtn.title = 'Routes need the server';
+  routeBtn.style.opacity = '0.6';
+  routeBtn.style.cursor = 'not-allowed';
+}
+
+function cancelRoute() {
+  drawing = null;
+  routeBtn.classList.remove('on');
+  routeBtn.textContent = '+ Walk-in route';
+  mapEl.classList.remove('placing');
+  routeTip(null);
+  draw();
+}
+
+async function finishRoute() {
+  if (!drawing) return;
+  const points = drawing.points;
+  if (points.length < 2) return cancelRoute();
+  const pts = points.slice();
+  cancelRoute();
+  openRouteForm(pts);
+}
+
+function openRouteForm(points) {
+  document.querySelector('.standform')?.remove();
+  const form = el('div', 'standform');
+  form.appendChild(el('h3', null, 'Walk-in route'));
+
+  const name = document.createElement('input');
+  name.placeholder = 'From the gate';
+  form.append(el('label', null, 'Name'), name);
+
+  // Which stand this is the way IN to. A route without one cannot be judged,
+  // so it is required rather than optional.
+  const sel = document.createElement('select');
+  for (const st of STANDS) {
+    const o = document.createElement('option');
+    o.value = String(st.id); o.textContent = st.name;
+    sel.appendChild(o);
+  }
+  form.append(el('label', null, 'The way in to'), sel);
+
+  // The end of the walk is the last point, so the nearest stand to it is very
+  // likely the one meant — offered as a default rather than assumed silently.
+  const last = points[points.length - 1];
+  let best = null, bestM = Infinity;
+  for (const st of STANDS) {
+    const m = Math.hypot((st.lng - last[0]) * 80000, (st.lat - last[1]) * 111000);
+    if (m < bestM) { bestM = m; best = st; }
+  }
+  if (best) sel.value = String(best.id);
+
+  const row = el('div', 'formrow');
+  const save = el('button', 'primary', 'Save route');
+  const cancel = el('button', null, 'Discard');
+  row.append(save, cancel);
+  form.appendChild(row);
+  cancel.onclick = () => { form.remove(); draw(); };
+  save.onclick = async () => {
+    try {
+      await apiWrite('POST', '/api/routes', {
+        standId: Number(sel.value), name: name.value.trim() || null, points,
+      });
+      form.remove();
+      await refreshRoutes();
+      const saved = ROUTES[ROUTES.length - 1];
+      if (saved?.winds) {
+        terrainNote('<b>' + (saved.name || 'Route') + '</b> \u2014 ' + saved.lengthM + ' m.<br>'
+          + 'Clean on <b>' + saved.winds.clean.join(' ') + '</b>.<br>'
+          + (saved.winds.dirty.length
+            ? '<span class="warn">Blows your scent over the stand on '
+              + saved.winds.dirty.join(' ') + '.</span>'
+            : 'Upwind of the stand on every wind.'));
+      }
+    } catch (err) {
+      form.appendChild(el('div', 'hint', 'Could not save: ' + err.message));
+    }
+  };
+  mapEl.appendChild(form);
+  name.focus();
+}
+
+addEventListener('keydown', e => {
+  if (!drawing) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'Enter') { e.preventDefault(); finishRoute(); }
+  else if (e.key === 'Escape') { e.preventDefault(); cancelRoute(); }
+});
+
 // ---- which stands earn their keep -------------------------------------
 // A stand's good winds decide whether you can sit it TONIGHT. This answers the
 // other question: across a whole season, how often is it huntable at all? On
@@ -1074,6 +1229,7 @@ async function loadWindHistory() {
   windArea.appendChild(wrap);
 }
 loadWindHistory();
+if (D.live) refreshRoutes().catch(() => {});
 
 // ---- review queue -----------------------------------------------------
 // A pointer to the screen where photos become data. Everything downstream —
@@ -1360,9 +1516,10 @@ function svgPath(points, left, top, close) {
 }
 
 function parcelPaths(left, top) {
-  if (!PARCEL_RINGS) return [];
-  return PARCEL_RINGS.map(ring =>
-    '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>');
+  const out = PARCEL_RINGS
+    ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
+    : [];
+  return out.concat(routePaths(left, top));
 }
 
 /** The parcel boundary alone, when the terrain layer is off. */
@@ -1784,6 +1941,17 @@ mapEl.addEventListener('click', e => {
     ownBtn.textContent = 'Who owns this?';
     mapEl.classList.remove('placing');
     lookupParcel(at0.lat, at0.lng);
+    return;
+  }
+  if (drawing) {
+    const rd = mapEl.getBoundingClientRect();
+    const dx = e.clientX - rd.left, dy = e.clientY - rd.top;
+    if (dx < 0 || dy < 0 || dx > rd.width || dy > rd.height) return;
+    const at = pixelToLatLng(dx, dy);
+    drawing.points.push([at.lng, at.lat]);
+    routeTip(drawing.points.length + ' point' + (drawing.points.length === 1 ? '' : 's')
+      + ' \u2014 <b>Enter</b> to finish, <b>Esc</b> to cancel.');
+    draw();
     return;
   }
   if (marking) {

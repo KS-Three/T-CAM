@@ -352,6 +352,35 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 7,
+    name: 'entry and exit routes',
+    up: db => {
+      // How you get to a stand. The classic way a good stand is wasted is not
+      // sitting it on the wrong wind — it is walking to it across the ground
+      // you were about to hunt.
+      //
+      // Attached to a stand rather than free-floating, because a route's whole
+      // meaning is "the way in to THAT", and the judgement it supports is
+      // whether the walk is upwind of the place you are going.
+      //
+      // Points are JSON rather than a table of their own: a route is read and
+      // written whole, never queried point by point, and a path of twenty
+      // coordinates is not a relation worth normalising.
+      db.exec(`
+        CREATE TABLE routes (
+          id          INTEGER PRIMARY KEY,
+          stand_id    INTEGER REFERENCES stands(id) ON DELETE CASCADE,
+          name        TEXT,
+          points      TEXT NOT NULL,
+          notes       TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX routes_stand ON routes(stand_id);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1110,3 +1139,82 @@ export function windClimatology(db, lat, lng, months, years) {
   if (!row) return null;
   return { ...JSON.parse(row.data), fetchedAt: row.fetched_at, cached: true };
 }
+
+// ---------------------------------------------------------------------------
+// Entry and exit routes
+// ---------------------------------------------------------------------------
+
+function parsePoints(points) {
+  const list = typeof points === 'string' ? JSON.parse(points) : points;
+  if (!Array.isArray(list) || list.length < 2) {
+    throw new Error('a route needs at least two points');
+  }
+  for (const p of list) {
+    if (!Array.isArray(p) || p.length < 2) throw new Error('each route point is [lng, lat]');
+    // Rejected BEFORE conversion, and this comment was already here while the
+    // code below did the conversion first: Number(null) is 0, so [null, 43]
+    // passed every finite-and-in-range check as a point off the coast of
+    // Africa. Writing the warning down is not the same as obeying it.
+    for (const v of [p[0], p[1]]) {
+      if (v === null || v === undefined || v === '' || typeof v === 'boolean') {
+        throw new Error('a route point is missing a coordinate');
+      }
+    }
+    const [lng, lat] = p.map(Number);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+      || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new Error('a route needs real coordinates');
+    }
+  }
+  return list.map(p => [Number(p[0]), Number(p[1])]);
+}
+
+export function createRoute(db, { standId = null, name = null, points, notes = null }) {
+  const list = parsePoints(points);
+  if (standId !== null && !db.prepare('SELECT id FROM stands WHERE id = ?').get(standId)) {
+    throw new Error(`no stand with id ${standId}`);
+  }
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO routes (stand_id, name, points, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(standId, name, JSON.stringify(list), notes, now, now);
+  return routeById(db, Number(info.lastInsertRowid));
+}
+
+const routeRow = r => r && ({ ...r, points: JSON.parse(r.points) });
+
+export const routeById = (db, id) =>
+  routeRow(db.prepare('SELECT * FROM routes WHERE id = ?').get(id)) ?? null;
+
+export const allRoutes = db => db.prepare(`
+  SELECT r.*, s.name AS stand_name, s.lat AS stand_lat, s.lng AS stand_lng
+  FROM routes r LEFT JOIN stands s ON s.id = r.stand_id
+  ORDER BY r.id
+`).all().map(routeRow);
+
+export const routesForStand = (db, standId) =>
+  db.prepare('SELECT * FROM routes WHERE stand_id = ? ORDER BY id').all(standId).map(routeRow);
+
+export function updateRoute(db, id, patch = {}) {
+  const row = routeById(db, id);
+  if (!row) throw new Error(`no route with id ${id}`);
+  const next = {
+    standId: patch.standId !== undefined ? patch.standId : row.stand_id,
+    name: patch.name !== undefined ? patch.name : row.name,
+    points: patch.points !== undefined ? parsePoints(patch.points) : row.points,
+    notes: patch.notes !== undefined ? patch.notes : row.notes,
+  };
+  if (next.standId !== null
+    && !db.prepare('SELECT id FROM stands WHERE id = ?').get(next.standId)) {
+    throw new Error(`no stand with id ${next.standId}`);
+  }
+  db.prepare(`
+    UPDATE routes SET stand_id = ?, name = ?, points = ?, notes = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.standId, next.name, JSON.stringify(next.points), next.notes, nowIso(), id);
+  return routeById(db, id);
+}
+
+export const deleteRoute = (db, id) =>
+  db.prepare('DELETE FROM routes WHERE id = ?').run(id).changes > 0;

@@ -38,3 +38,7 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Downloaded collar datasets — CC0, but too big for the repo (see collar-data/README.md)
+collar-data/*
+!collar-data/README.md

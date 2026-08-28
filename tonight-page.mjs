@@ -89,6 +89,12 @@ const RATING_CLASS = { prime: 'ok', good: 'ok', fair: 'warn', poor: 'bad' };
 
 let DATA = null;
 let clockTimer = null;
+// Which sit we have already rolled over from. startClock() calls tick()
+// immediately and load() calls startClock(), so an unguarded reload from
+// inside tick() re-enters itself: online the server hands back the NEXT sit
+// and it settles, but offline the worker keeps answering with the same
+// expired one and the phone spins at exactly close of light.
+let rolledOverFrom = null;
 
 let CACHED_AT = null;   // set when the answer came from the offline cache
 
@@ -240,13 +246,24 @@ function lightCard(sit) {
 
   const rows = el('div', 'rows');
   rows.style.marginTop = '8px';
-  row(rows, sit.window === 'AM' ? 'Opens' : 'Closes',
-    sit.window === 'AM' ? h.openLocal + ' (sunrise ' + h.sunriseLocal + ')'
-                        : h.closeLocal + ' (sunset ' + h.sunsetLocal + ')');
-  row(rows, 'Legal window', h.openLocal + ' to ' + h.closeLocal);
+  if (sit.window === 'AM' && h.openLocal) {
+    row(rows, 'Opens', h.openLocal + ' (sunrise ' + h.sunriseLocal + ')');
+  } else if (sit.window === 'PM' && h.closeLocal) {
+    row(rows, 'Closes', h.closeLocal + ' (sunset ' + h.sunsetLocal + ')');
+  }
+  // Only when BOTH ends are known. A plan too old to record sunrise and
+  // sunset gives one bound per window and the other is not recoverable —
+  // printing a made-up second bound as "the legal window" is the one mistake
+  // this whole file is written to avoid.
+  if (h.openLocal && h.closeLocal) {
+    row(rows, 'Legal window', h.openLocal + ' to ' + h.closeLocal);
+  } else {
+    row(rows, 'Legal window', (sit.window === 'AM' ? 'opens ' + h.openLocal
+      : 'closes ' + h.closeLocal) + ' — the other end is not in this plan');
+  }
 
   const d = sit.depart;
-  if (d) {
+  if (d && isFinite(d.sitBy) && isFinite(d.leaveBy)) {
     row(rows, 'Be settled by', clockOf(d.sitBy, sit));
     const walkTxt = d.walkKnown
       ? dur(d.walkMinutes) + ' walk plus ' + d.settleMin + ' min to settle'
@@ -259,7 +276,11 @@ function lightCard(sit) {
   const rules = DATA.shootingHours || {};
   caveat.textContent = (rules.beforeSunriseMin || 30) + ' min before sunrise to '
     + (rules.afterSunsetMin || 20) + ' min after sunset. ' + (rules.caveat || '');
-  if (h.exact === false) {
+  if (h.partial) {
+    caveat.textContent += ' This plan predates sunrise and sunset being recorded, so '
+      + 'only the ' + (h.partial === 'AM' ? 'opening' : 'closing')
+      + ' of light is known for it. Re-run the planner for the full window.';
+  } else if (h.exact === false) {
     caveat.textContent += ' These times were worked out without a recorded timezone '
       + 'for the property, so treat the minute as approximate and re-run the planner.';
   }
@@ -292,13 +313,31 @@ function startClock() {
     const h = sit.hours;
     if (!h) return;
     const now = Date.now();
+    if (!isFinite(h.open) || !isFinite(h.close)) {
+      // Half a day. Count down to the end this window actually has, and say
+      // nothing about the other.
+      const edge = sit.window === 'AM' ? h.open : h.close;
+      if (!isFinite(edge)) { node.textContent = 'shooting light not known'; return; }
+      const mins = (edge - now) / 60000;
+      node.textContent = mins > 0
+        ? dur(mins) + (sit.window === 'AM' ? ' until light' : ' of light left')
+        : (sit.window === 'AM' ? 'light has opened' : 'light is over');
+      node.style.color = 'var(--muted)';
+      return;
+    }
     if (now < h.open) {
       node.textContent = dur((h.open - now) / 60000) + ' until light';
       node.style.color = 'var(--muted)';
     } else if (now > h.close) {
       node.textContent = 'light is over';
       node.style.color = 'var(--bad)';
-      load();
+      const id = sit.date + sit.window;
+      if (rolledOverFrom !== id) {
+        rolledOverFrom = id;
+        clearInterval(clockTimer);
+        clockTimer = null;
+        load();
+      }
     } else {
       const left = (h.close - now) / 60000;
       node.textContent = dur(left) + ' of light left';
@@ -491,12 +530,21 @@ function logCard(sit) {
       harvested: harvested.checked,
       notes: notes.value.trim() || null,
     };
+    // The two failures are different and must not share a handler. A fetch
+    // that THROWS means no server: queue it. A server that ANSWERS with an
+    // error has seen the sit and rejected it, and queueing that would tell
+    // you it was saved and then drop it on the next flush.
+    let res;
     try {
-      const res = await fetch('/api/sits', {
+      res = await fetch('/api/sits', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
+    } catch (err) {
+      return queueOffline(err);
+    }
+    try {
       const saved = await res.json();
       if (!res.ok) throw new Error(saved.error || ('HTTP ' + res.status));
       form.remove(); checks.remove(); row.remove();
@@ -511,6 +559,14 @@ function logCard(sit) {
       status.textContent = '';
       status.appendChild(link);
     } catch (err) {
+      // The server answered and refused it, or sent something unreadable.
+      // Say so and leave the form filled in so it can be corrected.
+      status.textContent = 'The server would not accept this: ' + err.message;
+      save.disabled = false;
+      save.textContent = 'Log this sit';
+    }
+
+    function queueOffline(err) {
       // No server. The sit is worth more than the error: queue it on the
       // phone and it goes home on the next load that reaches the server.
       const queued = typeof SITQ !== 'undefined' ? SITQ.enqueue(body) : 0;

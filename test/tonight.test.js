@@ -120,3 +120,72 @@ test('with no route recorded the walk is zero and it says so', () => {
   assert.equal(d.walkKnown, false);
   assert.equal(d.walkMinutes, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Half-known days — plans written before sunrise and sunset were recorded
+// ---------------------------------------------------------------------------
+
+const legacy = (window, extra = {}) => ({
+  date: '2026-11-07', window,
+  // The planner's scoring window: AM is sunrise-1.5h to sunrise+3.5h,
+  // PM is sunset-3.5h to sunset+0.5h.
+  start: window === 'AM' ? '2026-11-07T11:05:00Z' : '2026-11-07T19:02:00Z',
+  end: window === 'AM' ? '2026-11-07T16:05:00Z' : '2026-11-07T23:02:00Z',
+  windDir: 290, total: 40, rating: 'fair', ...extra,
+});
+
+test('a morning-only plan gives the morning bound and NOTHING for the evening', () => {
+  // The first version completed the day by arithmetic: it took the far edge of
+  // the morning scoring window as "sunset", so close came out around sunrise
+  // plus four hours — and the page printed that as the legal window. Of
+  // everything this program says, that is the one number that can cost a
+  // citation.
+  const r = resolveSit(legacy('AM'), { now: AT('2026-11-07T10:00:00Z') });
+  assert.equal(r.hours.partial, 'AM');
+  assert.ok(Number.isFinite(r.hours.open), 'the opening of light is known');
+  assert.equal(r.hours.close, null, 'the close is NOT invented');
+  assert.equal(r.hours.closeLocal, null);
+  assert.equal(r.hours.exact, false);
+  // Sunrise is start + 1h30; light opens 30 minutes before that.
+  assert.equal(new Date(r.hours.sunrise).toISOString(), '2026-11-07T12:35:00.000Z');
+  assert.equal((r.hours.sunrise - r.hours.open) / 60000, 30);
+});
+
+test('an evening-only plan gives the closing bound and nothing for the morning', () => {
+  const r = resolveSit(legacy('PM'), { now: AT('2026-11-07T20:00:00Z') });
+  assert.equal(r.hours.partial, 'PM');
+  assert.equal(r.hours.open, null);
+  assert.equal(r.hours.openLocal, null);
+  assert.ok(Number.isFinite(r.hours.close));
+  // Sunset is end - 30 min; light closes 20 minutes after it.
+  assert.equal(new Date(r.hours.sunset).toISOString(), '2026-11-07T22:32:00.000Z');
+  assert.equal((r.hours.close - r.hours.sunset) / 60000, 20);
+});
+
+test('a half-known day says the phase is unknown rather than guessing legality', () => {
+  const r = resolveSit(legacy('AM'), { now: AT('2026-11-07T14:00:00Z') });
+  assert.equal(r.light.partial, true);
+  assert.equal(r.light.legal, null, 'not true, and not false — unknown');
+  assert.equal(r.light.phase, 'unknown');
+});
+
+test('a half-known day still orders correctly against complete ones', () => {
+  // Sequencing is a different question from legality: getting it slightly
+  // wrong picks a neighbouring sit, it does not misstate shooting hours.
+  const { sits: next } = nextSits(
+    [legacy('PM'), sit('2026-11-08', 'AM')],
+    { now: AT('2026-11-07T20:00:00Z') },
+  );
+  assert.equal(next[0].date, '2026-11-07');
+  assert.equal(next[0].window, 'PM');
+  assert.equal(next[1].window, 'AM');
+});
+
+test('with no usable bound there is no departure time, rather than a made-up one', () => {
+  const am = resolveSit(legacy('AM'), { now: AT('2026-11-07T10:00:00Z') });
+  assert.ok(departure(am, { lengthM: 400 }), 'a morning sit has its own bound');
+  // A morning sit whose start is unparseable has neither.
+  const broken = resolveSit({ ...legacy('AM'), start: 'x', end: 'y' },
+    { now: AT('2026-11-07T10:00:00Z') });
+  assert.equal(broken, null, 'and an unreadable one resolves to nothing at all');
+});

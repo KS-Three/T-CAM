@@ -125,6 +125,22 @@ export function shiftClock(naive, deltaMin) {
 export function lightNow(hours, now = Date.now()) {
   if (!hours) return null;
   const min = ms => Math.round(ms / 60000);
+  // A plan too old to record both ends of the day gives one bound only. Say
+  // which half is known rather than inventing the other.
+  if (!Number.isFinite(hours.open) || !Number.isFinite(hours.close)) {
+    if (Number.isFinite(hours.close) && now > hours.close) {
+      return { phase: 'after', legal: false, partial: true,
+        minutesSinceClose: min(now - hours.close) };
+    }
+    if (Number.isFinite(hours.open) && now < hours.open) {
+      return { phase: 'before', legal: false, partial: true,
+        minutesToOpen: min(hours.open - now) };
+    }
+    return {
+      phase: 'unknown', legal: null, partial: true,
+      minutesToClose: Number.isFinite(hours.close) ? min(hours.close - now) : null,
+    };
+  }
   if (now < hours.open) {
     return {
       phase: 'before', legal: false,
@@ -154,6 +170,10 @@ export const SETTLE_MIN = 30;
 
 export function beInTreeBy(hours, window, { walkMinutes = 0 } = {}) {
   if (!hours) return null;
+  // The bound this window is planned against has to be the known one.
+  if (window === 'AM' ? !Number.isFinite(hours.open) : !Number.isFinite(hours.close)) {
+    return null;
+  }
   // A morning sit is judged against the opening of light; an evening sit
   // against deer moving in the last couple of hours, so the target is earlier
   // than "before dark" by a wide margin.

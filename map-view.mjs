@@ -795,7 +795,7 @@ function openRouteForm(points) {
 
 addEventListener('keydown', e => {
   if (!drawing) return;
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (isTyping(e.target)) return;
   if (e.key === 'Enter') { e.preventDefault(); finishRoute(); }
   else if (e.key === 'Escape') { e.preventDefault(); cancelRoute(); }
 });
@@ -917,9 +917,16 @@ function stopMeasuring() {
   draw();
 }
 
+// A control the user is typing into. TEXTAREA was missing, so with measure
+// armed, Backspace in a stand or marker notes box deleted a map point instead
+// of a character — and clicking a pin does not disarm measure, so the state is
+// one click away.
+const isTyping = t => t && (t.tagName === 'INPUT' || t.tagName === 'SELECT'
+  || t.tagName === 'TEXTAREA' || t.isContentEditable);
+
 addEventListener('keydown', e => {
   if (!measuring) return;
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (isTyping(e.target)) return;
   if (e.key === 'Escape') { e.preventDefault(); stopMeasuring(); }
   else if (e.key === 'Backspace') {
     e.preventDefault();
@@ -1032,7 +1039,12 @@ async function loadSuggestions() {
   terrainNote('Reading the ground and your wind history\u2026');
   try {
     const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6);
-    const body = await (await fetch('/api/suggest-stands' + q)).json();
+    const res = await fetch('/api/suggest-stands' + q);
+    const body = await res.json();
+    // The endpoint says WHY it could not answer — no stands yet, no LiDAR
+    // coverage, the terrain service down. Without this check all three came
+    // out as the blandest possible lie: "Nothing to suggest here."
+    if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
     SUGGESTIONS = body.candidates || [];
     SUGGEST_CAVEAT = body.caveat || null;
     const lines = [];
@@ -1681,6 +1693,8 @@ const onMapGround = t =>
 
 mapEl.addEventListener('click', e => {
   if (!onMapGround(e.target)) return;
+  // The click that ends a pan is not a tap on the ground.
+  if (dragged) { dragged = false; return; }
   if (identifying) {
     const r0 = mapEl.getBoundingClientRect();
     const ix = e.clientX - r0.left, iy = e.clientY - r0.top;
@@ -1739,17 +1753,27 @@ mapEl.addEventListener('click', e => {
 });
 
 let drag = null;
+// A pan ends in a click, and every map mode treats a click as "put something
+// here" — so dragging the map to see the rest of a shape dropped a measure
+// point where you let go. Anything past a few pixels is a drag, not a tap;
+// the threshold also absorbs the wobble of a finger on glass.
+const DRAG_SLOP_PX = 5;
+let dragged = false;
 mapEl.addEventListener('pointerdown', e => {
   // Same test as the click handler, deliberately: pressing a control must not
   // start a drag, and must not capture the pointer away from that control.
   if (!onMapGround(e.target)) return;
-  drag = { x: e.clientX, y: e.clientY }; mapEl.classList.add('drag');
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+  dragged = false;
+  mapEl.classList.add('drag');
   mapEl.setPointerCapture(e.pointerId);
 });
 mapEl.addEventListener('pointermove', e => {
   if (!drag) return;
+  if (Math.abs(e.clientX - drag.x0) > DRAG_SLOP_PX
+      || Math.abs(e.clientY - drag.y0) > DRAG_SLOP_PX) dragged = true;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  drag = { x: e.clientX, y: e.clientY };
+  drag = { ...drag, x: e.clientX, y: e.clientY };
   const cx = projX(centre.lng, zoom) - dx, cy = projY(centre.lat, zoom) - dy;
   const n = TS * 2 ** zoom;
   centre.lng = cx / n * 360 - 180;

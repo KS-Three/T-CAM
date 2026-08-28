@@ -269,3 +269,30 @@ test('a p-value is never reported as exactly zero', () => {
   assert.doesNotMatch(c.why, /p 0\.000/);
   assert.match(c.why, /p < 0\.0/);
 });
+
+test('sits with no forecast direction leave the denominator with them', () => {
+  // The planner writes '?' for a forecast that carried no wind direction.
+  // Dividing by every row scored those as misses and reported the forecast as
+  // worse than it was: two right out of two became "50% exact".
+  const s = (pred, actual) => ({
+    date: '2026-11-07', window: 'PM',
+    predicted: { windFrom: pred }, wind_from: actual,
+  });
+  const w = windAccuracy([s('NW', 'NW'), s('W', 'W'), s('?', 'NW'), s('?', 'S')]);
+  assert.equal(w.sits, 4, 'all four rows had both fields present');
+  assert.equal(w.scored, 2, 'only two could actually be compared');
+  assert.equal(w.skipped, 2);
+  assert.equal(w.exact, 100, 'and the forecast got both of those right');
+  assert.match(w.why, /2 more had no forecast direction/);
+});
+
+test('when nothing can be compared it says so rather than reporting 0%', () => {
+  const s = (pred, actual) => ({
+    date: '2026-11-07', window: 'PM',
+    predicted: { windFrom: pred }, wind_from: actual,
+  });
+  const w = windAccuracy([s('?', 'NW'), s('?', 'S')]);
+  assert.equal(w.scored, 0);
+  assert.equal(w.exact, null, '0% would read as "the forecast is always wrong"');
+  assert.match(w.why, /recorded no direction/);
+});

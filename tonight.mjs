@@ -17,7 +17,10 @@
  * become tomorrow morning.
  */
 
-import { shootingHours, lightNow, beInTreeBy, walkMinutes } from './legal-light.mjs';
+import {
+  shootingHours, lightNow, beInTreeBy, walkMinutes, clockFace, shiftClock,
+  WISCONSIN_DEER as DEFAULT_RULES,
+} from './legal-light.mjs';
 
 /**
  * Attach real instants and shooting hours to one sit from plan.json.
@@ -40,20 +43,40 @@ export function resolveSit(sit, { rules, now = Date.now() } = {}) {
   if (sunrise && sunset) {
     hours = shootingHours(sunrise, sunset, { rules, utcOffsetSeconds: offset });
   } else if (sit.start && sit.end) {
-    // start = sunrise - 1.5h (AM) or sunset - 3.5h (PM); end likewise.
+    // A plan too old to record sunrise and sunset. The scoring window is
+    // offset from them, so ONE of the two is recoverable per window and the
+    // other genuinely is not: a morning window says nothing about that
+    // evening's sunset.
+    //
+    // The first version derived the missing one from the wrong edge anyway —
+    // an AM sit came out with a "close" of roughly sunrise plus four hours,
+    // and the page printed that as the legal window. Of everything this
+    // program says, that is the single number that can cost a citation, so a
+    // half-known day is now reported as half-known rather than completed with
+    // arithmetic that has no meaning.
     const startMs = Date.parse(sit.start), endMs = Date.parse(sit.end);
     if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
-      const riseMs = sit.window === 'AM' ? startMs + 1.5 * 3600000 : null;
-      const setMs = sit.window === 'PM' ? endMs - 0.5 * 3600000 : null;
-      // Only one of the two is recoverable per window, which is enough for
-      // that window's own end of the day.
       const iso = ms => new Date(ms).toISOString().slice(0, 16);
-      hours = shootingHours(
-        riseMs !== null ? iso(riseMs) : iso(startMs),
-        setMs !== null ? iso(setMs) : iso(endMs),
-        { rules, utcOffsetSeconds: 0 },
-      );
-      if (hours) hours.exact = false;
+      const rule = rules ?? DEFAULT_RULES;
+      if (sit.window === 'AM') {
+        const riseMs = startMs + 1.5 * 3600000;
+        hours = {
+          sunrise: riseMs, sunset: null,
+          open: riseMs - rule.beforeSunriseMin * 60000, close: null,
+          sunriseLocal: clockFace(iso(riseMs)), sunsetLocal: null,
+          openLocal: shiftClock(iso(riseMs), -rule.beforeSunriseMin), closeLocal: null,
+          minutes: null, exact: false, partial: 'AM', rules: rule,
+        };
+      } else {
+        const setMs = endMs - 0.5 * 3600000;
+        hours = {
+          sunrise: null, sunset: setMs,
+          open: null, close: setMs + rule.afterSunsetMin * 60000,
+          sunriseLocal: null, sunsetLocal: clockFace(iso(setMs)),
+          openLocal: null, closeLocal: shiftClock(iso(setMs), rule.afterSunsetMin),
+          minutes: null, exact: false, partial: 'PM', rules: rule,
+        };
+      }
     }
   }
   if (!hours) return null;
@@ -63,8 +86,11 @@ export function resolveSit(sit, { rules, now = Date.now() } = {}) {
     hours,
     light: lightNow(hours, now),
     // A sit is "over" once the light is, whatever the scoring window said.
-    endsAt: hours.close,
-    startsAt: hours.open,
+    // A half-known day falls back to the scoring window for ORDERING only —
+    // that is a sequencing question, not a legal one, and getting it slightly
+    // wrong picks a neighbouring sit rather than misstating shooting hours.
+    endsAt: Number.isFinite(hours.close) ? hours.close : Date.parse(sit.end ?? ''),
+    startsAt: Number.isFinite(hours.open) ? hours.open : Date.parse(sit.start ?? ''),
   };
 }
 
@@ -139,6 +165,9 @@ export function departure(sit, walk) {
   const metres = Number.isFinite(walk?.lengthM) ? walk.lengthM : null;
   const mins = metres === null ? 0 : walkMinutes(metres);
   const plan = beInTreeBy(sit.hours, sit.window, { walkMinutes: mins });
+  // No usable bound for this window: there is no departure time to give, and
+  // a made-up one is worse than none.
+  if (!plan) return null;
   return { ...plan, walkKnown: metres !== null, metres };
 }
 

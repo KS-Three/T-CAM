@@ -1058,9 +1058,22 @@ export function createServer({ out = OPT.out } = {}) {
         // block on a seven-year archive pull. Without it the suggester ranks on
         // ground and sign alone, and says so rather than quietly changing what
         // its numbers mean.
+        //
+        // Looked up at the SAME centroid /api/wind-history caches it under —
+        // the average of your cameras and stands — not at the map centre.
+        // The cache key rounds to a hundredth of a degree, so pointing this at
+        // the viewport meant any pan of a few hundred metres missed the cache,
+        // the gap ranking silently disappeared, and the page advised loading
+        // wind history that was already sitting in the database. Which winds
+        // you are short of is a fact about the property, not about where the
+        // map happens to be scrolled.
         let clim = null;
         try {
-          clim = windClimatology(db, lat, lng, SEASON_MONTHS, 7);
+          const c = spots.length
+            ? { lat: spots.reduce((a, x) => a + x.lat, 0) / spots.length,
+                lng: spots.reduce((a, x) => a + x.lng, 0) / spots.length }
+            : { lat, lng };
+          clim = windClimatology(db, c.lat, c.lng, SEASON_MONTHS, 7);
         } catch { clim = null; }
         const coverage = clim ? standCoverage(stands, clim) : null;
 

@@ -238,24 +238,38 @@ export function windAccuracy(sits = [], { withinPoints = 1 } = {}) {
     return { sits: 0, exact: null, close: null,
       why: 'No sit has both a forecast wind and the wind you recorded.' };
   }
-  let exact = 0, close = 0;
+  // Rows whose compass points do not both resolve are skipped — and they must
+  // leave the denominator with them. The planner writes '?' for a forecast
+  // with no wind direction, so dividing by every row scored those as misses
+  // and reported the forecast as worse than it was.
+  let exact = 0, close = 0, scored = 0;
   for (const s of rows) {
     const a = COMPASS.indexOf(s.predicted?.windFrom ?? s.predicted_wind);
     const b = COMPASS.indexOf(s.wind_from);
     if (a === -1 || b === -1) continue;
+    scored++;
     const gap = Math.min((a - b + 16) % 16, (b - a + 16) % 16);
     if (gap === 0) exact++;
     if (gap <= withinPoints) close++;
   }
+  const skipped = rows.length - scored;
+  if (!scored) {
+    return { sits: rows.length, scored: 0, skipped, exact: null, close: null,
+      why: 'No sit has a forecast wind this can be compared against — the '
+        + 'forecast recorded no direction for any of them.' };
+  }
   return {
     sits: rows.length,
-    exact: Math.round(100 * exact / rows.length),
-    close: Math.round(100 * close / rows.length),
+    scored,
+    skipped,
+    exact: Math.round(100 * exact / scored),
+    close: Math.round(100 * close / scored),
     withinPoints,
-    why: `Across ${rows.length} sit${rows.length === 1 ? '' : 's'}, the forecast named `
-      + `the exact compass point ${Math.round(100 * exact / rows.length)}% of the time and `
+    why: `Across ${scored} sit${scored === 1 ? '' : 's'}, the forecast named `
+      + `the exact compass point ${Math.round(100 * exact / scored)}% of the time and `
       + `came within ${withinPoints} point${withinPoints === 1 ? '' : 's'} `
-      + `${Math.round(100 * close / rows.length)}% of the time.`,
+      + `${Math.round(100 * close / scored)}% of the time.`
+      + (skipped ? ` ${skipped} more had no forecast direction to compare.` : ''),
   };
 }
 

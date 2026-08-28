@@ -77,7 +77,7 @@ test('a point with a parcel returns the owner', async t => {
   const { server } = await fakeArcgis(() => ({ features: [FEATURE] }));
   t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
 
-  const p = await parcelAt(43.885683, -89.031735);
+  const p = await parcelAt(44.125683, -90.651735);
   assert.equal(p.owner, 'SOME FAMILY TRUST');
   assert.equal(p.acres, 20.32);
 });
@@ -95,14 +95,14 @@ test('an ArcGIS error inside a 200 response throws rather than reading as empty'
   // status code would turn a broken service into "no parcel here".
   const { server } = await fakeArcgis(() => ({ error: { code: 400, message: 'Invalid URL' } }));
   t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
-  await assert.rejects(() => parcelAt(43.88, -89.03), /parcel service error: Invalid URL/);
+  await assert.rejects(() => parcelAt(44.12, -90.65), /parcel service error: Invalid URL/);
 });
 
 test('bad coordinates are refused before any request is made', async t => {
   const { server, calls } = await fakeArcgis(() => ({ features: [] }));
   t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
   await assert.rejects(() => parcelAt(NaN, -89), /needs a latitude and longitude/);
-  await assert.rejects(() => parcelAt(43.88, null), /needs a latitude and longitude/);
+  await assert.rejects(() => parcelAt(44.12, null), /needs a latitude and longitude/);
   assert.equal(calls.length, 0, 'no pointless call to a public service');
 });
 
@@ -110,18 +110,22 @@ test('repeat lookups of the same spot are served from memory', async t => {
   const { server, calls } = await fakeArcgis(() => ({ features: [FEATURE] }));
   t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
 
-  await parcelAt(43.885683, -89.031735);
-  await parcelAt(43.885683, -89.031735);
+  // Chosen to sit mid-cell: the key rounds to five decimals, so a coordinate
+  // ending in a zero there is comfortably inside its bucket and a perturbation
+  // in the seventh decimal cannot cross the edge. The previous fixture only
+  // stayed in one cell by a floating-point accident.
+  await parcelAt(44.125680, -90.651730);
+  await parcelAt(44.125680, -90.651730);
   assert.equal(calls.length, 1, 'the same point twice is one request');
 
-  // The key is a ~1 m grid, so two points can round into neighbouring cells
+  // The key is a ~1 m grid, so two points CAN round into neighbouring cells
   // even when they are centimetres apart. That is fine for a cache — the cost
   // of a boundary miss is one extra request — but it is a grid, not a radius,
   // and this test says so rather than claiming a guarantee it does not give.
-  await parcelAt(43.8856831, -89.0317349);
+  await parcelAt(44.1256801, -90.6517301);
   assert.equal(calls.length, 1, 'a point inside the same cell is still cached');
 
-  await parcelAt(43.9, -89.1);
+  await parcelAt(44.1, -90.7);
   assert.equal(calls.length, 2, 'a genuinely different point does fetch');
 });
 
@@ -146,7 +150,7 @@ async function serving(t, handler) {
 
 test('the API answers who owns a point', async t => {
   const { get } = await serving(t, () => ({ features: [FEATURE] }));
-  const res = await get('/api/parcel?lat=43.885683&lng=-89.031735');
+  const res = await get('/api/parcel?lat=44.125683&lng=-90.651735');
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.found, true);
@@ -165,7 +169,7 @@ test('no parcel is a 200 with found:false, not an error', async t => {
 
 test('a broken parcel service is a 502, distinguishable from empty ground', async t => {
   const { get } = await serving(t, () => ({ error: { message: 'service unavailable' } }));
-  const res = await get('/api/parcel?lat=43.88&lng=-89.03');
+  const res = await get('/api/parcel?lat=44.12&lng=-90.65');
   assert.equal(res.status, 502, 'an upstream failure is not the client\'s fault');
   assert.match((await res.json()).error, /service unavailable/);
 });
@@ -173,7 +177,7 @@ test('a broken parcel service is a 502, distinguishable from empty ground', asyn
 test('missing coordinates are a 400', async t => {
   const { get } = await serving(t, () => ({ features: [] }));
   assert.equal((await get('/api/parcel')).status, 400);
-  assert.equal((await get('/api/parcel?lat=43.88')).status, 400);
+  assert.equal((await get('/api/parcel?lat=44.12')).status, 400);
   assert.equal((await get('/api/parcel?lat=abc&lng=-89')).status, 400);
   // 0,0 is a real place in the Atlantic, so a missing parameter must not
   // quietly become a query about it.

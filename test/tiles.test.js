@@ -162,7 +162,7 @@ test('a partly written tile never becomes a cached one', async () => {
 // Saving a view
 // ---------------------------------------------------------------------------
 
-const bounds = { west: -89.045, south: 43.880, east: -89.020, north: 43.892 };
+const bounds = { west: -90.665, south: 44.120, east: -90.640, north: 44.132 };
 
 test('saving a view fetches the tiles that cover it', async () => {
   const out = tmp();

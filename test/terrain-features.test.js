@@ -6,7 +6,7 @@ import {
 } from '../terrain-features.mjs';
 
 function make(fn, { cols = 41, rows = 41, spacingM = 10 } = {}) {
-  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, spacingM);
+  const g = planGrid({ west: -90.66, south: 44.12, east: -90.65, north: 44.13 }, spacingM);
   g.cols = cols; g.rows = rows;
   g.z = new Float32Array(cols * rows);
   for (let r = 0; r < rows; r++) {

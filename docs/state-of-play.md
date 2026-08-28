@@ -8,6 +8,34 @@ is *status*; that one is *why*.
 
 ---
 
+## This repo is PUBLIC — no real coordinates
+
+`KS-Three/TrailCam` is public, deliberately (private repos would cost Actions
+credits). A trail-camera fix is the location of somebody's hunting property, so
+**test fixtures and defaults must not use Kent's real coordinates.**
+
+They did until 2026-08-28. The exact fix from his SpyPoint account was in seven
+committed files here — `check-terrain.mjs`'s default and six test files — and
+in the sibling `KS-Three/EMB-Bot` repo's `spypoint/` proof of concept, in a
+code comment and its README. Found by a code review. Every occurrence was
+shifted by a constant offset onto invented ground (roughly 44.12 N, 90.65 W,
+rural Jackson County), which keeps all the relative geometry inside each test
+identical while pointing nowhere in particular.
+
+**Kent's decision, 2026-08-28: scrub going forward, leave history alone.** The
+commits that carried it are still in both repos' history and on any clone or
+fork already taken — rewriting published history would not recall those, and it
+would mean force-pushing `main`. Code search and casual reading no longer turn
+it up, which is the part that was worth fixing.
+
+Rules for anything added from here:
+
+- Fixtures use the 44.12 / -90.65 cluster, or another invented point.
+- Owner names and mailing addresses in fixtures stay obviously fake
+  (`SOME FAMILY TRUST`, `1 EXAMPLE RD, ANYTOWN, WI 50000`) — they already are.
+- Real coordinates belong in the database on Kent's machine, which is
+  gitignored, and nowhere else.
+
 ## Working, verified
 
 | | Verified how |

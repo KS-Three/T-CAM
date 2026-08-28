@@ -172,7 +172,7 @@ test('the archive is fetched one year at a time', async t => {
   // failure loses the lot.
   const { server, calls } = await fakeArchiveServer();
   t.after(() => { server.close(); delete process.env.TRAILCAM_ARCHIVE_URL; });
-  const years = await fetchArchive(43.88, -89.03, { years: 3, endYear: 2024 });
+  const years = await fetchArchive(44.12, -90.65, { years: 3, endYear: 2024 });
   assert.equal(years.length, 3);
   assert.equal(calls.length, 3);
   assert.ok(calls.some(u => u.includes('2022')) && calls.some(u => u.includes('2024')));
@@ -182,23 +182,23 @@ test('the archive is fetched one year at a time', async t => {
 test('bad coordinates are refused before any request', async t => {
   const { server, calls } = await fakeArchiveServer();
   t.after(() => { server.close(); delete process.env.TRAILCAM_ARCHIVE_URL; });
-  await assert.rejects(() => fetchArchive(NaN, -89.03), /needs a latitude and longitude/);
+  await assert.rejects(() => fetchArchive(NaN, -90.65), /needs a latitude and longitude/);
   assert.equal(calls.length, 0);
 });
 
 test('a climatology survives the round trip through the database', () => {
   const db = openDb(fs.mkdtempSync(path.join(os.tmpdir(), 'trailcam-wind-')));
   const data = climatology([fakeYear()], { months: [11] });
-  saveWindClimatology(db, 43.885683, -89.031735, [11], 7, data);
+  saveWindClimatology(db, 44.125683, -90.651735, [11], 7, data);
 
-  const back = windClimatology(db, 43.885683, -89.031735, [11], 7);
+  const back = windClimatology(db, 44.125683, -90.651735, [11], 7);
   assert.equal(back.hours, data.hours);
   assert.equal(back.cached, true);
   // Rounded to about a kilometre: everything on one property shares a wind
   // climate, and keying finer would refetch history to answer the same question.
-  assert.ok(windClimatology(db, 43.8858, -89.0317, [11], 7), 'a nearby point is the same cache entry');
-  assert.equal(windClimatology(db, 44.5, -89.0, [11], 7), null, 'a different place is not');
-  assert.equal(windClimatology(db, 43.885683, -89.031735, [11], 3), null, 'nor a different span');
+  assert.ok(windClimatology(db, 44.1258, -90.6517, [11], 7), 'a nearby point is the same cache entry');
+  assert.equal(windClimatology(db, 44.5, -90.6, [11], 7), null, 'a different place is not');
+  assert.equal(windClimatology(db, 44.125683, -90.651735, [11], 3), null, 'nor a different span');
   db.close();
 });
 
@@ -210,8 +210,8 @@ test('the API answers with the rose and what it is worth to each stand', async t
   const { server: arch, calls } = await fakeArchiveServer();
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'trailcam-wind-http-'));
   const db = openDb(out);
-  createStand(db, { name: 'West ridge', lat: 43.885, lng: -89.031, goodWinds: ['W', 'WNW'] });
-  createStand(db, { name: 'Untold', lat: 43.886, lng: -89.032 });
+  createStand(db, { name: 'West ridge', lat: 44.125, lng: -90.651, goodWinds: ['W', 'WNW'] });
+  createStand(db, { name: 'Untold', lat: 44.126, lng: -90.652 });
   db.close();
 
   const server = createServer({ out });

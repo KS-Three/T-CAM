@@ -15,7 +15,7 @@ import { createServer } from '../serve.mjs';
 // A synthetic hillside with an exactly known answer, so the maths below is
 // checked against arithmetic rather than against itself.
 function slopingGrid(gradEast, gradNorth, { spacingM = 20, cols = 21, rows = 21 } = {}) {
-  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, spacingM);
+  const g = planGrid({ west: -90.66, south: 44.12, east: -90.65, north: 44.13 }, spacingM);
   g.cols = cols; g.rows = rows;
   g.z = new Float32Array(cols * rows);
   for (let r = 0; r < rows; r++) {
@@ -44,10 +44,10 @@ function ridgeGrid(axis = 'ns', { spacingM = 20, cols = 21, rows = 21 } = {}) {
 // ---------------------------------------------------------------------------
 
 test('a grid is planned at the spacing asked for', () => {
-  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, 10);
+  const g = planGrid({ west: -90.66, south: 44.12, east: -90.65, north: 44.13 }, 10);
   const b = gridBounds(g);
   assert.ok(g.cols > 50 && g.rows > 100, `got ${g.cols}x${g.rows}`);
-  assert.ok(Math.abs(b.east - -89.03) < g.dLng, 'the east edge lands within a cell of the ask');
+  assert.ok(Math.abs(b.east - -90.65) < g.dLng, 'the east edge lands within a cell of the ask');
   // A degree of longitude is shorter than a degree of latitude at 44 N, so the
   // cell must be WIDER in degrees to be square in metres. Getting this backwards
   // stretches every distance on the map.
@@ -83,7 +83,7 @@ test('elevation between lattice points is interpolated, and refuses to guess', (
   const want = (g.z[5 * g.cols + 5] + g.z[5 * g.cols + 6]) / 2;
   assert.ok(Math.abs(elevationAt(g, half.lat, half.lng) - want) < 1e-4);
 
-  assert.ok(Number.isNaN(elevationAt(g, 44.5, -89.035)), 'outside the grid is NaN, not an edge value');
+  assert.ok(Number.isNaN(elevationAt(g, 44.5, -90.655)), 'outside the grid is NaN, not an edge value');
 
   g.z[5 * g.cols + 6] = NaN;
   assert.ok(Number.isNaN(elevationAt(g, half.lat, half.lng)),
@@ -243,7 +243,7 @@ async function fakeElevation(handler = null) {
       if (handler) return res.end(JSON.stringify(handler(geom, calls.length)));
       res.end(JSON.stringify({
         samples: (geom.points ?? []).map((p, i) => ({
-          locationId: i, value: String(200 + (p[0] + 89.04) * 100000), resolution: 1,
+          locationId: i, value: String(200 + (p[0] + 90.66) * 100000), resolution: 1,
         })),
       }));
     });
@@ -253,7 +253,7 @@ async function fakeElevation(handler = null) {
   return { server, calls };
 }
 
-const bounds = { west: -89.04, south: 43.88, east: -89.0385, north: 43.8815 };
+const bounds = { west: -90.66, south: 44.12, east: -90.6585, north: 44.1215 };
 
 test('a grid is fetched in batches and every cell is filled', async t => {
   const { server, calls } = await fakeElevation();
@@ -276,7 +276,7 @@ test('batches map their samples back to the right cells', async t => {
   t.after(() => { server.close(); delete process.env.TRAILCAM_ELEVATION_URL; });
 
   // Deliberately more than one batch.
-  const wide = { west: -89.04, south: 43.88, east: -89.0345, north: 43.8845 };
+  const wide = { west: -90.66, south: 44.12, east: -90.6545, north: 44.1245 };
   const g = await fetchElevationGrid(wide, { spacingM: 10 });
   assert.ok(g.cols * g.rows > BATCH, 'this really is a multi-batch fetch');
   // The fake returns elevation as a function of longitude alone, so every row
@@ -291,7 +291,7 @@ test('batches map their samples back to the right cells', async t => {
 test('parallel batches drop nothing', async t => {
   const { server, calls } = await fakeElevation();
   t.after(() => { server.close(); delete process.env.TRAILCAM_ELEVATION_URL; });
-  const wide = { west: -89.04, south: 43.88, east: -89.0345, north: 43.8845 };
+  const wide = { west: -90.66, south: 44.12, east: -90.6545, north: 44.1245 };
   const g = await fetchElevationGrid(wide, { spacingM: 10, concurrency: 4 });
   assert.equal(gridStats(g).count, g.cols * g.rows, 'every sample survived the concurrency');
   assert.equal(calls.length, Math.ceil(g.cols * g.rows / BATCH), 'each batch asked exactly once');
@@ -385,7 +385,7 @@ async function serving(t) {
 
 test('the API returns terrain, and caches it', async t => {
   const { get, calls } = await serving(t);
-  const res = await get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20');
+  const res = await get('/api/terrain?lat=44.121&lng=-90.659&radius=150&spacing=20');
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.covered, true);
@@ -396,7 +396,7 @@ test('the API returns terrain, and caches it', async t => {
   assert.ok(body.contours.intervalFt > 0);
 
   const before = calls.length;
-  const again = await (await get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20')).json();
+  const again = await (await get('/api/terrain?lat=44.121&lng=-90.659&radius=150&spacing=20')).json();
   assert.equal(again.cached, true, 'the second ask is served from the database');
   assert.equal(calls.length, before, 'and does not touch the elevation service again');
 });
@@ -406,8 +406,8 @@ test('two simultaneous asks for the same ground fetch it once', async t => {
   // identical data.
   const { get, calls } = await serving(t);
   const [a, b] = await Promise.all([
-    get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20').then(r => r.json()),
-    get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20').then(r => r.json()),
+    get('/api/terrain?lat=44.121&lng=-90.659&radius=150&spacing=20').then(r => r.json()),
+    get('/api/terrain?lat=44.121&lng=-90.659&radius=150&spacing=20').then(r => r.json()),
   ]);
   assert.equal(a.covered, true);
   assert.equal(b.covered, true);
@@ -418,7 +418,7 @@ test('two simultaneous asks for the same ground fetch it once', async t => {
 test('bad coordinates are a 400 before anything is fetched', async t => {
   const { get, calls } = await serving(t);
   assert.equal((await get('/api/terrain')).status, 400);
-  assert.equal((await get('/api/terrain?lat=43.88')).status, 400);
+  assert.equal((await get('/api/terrain?lat=44.12')).status, 400);
   assert.equal((await get('/api/terrain?lat=abc&lng=-89')).status, 400);
   assert.equal((await get('/api/terrain?lat=999&lng=-89')).status, 400);
   assert.equal(calls.length, 0, 'no pointless call to a public service');
@@ -428,7 +428,7 @@ test('the requested area is clamped, whatever the caller asks for', async t => {
   // radius and spacing decide how many samples get pulled from a free public
   // service, so they are bounded by the server rather than by the caller.
   const { get } = await serving(t);
-  const body = await (await get('/api/terrain?lat=43.881&lng=-89.039&radius=99999&spacing=0.1')).json();
+  const body = await (await get('/api/terrain?lat=44.121&lng=-90.659&radius=99999&spacing=0.1')).json();
   assert.equal(body.covered, true,
     'the largest permitted request must SUCCEED. The radius and spacing clamps '
     + 'were once independent, and their extremes combined into 361,201 samples '
@@ -530,7 +530,7 @@ test('a map with no location says so instead of querying the Atlantic', async t 
 
 test('ground inside coverage still goes to the service', async t => {
   const { get, calls } = await serving(t);
-  const body = await (await get('/api/terrain?lat=43.881&lng=-89.039&radius=150&spacing=20')).json();
+  const body = await (await get('/api/terrain?lat=44.121&lng=-90.659&radius=150&spacing=20')).json();
   assert.equal(body.covered, true, 'the guard must not block real ground');
   assert.ok(calls.length > 0);
 });
@@ -541,7 +541,7 @@ test('ground inside coverage still goes to the service', async t => {
 
 /** A flat plateau with a bluff falling away along one edge. */
 function plateauWithBluff({ cols = 100, rows = 100, bluffRows = 5 } = {}) {
-  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, 10);
+  const g = planGrid({ west: -90.66, south: 44.12, east: -90.65, north: 44.13 }, 10);
   g.cols = cols; g.rows = rows;
   g.z = new Float32Array(cols * rows);
   for (let r = 0; r < rows; r++) {
@@ -595,7 +595,7 @@ test('the interval widens rather than silently dropping the top of the map', () 
 
 test('gentle ground is unaffected — it still gets a fine interval', () => {
   // The fix must not coarsen the case it was already getting right.
-  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, 10);
+  const g = planGrid({ west: -90.66, south: 44.12, east: -90.65, north: 44.13 }, 10);
   g.cols = 60; g.rows = 60;
   g.z = new Float32Array(g.cols * g.rows);
   for (let r = 0; r < g.rows; r++) {

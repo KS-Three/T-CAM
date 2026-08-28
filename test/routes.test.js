@@ -15,19 +15,19 @@ import { createServer } from '../serve.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trailcam-routes-'));
 
-const STAND = { name: 'Oak Ridge', lat: 43.8860, lng: -89.0310 };
+const STAND = { name: 'Oak Ridge', lat: 44.1260, lng: -90.6510 };
 // A walk-in due WEST of the stand.
-const FROM_WEST = [[-89.0325, 43.8860], [-89.0320, 43.8860], [-89.0315, 43.8860]];
+const FROM_WEST = [[-90.6525, 44.1260], [-90.6520, 44.1260], [-90.6515, 44.1260]];
 
 // ---------------------------------------------------------------------------
 // Geometry
 // ---------------------------------------------------------------------------
 
 test('bearings point where they should', () => {
-  assert.ok(Math.abs(bearing(43.88, -89.03, 43.89, -89.03) - 0) < 1, 'north');
-  assert.ok(Math.abs(bearing(43.88, -89.03, 43.88, -89.02) - 90) < 1, 'east');
-  assert.ok(Math.abs(bearing(43.88, -89.03, 43.87, -89.03) - 180) < 1, 'south');
-  assert.ok(Math.abs(bearing(43.88, -89.03, 43.88, -89.04) - 270) < 1, 'west');
+  assert.ok(Math.abs(bearing(44.12, -90.65, 44.13, -90.65) - 0) < 1, 'north');
+  assert.ok(Math.abs(bearing(44.12, -90.65, 44.12, -90.64) - 90) < 1, 'east');
+  assert.ok(Math.abs(bearing(44.12, -90.65, 44.11, -90.65) - 180) < 1, 'south');
+  assert.ok(Math.abs(bearing(44.12, -90.65, 44.12, -90.66) - 270) < 1, 'west');
 });
 
 test('the angle between two bearings is the SMALL one, and is not inverted', () => {
@@ -44,8 +44,8 @@ test('the angle between two bearings is the SMALL one, and is not inverted', () 
 });
 
 test('route length is measured on the ground', () => {
-  assert.equal(routeLength([[-89.03, 43.88]]), 0, 'one point is no distance');
-  const m = routeLength([[-89.03, 43.88], [-89.03, 43.89]]);
+  assert.equal(routeLength([[-90.65, 44.12]]), 0, 'one point is no distance');
+  const m = routeLength([[-90.65, 44.12], [-90.65, 44.13]]);
   assert.ok(Math.abs(m - 1112) < 30, `about 1.1 km for a hundredth of a degree of latitude (${m})`);
 });
 
@@ -76,7 +76,7 @@ test('the dirty winds are the ones that blow from the walk toward the stand', ()
 });
 
 test('scent does not reach past the modelled distance', () => {
-  const far = [[-89.0700, 43.8860], [-89.0690, 43.8860]];   // ~3 km west
+  const far = [[-90.6900, 44.1260], [-90.6890, 44.1260]];   // ~3 km west
   assert.equal(scentReaches(far, STAND, 270), null, 'too far to count');
   assert.ok(scentReaches(far, STAND, 270, { reachM: 5000 }),
     'and the reach is a parameter, not a hidden constant');
@@ -84,7 +84,7 @@ test('scent does not reach past the modelled distance', () => {
 
 test('the cone has an angle, and it is adjustable', () => {
   // Something off to one side is inside a wide cone and outside a narrow one.
-  const offset = { name: 'Off axis', lat: 43.8872, lng: -89.0310 };
+  const offset = { name: 'Off axis', lat: 44.1272, lng: -90.6510 };
   assert.equal(scentReaches(FROM_WEST, offset, 270, { halfAngleDeg: 5 }), null);
   assert.ok(scentReaches(FROM_WEST, offset, 270, { halfAngleDeg: 80 }));
   assert.ok(CONE_HALF_ANGLE_DEG > 0 && CONE_HALF_ANGLE_DEG < 90);
@@ -118,20 +118,20 @@ test('the verdict names the stand and how close the walk comes', () => {
 test('a walk that blows across ANOTHER stand is flagged without failing this one', () => {
   // Walking under a second stand on the way to the first is the same mistake
   // one step removed — worth saying, but it does not make this sit wrong.
-  const other = { name: 'Creek tripod', lat: 43.8860, lng: -89.0318 };
+  const other = { name: 'Creek tripod', lat: 44.1260, lng: -90.6518 };
   const v = assessRoute({ points: FROM_WEST },
     { stand: STAND, others: [other], windFromDeg: 270 });
   assert.equal(v.ok, false, 'this one is dirty on its own account');
 
   const east = assessRoute({ points: FROM_WEST },
-    { stand: { name: 'Far east', lat: 43.8860, lng: -89.0200 }, others: [other], windFromDeg: 270 });
+    { stand: { name: 'Far east', lat: 44.1260, lng: -90.6400 }, others: [other], windFromDeg: 270 });
   assert.equal(east.ok, true, 'the stand itself is out of reach');
   assert.equal(east.crossed.length, 1);
   assert.match(east.why, /blows across Creek tripod/);
 });
 
 test('a route needs two points and a stand before it means anything', () => {
-  assert.equal(assessRoute({ points: [[-89.03, 43.88]] }, { stand: STAND, windFromDeg: 0 }).ok, null);
+  assert.equal(assessRoute({ points: [[-90.65, 44.12]] }, { stand: STAND, windFromDeg: 0 }).ok, null);
   assert.match(assessRoute({ points: FROM_WEST }, { windFromDeg: 0 }).why, /not attached to a stand/);
 });
 
@@ -141,7 +141,7 @@ test('a route needs two points and a stand before it means anything', () => {
 
 function seeded() {
   const db = openDb(tmp());
-  const stand = createStand(db, { name: 'Oak Ridge', lat: 43.886, lng: -89.031, goodWinds: ['NW'] });
+  const stand = createStand(db, { name: 'Oak Ridge', lat: 44.126, lng: -90.651, goodWinds: ['NW'] });
   return { db, stand };
 }
 
@@ -161,17 +161,17 @@ test('a route point missing a coordinate is refused before conversion', () => {
   // the coast of Africa — with a comment above it warning about exactly that.
   const { db, stand } = seeded();
   for (const bad of [
-    [[null, 43.88], [-89.03, 43.89]],
-    [[undefined, 43.88], [-89.03, 43.89]],
-    [['', 43.88], [-89.03, 43.89]],
-    [[true, 43.88], [-89.03, 43.89]],
+    [[null, 44.12], [-90.65, 44.13]],
+    [[undefined, 44.12], [-90.65, 44.13]],
+    [['', 44.12], [-90.65, 44.13]],
+    [[true, 44.12], [-90.65, 44.13]],
   ]) {
     assert.throws(() => createRoute(db, { standId: stand.id, points: bad }),
       /missing a coordinate/, JSON.stringify(bad));
   }
   assert.throws(() => createRoute(db, { standId: stand.id, points: [[-89, 999], [-89, 44]] }),
     /real coordinates/);
-  assert.throws(() => createRoute(db, { standId: stand.id, points: [[-89.03, 43.88]] }),
+  assert.throws(() => createRoute(db, { standId: stand.id, points: [[-90.65, 44.12]] }),
     /at least two points/);
   assert.equal(allRoutes(db).length, 0, 'and none of them were stored');
   db.close();
@@ -212,7 +212,7 @@ test('deleting a stand takes its routes with it', () => {
 async function serving(t) {
   const out = tmp();
   const db = openDb(out);
-  createStand(db, { name: 'Oak Ridge', lat: 43.886, lng: -89.031, goodWinds: ['NW'] });
+  createStand(db, { name: 'Oak Ridge', lat: 44.126, lng: -90.651, goodWinds: ['NW'] });
   db.close();
   const server = createServer({ out });
   await new Promise(r => server.listen(0, '127.0.0.1', r));

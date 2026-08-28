@@ -3,7 +3,7 @@
  * check-terrain.mjs — why is terrain not loading?
  *
  *   node --disable-warning=ExperimentalWarning check-terrain.mjs
- *   node --disable-warning=ExperimentalWarning check-terrain.mjs --lat 43.885 --lng -89.031
+ *   node --disable-warning=ExperimentalWarning check-terrain.mjs --lat 44.125 --lng -90.651
  *
  * "Terrain fetch failed" in the browser is one line with no diagnosis behind
  * it. This walks the same path the server takes, one step at a time, and says
@@ -25,8 +25,8 @@ const val = (f, d) => {
 
 // Somewhere with known-good coverage, so a failure here is about YOUR network
 // rather than about your ground.
-const lat = Number(val('--lat', '43.885683'));
-const lng = Number(val('--lng', '-89.031735'));
+const lat = Number(val('--lat', '44.125683'));
+const lng = Number(val('--lng', '-90.651735'));
 const out = path.resolve(val('--out', process.env.SPYPOINT_OUT || './spypoint-data'));
 
 const ok = m => console.log(`  ✓ ${m}`);

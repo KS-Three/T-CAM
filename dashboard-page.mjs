@@ -30,6 +30,7 @@
 
 import { sourceDescriptors } from './tile-sources.mjs';
 import { mapStyles, mapMarkup, mapScript } from './map-view.mjs';
+import { registerSnippet } from './offline.mjs';
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
@@ -269,6 +270,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
 <script type="application/json" id="data">${payload}</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
+if (D.live) { ${registerSnippet().trim()} }
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
   if (x !== undefined) n.textContent = x; return n; };
 const fmtDate = s => { if (!s) return 'never';

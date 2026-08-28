@@ -23,6 +23,8 @@
  * answer it does give and is not dismissable.
  */
 
+import { registerSnippet } from './offline.mjs';
+
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
@@ -264,6 +266,7 @@ export function journalHtml() {
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Sit journal — TrailCam</title>
 <style>
   :root {
@@ -374,6 +377,7 @@ export function journalHtml() {
 <main id="main"><p class="note">Reading the journal…</p></main>
 
 <script>
+${registerSnippet()}
 ${BROWSER}
 </script>
 </html>`;

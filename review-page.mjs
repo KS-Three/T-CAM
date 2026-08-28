@@ -27,6 +27,8 @@
  * do, not something to glance at beside a map.
  */
 
+import { registerSnippet } from './offline.mjs';
+
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
@@ -124,6 +126,7 @@ export function reviewHtml({ species = [], bucks = [], remaining = 0 } = {}) {
 
 <script type="application/json" id="data">${payload}</script>
 <script>
+${registerSnippet()}
 const D = JSON.parse(document.getElementById('data').textContent);
 const mainEl = document.getElementById('main');
 const countEl = document.getElementById('count');

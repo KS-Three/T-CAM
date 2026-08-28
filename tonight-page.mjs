@@ -31,6 +31,8 @@
  * generated script to catch it; keep escapes out of here anyway.
  */
 
+import { queueSource, registerSnippet } from './offline.mjs';
+
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
@@ -88,18 +90,37 @@ const RATING_CLASS = { prime: 'ok', good: 'ok', fair: 'warn', poor: 'bad' };
 let DATA = null;
 let clockTimer = null;
 
+let CACHED_AT = null;   // set when the answer came from the offline cache
+
 async function load() {
   let payload;
   try {
     const res = await fetch('/api/tonight');
     payload = await res.json();
     if (!res.ok) throw new Error(payload && payload.error ? payload.error : 'HTTP ' + res.status);
+    // The service worker stamps anything it answers from cache. Old data is
+    // fine in the truck; old data passed off as live is not.
+    CACHED_AT = res.headers.get('x-sw-cached-at');
   } catch (err) {
     main.replaceChildren(problem('Could not work out tonight: ' + err.message));
     return;
   }
   DATA = payload;
   render();
+  // Anything logged in the woods goes home the next time the server answers.
+  // A load that succeeded from the network is exactly that moment.
+  if (!CACHED_AT && typeof SITQ !== 'undefined' && SITQ.pending()) {
+    SITQ.flush().then(r => {
+      if (r.sent || r.rejected) {
+        const n = el('div', 'note');
+        n.textContent = (r.sent ? r.sent + ' sit' + (r.sent === 1 ? '' : 's')
+          + ' logged offline ' + (r.sent === 1 ? 'has' : 'have') + ' been synced.' : '')
+          + (r.rejected ? ' ' + r.rejected + ' could not be accepted by the server and '
+            + (r.rejected === 1 ? 'was' : 'were') + ' dropped.' : '');
+        main.prepend(n);
+      }
+    });
+  }
 }
 
 function problem(text) {
@@ -116,6 +137,17 @@ function render() {
     parts.push(problem(DATA && DATA.note ? DATA.note : 'Nothing to plan yet.'));
     main.replaceChildren.apply(main, parts);
     return;
+  }
+
+  if (CACHED_AT) {
+    const off = card(null);
+    const when = new Date(CACHED_AT);
+    off.appendChild(el('div', 'note',
+      'No connection to the server — this is the plan as it stood '
+      + (isNaN(when) ? 'when you last had signal'
+        : when.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }))
+      + '. The countdown is still live; sits you log will sync when you are back.'));
+    parts.push(off);
   }
 
   const sit = sits[0];
@@ -479,9 +511,20 @@ function logCard(sit) {
       status.textContent = '';
       status.appendChild(link);
     } catch (err) {
-      status.textContent = 'Could not save: ' + err.message;
-      save.disabled = false;
-      save.textContent = 'Log this sit';
+      // No server. The sit is worth more than the error: queue it on the
+      // phone and it goes home on the next load that reaches the server.
+      const queued = typeof SITQ !== 'undefined' ? SITQ.enqueue(body) : 0;
+      if (queued) {
+        form.remove(); checks.remove(); row.remove();
+        intro.textContent = 'No connection — saved on this phone ('
+          + queued + ' waiting). It syncs itself the next time this page '
+          + 'reaches the server.';
+        status.textContent = '';
+      } else {
+        status.textContent = 'Could not save, and could not queue it either: ' + err.message;
+        save.disabled = false;
+        save.textContent = 'Log this sit';
+      }
     }
   };
   row.appendChild(save);
@@ -517,6 +560,8 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#375a3f">
 <title>${esc(title)} — TrailCam</title>
 <style>
   :root {
@@ -618,6 +663,8 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
 <main id="main"><div class="loading">Working out where to sit…</div></main>
 
 <script>
+${queueSource('SITQ')}
+${registerSnippet()}
 ${BROWSER}
 </script>
 </html>`;

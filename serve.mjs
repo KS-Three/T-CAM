@@ -50,6 +50,7 @@ import { sourceDescriptors } from './tile-sources.mjs';
 import { reviewHtml } from './review-page.mjs';
 import { tonightHtml } from './tonight-page.mjs';
 import { journalHtml } from './journal-page.mjs';
+import { swSource, manifest, iconSvg } from './offline.mjs';
 import {
   fetchArchive, climatology, standCoverage, SEASON_MONTHS,
 } from './wind-history.mjs';
@@ -495,6 +496,20 @@ export function createServer({ out = OPT.out } = {}) {
           bucks: allBucks(db),
           remaining: allVisits(db, { unreviewed: true, limit: 100000 }).length,
         }));
+      }
+
+      // Offline plumbing: the worker, the manifest and the icon. Tiny, static,
+      // and cache-forever would be wrong for the worker — the browser decides
+      // when to re-check it, and telling it never to would strand old code on
+      // the phone.
+      if (req.method === 'GET' && url.pathname === '/sw.js') {
+        return send(res, 200, 'application/javascript; charset=utf-8', swSource());
+      }
+      if (req.method === 'GET' && url.pathname === '/manifest.webmanifest') {
+        return send(res, 200, 'application/manifest+json', manifest());
+      }
+      if (req.method === 'GET' && url.pathname === '/icon.svg') {
+        return send(res, 200, 'image/svg+xml', iconSvg());
       }
 
       // The season, and what it is entitled to claim from it.

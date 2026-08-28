@@ -4,7 +4,8 @@ Sync your SpyPoint trail cameras to your own machine: **where each camera is**,
 **how it's doing**, and **what it photographed** — plus an offline dashboard
 with a map, so you can see all of it at a glance without the app.
 
-Zero dependencies. One file. Node 20+.
+No npm install, no build step, no accounts beyond your camera's. Node 20+
+and SQLite, which ships with Node itself.
 
 > ### This repository is public
 >
@@ -35,16 +36,32 @@ and is gitignored. Delete it to be asked again.
 
 ## Quick start (manual)
 
+This is several modules now, not the single file it started as, so clone it
+rather than downloading one script.
+
 ```powershell
 # Windows PowerShell — one line at a time
 cd $HOME
-curl.exe -L -o spypoint-sync.mjs https://raw.githubusercontent.com/KS-Three/TrailCam/main/spypoint-sync.mjs
+git clone https://github.com/KS-Three/T-CAM.git TrailCam
+cd TrailCam
 $env:SPYPOINT_EMAIL = "you@example.com"; $env:SPYPOINT_PASSWORD = "your-password"
-node spypoint-sync.mjs
-start $HOME\spypoint-data\dashboard.html
+node --disable-warning=ExperimentalWarning spypoint-sync.mjs
+node --disable-warning=ExperimentalWarning serve.mjs --open
 ```
 
-On macOS or Linux, `export SPYPOINT_EMAIL=...` and `open`/`xdg-open` instead.
+On macOS or Linux, `export SPYPOINT_EMAIL=...` instead of `$env:`.
+
+**Just want to look at it?** The server needs no login and no sync — it serves
+whatever is already in the database, and an empty one still gives you a map you
+can drop stands on:
+
+```powershell
+cd $HOME\TrailCam
+node --disable-warning=ExperimentalWarning serve.mjs --open
+```
+
+`--disable-warning=ExperimentalWarning` only silences Node's notice about
+`node:sqlite`; everything works without it.
 
 Credentials are read only from `SPYPOINT_EMAIL` and `SPYPOINT_PASSWORD`. They
 are never written to disk, never logged, and never stored in this repo.
@@ -57,8 +74,22 @@ are never written to disk, never logged, and never stored in this repo.
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
 | `node spypoint-sync.mjs --inspect` | Dumps the raw API field names for one camera and one photo |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
-| `node serve.mjs` | Serves the dashboard from the database at http://127.0.0.1:8787 |
+| `node serve.mjs` | Serves everything from the database at http://127.0.0.1:8787 |
+| `node serve.mjs --open` | The same, and opens a browser |
+| `node serve.mjs --host 0.0.0.0` | Also reachable from a phone on the same Wi-Fi |
 | `node spypoint-sync.mjs --provider <id>` | Sync a different camera brand |
+
+### The pages
+
+| Page | What it is for |
+| --- | --- |
+| `/` | The dashboard: best sits ahead, which stands earn their keep, the map |
+| `/tonight` | One screen: which stand, the walk in, when to leave, log the sit |
+| `/journal` | The season, and what it is entitled to claim from it |
+| `/review` | Tagging photos — keyboard-driven, built for volume |
+
+`/tonight` is the one to put on a phone's home screen: it installs as an app
+and keeps working with no signal.
 
 | Flag | Meaning |
 | --- | --- |

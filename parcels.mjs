@@ -142,3 +142,26 @@ export async function parcelAt(lat, lng, { signal } = {}) {
   cache.set(k, { at: Date.now(), value });
   return value;
 }
+
+/**
+ * Is a point inside a parcel's rings?
+ *
+ * Even-odd rule over every ring, which handles holes for free: a point inside
+ * the outer boundary and inside a hole crosses an odd number of edges twice,
+ * and comes out even — outside. ArcGIS delivers rings closed (first point
+ * repeated last), but the loop does not rely on it.
+ */
+export function pointInRings(rings, lng, lat) {
+  if (!Array.isArray(rings)) return false;
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat)
+          && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+  }
+  return inside;
+}

@@ -296,3 +296,120 @@ export function suggestStands({
         + `${minFromStandM} m of a stand you have.`,
   };
 }
+
+/**
+ * Filter and annotate suggestions against who actually owns the ground.
+ *
+ * This is the difference between a shortlist of five and a shortlist you would
+ * genuinely walk: a spot on the neighbour's side of the line is not a stand
+ * site, however good the saddle, and a spot you cannot reach without crossing
+ * their ground costs you a conversation before it costs you anything else.
+ *
+ * "Your ground" is worked out rather than configured: the parcels under your
+ * existing stands, and the commonest owner among them is taken to be you. That
+ * is an inference and it is labelled as one — a stand on a friend's permission
+ * ground would vote for the wrong owner, so the response says whose ground it
+ * judged against and every exclusion is counted out loud.
+ *
+ * `lookup` is parcelAt or a stand-in: on-demand, cached in memory by the
+ * parcel module, never written anywhere. This adds a handful of lookups per
+ * suggestion run, all on ground you are already asking the tool about.
+ */
+export async function onYourGround(result, {
+  lookup, stands = [], at = null, limit = 5, accessSamples = [0.25, 0.5, 0.75],
+} = {}) {
+  if (!result?.candidates?.length || typeof lookup !== 'function') return result;
+
+  const tryLookup = async (lat, lng) => {
+    try { return { ok: true, parcel: await lookup(lat, lng) }; }
+    catch { return { ok: false, parcel: null }; }
+  };
+
+  // Whose ground is "yours": the parcels under your stands, majority vote,
+  // falling back to the parcel at the search centre when there are no stands.
+  const votes = new Map();
+  let sawFailure = false;
+  const anchors = stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  if (!anchors.length && at) anchors.push(at);
+  for (const a of anchors.slice(0, 6)) {
+    const r = await tryLookup(a.lat, a.lng);
+    if (!r.ok) { sawFailure = true; continue; }
+    if (r.parcel?.owner) votes.set(r.parcel.owner, (votes.get(r.parcel.owner) ?? 0) + 1);
+  }
+  const home = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+  const notes = [...(result.notes ?? [])];
+  if (!home) {
+    notes.push(sawFailure
+      ? 'The parcel service did not answer, so nothing here is confirmed to be on '
+        + 'your ground — check the boundary before walking any of it.'
+      : 'No parcel was found under your stands (outside Wisconsin, or no stands '
+        + 'yet), so ownership was not checked.');
+    return { ...result, notes, homeOwner: null };
+  }
+
+  const kept = [];
+  let droppedOffGround = 0;
+  for (const c of result.candidates) {
+    if (kept.length >= limit) break;
+    const r = await tryLookup(c.lat, c.lng);
+    if (!r.ok || !r.parcel) {
+      // Unknown is not "yours": it is kept, but flagged, because dropping it
+      // would silently hide good ground every time the service hiccups.
+      kept.push({
+        ...c, onYourGround: null,
+        reasons: [...c.reasons, {
+          points: 0,
+          why: 'could not confirm whose ground this is — check the line before '
+            + 'carrying a ladder in',
+        }],
+      });
+      continue;
+    }
+    if (r.parcel.owner && r.parcel.owner !== home) { droppedOffGround++; continue; }
+
+    // The walk. A straight line from your nearest stand, sampled at a few
+    // points: if any of them is somebody else's, getting there without a
+    // detour means crossing the line. A penalty and a named reason rather than
+    // an exclusion, because a longer legal walk usually exists.
+    const near = anchors.reduce((best, s) => {
+      const d = distanceM(c.lat, c.lng, s.lat, s.lng);
+      return !best || d < best.d ? { s, d } : best;
+    }, null);
+    let crossing = null;
+    if (near && near.d > 30) {
+      for (const t of accessSamples) {
+        const lat = near.s.lat + (c.lat - near.s.lat) * t;
+        const lng = near.s.lng + (c.lng - near.s.lng) * t;
+        const rr = await tryLookup(lat, lng);
+        if (rr.ok && rr.parcel?.owner && rr.parcel.owner !== home) {
+          crossing = rr.parcel.owner;
+          break;
+        }
+      }
+    }
+    if (crossing) {
+      kept.push({
+        ...c, onYourGround: true, score: c.score - 12,
+        reasons: [...c.reasons, {
+          points: -12,
+          why: `the straight walk in from ${near.s.name ?? 'your nearest stand'} crosses `
+            + `ground owned by ${crossing} — plan the approach before counting on this one`,
+        }],
+      });
+    } else {
+      kept.push({ ...c, onYourGround: true });
+    }
+  }
+  kept.sort((a, b) => b.score - a.score);
+
+  if (droppedOffGround) {
+    notes.push(`${droppedOffGround} spot${droppedOffGround === 1 ? '' : 's'} landed on `
+      + 'ground with a different owner and ' + (droppedOffGround === 1 ? 'was' : 'were')
+      + ' dropped.');
+  }
+  notes.push(`Ownership judged against the commonest owner under your stands. `
+    + 'If some of your stands are on permission ground, read these with that in mind.');
+
+  return { ...result, candidates: kept, notes, homeOwner: home };
+}

@@ -225,3 +225,106 @@ test('checked against the route module, which computes scent independently', asy
   }
   assert.ok(checked >= 48, `checked ${checked} stand/wind pairs`);
 });
+
+// ---------------------------------------------------------------------------
+// Ownership: keeping the shortlist on ground you can actually hunt
+// ---------------------------------------------------------------------------
+
+test('point-in-rings handles the shapes parcels actually come as', async () => {
+  const { pointInRings } = await import('../parcels.mjs');
+  const square = [[[-90.66, 44.11], [-90.64, 44.11], [-90.64, 44.13], [-90.66, 44.13], [-90.66, 44.11]]];
+  assert.equal(pointInRings(square, -90.65, 44.12), true);
+  assert.equal(pointInRings(square, -90.63, 44.12), false);
+  // A hole: inside the outer ring, inside the hole — outside the parcel.
+  const holed = [...square,
+    [[-90.655, 44.115], [-90.645, 44.115], [-90.645, 44.125], [-90.655, 44.125], [-90.655, 44.115]]];
+  assert.equal(pointInRings(holed, -90.65, 44.12), false, 'inside the hole is outside');
+  assert.equal(pointInRings(holed, -90.658, 44.112), true, 'between the rings is inside');
+  assert.equal(pointInRings(null, -90.65, 44.12), false);
+});
+
+// A stub ownership map: everything west of the line is Kent's, east is the
+// neighbour's, and a strip returns a service failure.
+const ownedBy = (lat, lng) => (lng < -90.6475 ? 'KENT EXAMPLE' : 'NEIGHBOUR FARMS LLC');
+const stubLookup = async (lat, lng) => ({ owner: ownedBy(lat, lng), rings: [] });
+
+const groundResult = () => suggestStands({
+  features: features({
+    saddles: [saddle(44.120, -90.6520), saddle(44.1235, -90.6560), saddle(44.121, -90.6430)],
+  }),
+  stands: [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657, winds: ['W'] }],
+  gaps: [{ point: 'E', pct: 9 }, { point: 'NNE', pct: 7 }],
+  limit: 12,
+});
+
+test('a suggestion over the line is dropped, and the drop is counted out loud', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  const base = groundResult();
+  assert.ok(base.candidates.some(c => c.lng >= -90.6475), 'the fixture has an off-ground spot');
+  const r = await onYourGround(base, {
+    lookup: stubLookup,
+    stands: [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 }],
+    limit: 5,
+  });
+  assert.equal(r.homeOwner, 'KENT EXAMPLE');
+  assert.ok(r.candidates.length >= 1);
+  for (const c of r.candidates) {
+    assert.ok(c.lng < -90.6475, `kept a spot on the neighbour's: ${c.lng}`);
+  }
+  assert.ok(r.notes.some(n => /different owner/.test(n)), 'the drops are counted');
+  assert.ok(r.notes.some(n => /permission ground/.test(n)), 'the inference is labelled');
+});
+
+test('a walk that crosses the neighbour is penalised and says whose ground', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  // Stand far east on Kent's own finger, so the straight line to a western
+  // candidate passes through the neighbour's strip in the middle.
+  const owner = (lat, lng) =>
+    (lng < -90.655 || lng > -90.649 ? 'KENT EXAMPLE' : 'NEIGHBOUR FARMS LLC');
+  const lookup = async (lat, lng) => ({ owner: owner(lat, lng), rings: [] });
+  const base = suggestStands({
+    features: features({ saddles: [saddle(44.120, -90.658)] }),
+    stands: [{ id: 1, name: 'East oak', lat: 44.120, lng: -90.6455, winds: ['W'] }],
+    gaps: [{ point: 'E', pct: 9 }],
+    limit: 6,
+  });
+  const r = await onYourGround(base, {
+    lookup, stands: [{ id: 1, name: 'East oak', lat: 44.120, lng: -90.6455 }], limit: 5,
+  });
+  const hit = r.candidates.find(c => c.reasons.some(x => /crosses/.test(x.why)));
+  assert.ok(hit, 'the crossing was noticed');
+  const reason = hit.reasons.find(x => /crosses/.test(x.why));
+  assert.match(reason.why, /NEIGHBOUR FARMS LLC/);
+  assert.equal(reason.points, -12);
+});
+
+test('when ownership cannot be confirmed the spot is flagged, never silently dropped', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  const flaky = async (lat, lng) => {
+    if (lng < -90.650) throw new Error('service down');
+    return { owner: 'KENT EXAMPLE', rings: [] };
+  };
+  const base = groundResult();
+  const r = await onYourGround(base, {
+    lookup: flaky,
+    stands: [{ id: 1, name: 'East oak', lat: 44.120, lng: -90.6455 }],
+    limit: 8,
+  });
+  const unknown = r.candidates.filter(c => c.onYourGround === null);
+  assert.ok(unknown.length, 'the unreachable lookups are kept');
+  for (const c of unknown) {
+    assert.ok(c.reasons.some(x => /could not confirm/.test(x.why)));
+  }
+});
+
+test('with the whole service down, nothing is claimed about ownership at all', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  const down = async () => { throw new Error('no route to host'); };
+  const base = groundResult();
+  const r = await onYourGround(base, {
+    lookup: down, stands: [{ id: 1, name: 'A', lat: 44.12, lng: -90.65 }], limit: 5,
+  });
+  assert.equal(r.homeOwner, null);
+  assert.equal(r.candidates.length, base.candidates.length, 'nothing was dropped blind');
+  assert.ok(r.notes.some(n => /did not answer/.test(n)));
+});

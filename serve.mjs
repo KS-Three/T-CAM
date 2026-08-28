@@ -42,7 +42,7 @@ import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
-import { suggestStands } from './stand-suggester.mjs';
+import { suggestStands, onYourGround } from './stand-suggester.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
@@ -1049,14 +1049,30 @@ export function createServer({ out = OPT.out } = {}) {
         } catch { clim = null; }
         const coverage = clim ? standCoverage(stands, clim) : null;
 
-        const result = suggestStands({
+        const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5));
+        // Over-generate, because the ownership filter below may drop spots that
+        // landed over the line, and a shortlist that starts at five and loses
+        // three is a shortlist of two for no reason.
+        let result = suggestStands({
           features: terrain.features,
           stands,
           markers: allMarkers(db),
           gaps: coverage?.gaps ?? [],
           climatology: clim,
-          limit: Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5)),
+          limit: limit * 3,
         });
+        // Keep suggestions on ground you can actually hunt. On-demand lookups
+        // through the same in-memory parcel cache the map's card uses — nothing
+        // is written anywhere. ?parcels=off skips it (outside Wisconsin, or the
+        // service is down and you just want the terrain answer).
+        if (url.searchParams.get('parcels') !== 'off') {
+          result = await onYourGround(result, {
+            lookup: (a, b) => parcelAt(a, b),
+            stands, at: { lat, lng }, limit,
+          });
+        } else {
+          result.candidates = result.candidates.slice(0, limit);
+        }
         return sendJson(res, 200, {
           ...result,
           at: { lat, lng, radiusM },

@@ -1,4 +1,4 @@
-# State of play — 2026-08-27
+# State of play — 2026-08-28
 
 Written so a fresh session (or a future you) can pick this up cold. What works,
 what does not, what is next, and what is still unverified.
@@ -13,7 +13,7 @@ is *status*; that one is *why*.
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 267 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather | 319 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
@@ -29,6 +29,9 @@ is *status*; that one is *why*.
 | **Wind history** — which winds blow during season, and what each stand is worth | Live: 9,751 huntable hours across 7 seasons at the property |
 | **Walk-in routes** — draw the approach, judged against the wind like a stand | Browser-verified end to end; geometry checked against hand-reasoned cases |
 | **Collar ingest** (`calibrate-planner.mjs`) — reads a published GPS dataset | Verified against a fixture with a planted effect; **awaiting the real file** |
+| **Tonight** (`/tonight`) — one screen: the stand, the walk in, when to leave | Driven in a browser in both themes, and end to end over the API |
+| **Legal shooting light** — Wisconsin's 30-before / 20-after, with a countdown | Unit-tested, and run under three machine timezones to prove the times do not move |
+| **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -100,6 +103,9 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 | Historical imagery | Spartan Forge: 10 years UAV | No (NAIP endpoint timed out; unverified) |
 | Movement prediction | Spartan Forge: neural net on university collar data | **No, and cannot match it** — the planner is weather + rut + your own cameras, and says so |
 | Pin sharing with partners | Spartan Forge | No |
+| Measure distance and area | Both, standard | **Yes — and it works with no server and no signal** |
+| Legal shooting hours | onX has a solunar/hours panel | **Yes, with the DNR named as the authority rather than the app** |
+| "Where do I sit tonight" in one screen | Neither does this in one place | **Yes — `/tonight`: stand, walk in, and when to leave** |
 
 The honest line on prediction: without collar data, anything fancier here would
 be the same inputs in a better costume.
@@ -138,22 +144,46 @@ Consequences, all of them deliberate in the code:
 
 ## The structural debt worth naming
 
-`spypoint-sync.mjs` is **2,408 lines**, and most of that is not sync — it is the
-entire dashboard, markup, CSS and application script, inside one template
-literal. The UI has grown a long way past what that file was for: terrain,
-features, parcels, markers, routes, the wind rose, the stand ranking.
+**The dashboard split is done** (2026-08-28). `spypoint-sync.mjs` was 2,408
+lines, of which about 1,950 were the entire dashboard — markup, CSS and
+application script — inside one template literal. It is now 421 lines of sync,
+with the page in `dashboard-page.mjs` beside `review-page.mjs` and
+`tonight-page.mjs`.
 
-That single template literal is the direct cause of a recurring class of bug.
-Escapes inside it resolve when the PAGE IS BUILT rather than when the browser
-reads it, so a one-backslash newline becomes a real line break and a stray
-backtick closes the literal — each of which makes the whole dashboard a syntax
-error while `node --check` on the module still passes. It has happened three
-times. `test/dashboard-script.test.js` now catches it, but catching is not the
-same as preventing.
+The template-literal hazard that motivated it is still real for every page:
+escapes inside such a literal resolve when the PAGE IS BUILT rather than when
+the browser reads it, so a one-backslash newline becomes a real line break and a
+stray backtick closes the literal — each of which makes the whole page a syntax
+error while `node --check` on the module still passes. It happened three times.
+Three things now hold it down, in increasing order of strength:
 
-Splitting the dashboard into its own module (as `review-page.mjs` already is)
-would remove the class rather than keep testing for it. It delivers nothing
-visible, which is exactly why it keeps not happening.
+- `test/page-scripts.test.js` compiles the generated script of **all three**
+  pages, so a new page added without a line there is the only way to ship a
+  broken one.
+- `tonight-page.mjs` keeps its browser half in a `String.raw` literal, where
+  escapes stay literal.
+- Anything interpolated as a **value** (`${...}`) is inserted at runtime and
+  never parsed as part of the surrounding literal, so its backticks and escapes
+  arrive intact. That is how `measure.mjs` gets into the dashboard.
+
+What is left, and it is smaller: `dashboard-page.mjs` is 2,100 lines and holds
+the map, the markers, the routes, the wind rose, the stand ranking and the
+photo grid in one script. Splitting the map out is the next cut if it keeps
+growing, but it is not urgent — the class of bug is handled, and this is now
+ordinary size rather than a file that hides a program inside a string.
+
+Two smaller notes:
+
+- **Map modes now share one disarm.** Each toolbar button used to carry its own
+  list of modes to turn off and the lists had rotted — "+ Add stand" turned
+  nothing off at all. `clearMapModes()` is the single place that knows them, in
+  the same spirit as the `onMapGround` whitelist, and `test/stands.test.js`
+  pins it.
+- **A map with stands but no GPS-fixed camera shows nothing.** The map is
+  replaced wholesale by "No camera reported GPS coordinates", which also hides
+  every stand, marker, route and the measure tool. It does not bite Kent, whose
+  cameras do report GPS, but it is wrong: the map is useful without a camera on
+  it. Not fixed — noted.
 
 ## Things that will bite you
 

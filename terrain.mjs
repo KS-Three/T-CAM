@@ -287,14 +287,34 @@ export function slopeAspect(grid) {
 /** Mean and range of a grid, ignoring no-data. Used to choose contour levels. */
 export function gridStats(grid) {
   let min = Infinity, max = -Infinity, sum = 0, n = 0;
+  const vals = [];
   for (const v of grid.z) {
     if (!Number.isFinite(v)) continue;
     if (v < min) min = v;
     if (v > max) max = v;
     sum += v; n++;
+    vals.push(v);
   }
-  if (!n) return { min: null, max: null, mean: null, relief: null, count: 0 };
-  return { min, max, mean: sum / n, relief: max - min, count: n };
+  if (!n) {
+    return { min: null, max: null, mean: null, relief: null, typicalRelief: null, count: 0 };
+  }
+  vals.sort((a, b) => a - b);
+  const at = p => vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
+  return {
+    min, max, mean: sum / n, relief: max - min, count: n,
+    p5: at(0.05), p95: at(0.95),
+    /**
+     * The relief of the ground you are mostly looking at, ignoring the extremes.
+     *
+     * This exists because max-minus-min is the wrong number to choose a contour
+     * interval from. Pan far enough to catch the bluff running down to Green
+     * Lake and the total relief jumps to 184 ft, which picks a 20 ft interval —
+     * and the flat ground you actually hunt, all 12 ft of it, gets NO contour
+     * lines at all. The bluff is 5% of the view and was deciding what the other
+     * 95% could show.
+     */
+    typicalRelief: at(0.95) - at(0.05),
+  };
 }
 
 /**
@@ -329,7 +349,23 @@ export function chooseIntervalFt(reliefM, target = 12) {
 export function contourLines(grid, { intervalFt = null, maxLevels = 60 } = {}) {
   const stats = gridStats(grid);
   if (!stats.count || !(stats.relief > 0)) return { intervalFt: null, lines: [] };
-  const step = intervalFt ?? chooseIntervalFt(stats.relief);
+
+  // Chosen from the ground you are mostly looking at, not from its extremes —
+  // see typicalRelief in gridStats for why.
+  let step = intervalFt ?? chooseIntervalFt(stats.typicalRelief || stats.relief);
+
+  // Then widened until the FULL range fits. The loop below used to stop at
+  // maxLevels and say nothing, which silently dropped every contour above the
+  // cut — the top of a map quietly losing its lines is worse than a coarser
+  // interval, because nothing about it looks wrong.
+  const levelsNeeded = st => Math.ceil(metresToFeet(stats.relief) / st);
+  if (!intervalFt) {
+    for (const candidate of CONTOUR_STEPS_FT) {
+      if (candidate < step) continue;
+      step = candidate;
+      if (levelsNeeded(step) <= maxLevels) break;
+    }
+  }
   const stepM = step / 3.280839895;
 
   const first = Math.ceil(stats.min / stepM) * stepM;

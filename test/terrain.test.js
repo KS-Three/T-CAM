@@ -534,3 +534,79 @@ test('ground inside coverage still goes to the service', async t => {
   assert.equal(body.covered, true, 'the guard must not block real ground');
   assert.ok(calls.length > 0);
 });
+
+// ---------------------------------------------------------------------------
+// Choosing a contour interval that serves the ground you are looking at
+// ---------------------------------------------------------------------------
+
+/** A flat plateau with a bluff falling away along one edge. */
+function plateauWithBluff({ cols = 100, rows = 100, bluffRows = 5 } = {}) {
+  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, 10);
+  g.cols = cols; g.rows = rows;
+  g.z = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const plateau = 230 + Math.sin(c / 12) * 1.2 + Math.cos(r / 15) * 1.5;
+      g.z[r * cols + c] = r < bluffRows ? plateau - (bluffRows - r) * 11 : plateau;
+    }
+  }
+  return g;
+}
+
+test('typical relief ignores the extremes that a total range is ruled by', () => {
+  const g = plateauWithBluff();
+  const st = gridStats(g);
+  assert.ok(metresToFeet(st.relief) > 150, 'the total range includes the bluff');
+  assert.ok(metresToFeet(st.typicalRelief) < 40,
+    'while the ground most of the view is made of is far gentler');
+  assert.ok(st.p95 > st.p5);
+});
+
+test('a bluff in view no longer robs the flat ground of its contours', () => {
+  // The bug, seen on real imagery: the interval came from max minus min, so
+  // panning far enough to catch the bluff running down to Green Lake picked a
+  // 20 ft interval — and the flat ground actually being hunted, all 12 ft of
+  // it, got NO contour lines at all. 5% of the view decided what the other 95%
+  // could show.
+  const g = plateauWithBluff();
+  const { intervalFt, lines } = contourLines(g);
+  assert.ok(intervalFt <= 5, `interval ${intervalFt} ft is fine enough for the plateau`);
+
+  const plateauSouth = g.south + 6 * g.dLat;
+  const onPlateau = lines.filter(l => l.path.every(pt => pt[1] > plateauSouth));
+  assert.ok(onPlateau.length > 0, 'the plateau gets contours of its own');
+});
+
+test('the interval widens rather than silently dropping the top of the map', () => {
+  // The loop that builds levels stops at maxLevels. Left alone that quietly
+  // discards every contour above the cut, and nothing about the result looks
+  // wrong — a map simply missing its high ground.
+  const g = plateauWithBluff();
+  const { intervalFt, lines } = contourLines(g, { maxLevels: 60 });
+  const stats = gridStats(g);
+  const levels = new Set(lines.map(l => l.levelFt));
+  assert.ok(levels.size <= 60);
+
+  const highest = Math.max(...lines.map(l => l.levelFt));
+  const topOfGround = metresToFeet(stats.max);
+  assert.ok(topOfGround - highest <= intervalFt + 0.5,
+    `contours reach the top of the ground (highest ${highest} ft, ground ${topOfGround.toFixed(1)} ft)`);
+});
+
+test('gentle ground is unaffected — it still gets a fine interval', () => {
+  // The fix must not coarsen the case it was already getting right.
+  const g = planGrid({ west: -89.04, south: 43.88, east: -89.03, north: 43.89 }, 10);
+  g.cols = 60; g.rows = 60;
+  g.z = new Float32Array(g.cols * g.rows);
+  for (let r = 0; r < g.rows; r++) {
+    for (let c = 0; c < g.cols; c++) g.z[r * g.cols + c] = 230 + c * 0.02 + Math.sin(r / 8) * 0.4;
+  }
+  const { intervalFt } = contourLines(g);
+  assert.ok(intervalFt <= 2, `still ${intervalFt} ft on ground with a few feet of relief`);
+});
+
+test('an explicit interval is still honoured exactly', () => {
+  const g = plateauWithBluff();
+  assert.equal(contourLines(g, { intervalFt: 20 }).intervalFt, 20,
+    'asking for a specific interval overrides the automatic choice');
+});

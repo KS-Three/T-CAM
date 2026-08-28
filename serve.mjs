@@ -61,7 +61,7 @@ import { assessRoute, routeWinds, routeLength } from './routes.mjs';
 import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
-  slopeAspect, metresToFeet, planGrid, slopeAspectAt,
+  slopeAspect, metresToFeet, planGrid, slopeAspectAt, packElevations,
 } from './terrain.mjs';
 import { buildStamp, isStale, stampLine } from './build-stamp.mjs';
 
@@ -327,6 +327,7 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
   }
 
   const hs = hillshade(grid);
+  const packed = packElevations(grid, stats);
   const features = terrainFeatures(grid);
   const { slope } = slopeAspect(grid);
   const slopes = [...slope].filter(Number.isFinite).sort((a, b) => a - b);
@@ -337,6 +338,14 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
     cached,
     bounds: gridBounds(grid),
     grid: { cols: grid.cols, rows: grid.rows, spacingM: grid.spacingM },
+    // The raw elevations, for the 3D view to build its mesh from. Same row
+    // order as the grid itself — row 0 the SOUTH edge — where the hillshade
+    // below flips rows because an image's first row is its top. Two layouts
+    // because they feed two different consumers, and both say so.
+    elev: {
+      b64: Buffer.from(packed.bytes).toString('base64'),
+      min: packed.min, scale: packed.scale,
+    },
     stats: {
       minFt: Math.round(metresToFeet(stats.min) * 10) / 10,
       maxFt: Math.round(metresToFeet(stats.max) * 10) / 10,

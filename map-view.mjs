@@ -42,6 +42,7 @@
 
 import { browserSource as measureSource } from './measure.mjs';
 import { browserSource as coverSource } from './coverage.mjs';
+import { browserSource as t3dSource } from './terrain3d.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -474,9 +475,35 @@ export const mapStyles = `
   .stand.rank-good { background: #2e9e57; box-shadow: 0 0 0 4px rgba(46,158,87,.30), 0 1px 4px rgba(0,0,0,.5); }
   .stand.rank-mid  { background: #d98f14; box-shadow: 0 0 0 4px rgba(217,143,20,.30), 0 1px 4px rgba(0,0,0,.5); }
   .stand.rank-bad  { background: #c8392e; box-shadow: 0 0 0 4px rgba(200,57,46,.32), 0 1px 4px rgba(0,0,0,.5); }
+  /* The ground in three dimensions. Sits over the whole 2D map — tiles,
+     tools, handles — because the two are different answers to different
+     questions and showing both at once would be neither. The select panel
+     stays above it (z below), so a pin clicked on the terrain opens the same
+     report it opens flat. */
+  #view3d { position: absolute; inset: 0; z-index: 7; background: #10131c; }
+  #view3d canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+                   touch-action: none; cursor: grab; display: block; }
+  #view3d.drag canvas { cursor: grabbing; }
+  #pins3d { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  /* The pins are the SAME classes the flat map uses, so a red stand is red in
+     both worlds; only their positioning pipeline differs. Labels fade with
+     nothing behind them, so they stay readable over bright ground. */
+  #pins3d .stand, #pins3d .pin { pointer-events: auto; }
+  .hud3d { position: absolute; left: 10px; top: 52px; z-index: 8; width: 220px;
+           display: flex; flex-direction: column; gap: 8px;
+           background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 10px 12px;
+           box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  .hud3d button { padding: 7px 10px; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                  border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+                  background: var(--bg); color: var(--ink); }
+  .hud3d label { display: flex; align-items: center; gap: 6px; font-size: 12px;
+                 color: var(--muted); }
+  .hud3d input[type=range] { flex: 1; min-width: 0; }
+  .hud3d .hint3d { font-size: 11px; color: var(--muted); line-height: 1.45; }
   /* What you selected: the hunting report for a stand, or a camera's card.
      Left of the zoom buttons, under the top bar. */
-  .selpanel { position: absolute; right: 54px; top: 52px; z-index: 6; width: 330px;
+  .selpanel { position: absolute; right: 54px; top: 52px; z-index: 9; width: 330px;
               max-width: calc(100% - 70px); max-height: calc(100% - 120px);
               overflow-y: auto; background: var(--panel); border: 1px solid var(--line);
               border-radius: 10px; padding: 12px 14px;
@@ -549,11 +576,24 @@ export const mapMarkup = String.raw`
           <button class="tt-head" type="button">Ground</button>
           <div class="tt-kids">
             <button id="terrainBtn" type="button">Terrain</button>
+            <button id="view3dBtn" type="button">3D view</button>
             <button id="measureBtn" type="button">Measure</button>
             <button id="whoOwns" type="button">Who owns this?</button>
           </div>
         </div>
         <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
+      </div>
+    </div>
+    <div id="view3d" hidden>
+      <canvas id="gl3d"></canvas>
+      <div id="pins3d"></div>
+      <div class="hud3d">
+        <button id="exit3d" type="button">&larr; Back to the map</button>
+        <label>Relief
+          <input id="exagg3d" type="range" min="1" max="4" step="0.5" value="1.5">
+          <span id="exaggSay">1.5&times;</span>
+        </label>
+        <div class="hint3d" id="hint3d"></div>
       </div>
     </div>
     <div class="selpanel" id="selpanel" hidden></div>
@@ -570,6 +610,7 @@ export const mapMarkup = String.raw`
 export const mapScript = String.raw`
 ${measureSource('MEASURE')}
 ${coverSource('COVER')}
+${t3dSource('T3D')}
 
 // ---- map --------------------------------------------------------------
 const TS = 256;
@@ -2303,6 +2344,7 @@ function centreClearOfForm(form, at) {
 }
 
 function openStandForm(stand) {
+  if (V3) exitView3d();
   closeStandForm();
   editing = stand.id ? stand : null;
   const isNew = !stand.id;
@@ -2683,6 +2725,372 @@ function openStandForm(stand) {
   if (isNew) name.focus();
   draw();
 }
+// ---- the ground in three dimensions --------------------------------------
+// The same elevation grid the hillshade reads, built into a mesh with the
+// satellite imagery draped over it. All the arithmetic — quantized metres,
+// mesh, matrices, projection — is T3D, emitted from terrain3d.mjs and tested
+// in Node; what lives here is only what needs a browser: a GL context, tile
+// images, and fingers.
+const view3dBtn = document.getElementById('view3dBtn');
+const view3dEl = document.getElementById('view3d');
+const gl3dCanvas = document.getElementById('gl3d');
+const pins3dEl = document.getElementById('pins3d');
+const hint3dEl = document.getElementById('hint3d');
+const exaggInput = document.getElementById('exagg3d');
+const exaggSay = document.getElementById('exaggSay');
+
+let V3 = null;          // everything the live view holds; null when flat
+let view3dLoading = false;
+
+if (!D.live) {
+  view3dBtn.disabled = true;
+  view3dBtn.title = '3D needs the server';
+  view3dBtn.style.opacity = '0.6';
+  view3dBtn.style.cursor = 'not-allowed';
+}
+
+/**
+ * The imagery to drape: the current base layer's tiles for the terrain's
+ * ground, stitched onto one canvas. Tiles come in powers-of-two chunks that
+ * never line up with the grid edge, so the canvas is bigger than the ground
+ * and the UV mapping (below) is what cuts it to fit. Served pages fetch
+ * through their own cache, so most of these are already on disk.
+ *
+ * A tile that fails stays the dark fill rather than aborting the view —
+ * offline, the ground you have looked at renders and the ground you have not
+ * is dark, which is the truth.
+ */
+function textureFor3d(bounds) {
+  const L = LAYERS[layerKey];
+  let z = L.maxZoom;
+  const widthPx = zz => projX(bounds.east, zz) - projX(bounds.west, zz);
+  while (z > 11 && widthPx(z) > 2048) z -= 1;
+  const x0 = Math.floor(projX(bounds.west, z) / TS), x1 = Math.floor(projX(bounds.east, z) / TS);
+  const y0 = Math.floor(projY(bounds.north, z) / TS), y1 = Math.floor(projY(bounds.south, z) / TS);
+  const canvas = document.createElement('canvas');
+  canvas.width = (x1 - x0 + 1) * TS;
+  canvas.height = (y1 - y0 + 1) * TS;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#232920';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      jobs.push(new Promise(done => {
+        const img = new Image();
+        img.onload = () => { ctx.drawImage(img, (x - x0) * TS, (y - y0) * TS); done(); };
+        img.onerror = () => done();
+        img.src = layerUrl(layerKey, z, x, y);
+      }));
+    }
+  }
+  return Promise.all(jobs).then(() => ({ canvas, z, originX: x0 * TS, originY: y0 * TS }));
+}
+
+const V3_VERT = 'attribute vec3 aPos; attribute vec2 aUV; attribute vec2 aSlope;'
+  + 'uniform mat4 uMVP; uniform float uExagg;'
+  + 'varying vec2 vUV; varying vec3 vNormal; varying float vDist;'
+  + 'void main() {'
+  + '  vec3 p = vec3(aPos.x, aPos.y * uExagg, aPos.z);'
+  + '  gl_Position = uMVP * vec4(p, 1.0);'
+  + '  vUV = aUV;'
+  // The normal is rebuilt from the ground's true slope and the CURRENT
+  // exaggeration, so lighting stays honest while the relief slider moves —
+  // a stored normal is only right for one setting.
+  + '  vNormal = normalize(vec3(-aSlope.x * uExagg, 1.0, -aSlope.y * uExagg));'
+  + '  vDist = gl_Position.w;'
+  + '}';
+const V3_FRAG = 'precision mediump float;'
+  + 'varying vec2 vUV; varying vec3 vNormal; varying float vDist;'
+  + 'uniform sampler2D uTex; uniform vec3 uLight; uniform vec3 uSky; uniform float uFog;'
+  + 'void main() {'
+  + '  vec3 ground = texture2D(uTex, vUV).rgb;'
+  + '  float diff = max(dot(normalize(vNormal), uLight), 0.0);'
+  + '  vec3 lit = ground * (0.5 + 0.6 * diff);'
+  + '  float f = clamp(vDist * uFog, 0.0, 0.8);'
+  + '  gl_FragColor = vec4(mix(lit, uSky, f), 1.0);'
+  + '}';
+
+function glCompile(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error('shader: ' + gl.getShaderInfoLog(sh));
+  }
+  return sh;
+}
+
+/** Buffers, program and texture for one mesh. Rebuilt on every entry, because
+ *  the ground under the view may have changed since last time. */
+function initGL(mesh, texCanvas) {
+  const gl = gl3dCanvas.getContext('webgl', { antialias: true })
+    || gl3dCanvas.getContext('experimental-webgl');
+  if (!gl) throw new Error('this browser has no WebGL');
+  const prog = gl.createProgram();
+  gl.attachShader(prog, glCompile(gl, gl.VERTEX_SHADER, V3_VERT));
+  gl.attachShader(prog, glCompile(gl, gl.FRAGMENT_SHADER, V3_FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error('link: ' + gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  const buf = (target, data) => {
+    const b = gl.createBuffer();
+    gl.bindBuffer(target, b);
+    gl.bufferData(target, data, gl.STATIC_DRAW);
+    return b;
+  };
+  const attr = (name, buffer, size) => {
+    const loc = gl.getAttribLocation(prog, name);
+    // -1 means the compiler optimised the attribute away, which for THIS
+    // shader always means a line went missing from it: every attribute here
+    // is load-bearing. Shipping past it renders confidently wrong ground —
+    // the texture sampled at one undefined texel painted the whole property
+    // a uniform green, with no error anywhere — so it is a thrown error, not
+    // a warning.
+    if (loc < 0) throw new Error('shader lost attribute ' + name);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  };
+  attr('aPos', buf(gl.ARRAY_BUFFER, mesh.positions), 3);
+  attr('aUV', buf(gl.ARRAY_BUFFER, mesh.uvs), 2);
+  attr('aSlope', buf(gl.ARRAY_BUFFER, mesh.slopes), 2);
+  buf(gl.ELEMENT_ARRAY_BUFFER, mesh.indices);
+
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texCanvas);
+  // The stitched canvas is not power-of-two sized, which WebGL 1 only accepts
+  // clamped and unmipped.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.72, 0.80, 0.89, 1);   // haze at the horizon, not space
+
+  const u = name => gl.getUniformLocation(prog, name);
+  // Light from the north-west, matching the hillshade's azimuth 315 — the 2D
+  // and 3D pictures of the same draw must shade the same side.
+  const light = [-0.45, 0.77, -0.45];
+  const ll = Math.hypot(...light);
+  gl.uniform3f(u('uLight'), light[0] / ll, light[1] / ll, light[2] / ll);
+  gl.uniform3f(u('uSky'), 0.72, 0.80, 0.89);
+  return { gl, uMVP: u('uMVP'), uExagg: u('uExagg'), uFog: u('uFog'),
+           count: mesh.indices.length,
+           indexType: mesh.indices.BYTES_PER_ELEMENT === 4 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
+}
+
+function size3dCanvas() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  gl3dCanvas.width = Math.round(W * dpr);
+  gl3dCanvas.height = Math.round(H * dpr);
+  if (V3) V3.res.gl.viewport(0, 0, gl3dCanvas.width, gl3dCanvas.height);
+}
+
+/** Every stand and camera on this ground, as DOM pins that ride the mesh. */
+function build3dPins() {
+  pins3dEl.textContent = '';
+  const b = TERRAIN.bounds, g = TERRAIN.grid;
+  const pins = [];
+  const world = (lat, lng) => {
+    const fc = (lng - b.west) / ((b.east - b.west) / (g.cols - 1));
+    const fr = (lat - b.south) / ((b.north - b.south) / (g.rows - 1));
+    const e = T3D.elevAtCell(V3.elev, g.cols, g.rows, fc, fr) - V3.mesh.meanElev;
+    return [(fc - (g.cols - 1) / 2) * g.spacingM, e, ((g.rows - 1) / 2 - fr) * g.spacingM];
+  };
+  const inside = (lat, lng) =>
+    lat >= b.south && lat <= b.north && lng >= b.west && lng <= b.east;
+  for (const st of STANDS) {
+    if (!inside(st.lat, st.lng)) continue;
+    const rank = rankOf(st.id);
+    const pin = el('div', 'stand' + (rank ? ' rank-' + rank : ''));
+    pin.title = st.name;
+    pin.onclick = ev => { ev.stopPropagation(); showStandReport(st); };
+    const lab = el('div', 'slabel', st.name);
+    pins3dEl.append(lab, pin);
+    pins.push({ w: world(st.lat, st.lng), pin, lab });
+  }
+  for (const c of D.cameras) {
+    if (typeof c.lat !== 'number' || !inside(c.lat, c.lng)) continue;
+    const pin = el('div', 'pin ' + c.health.level);
+    pin.title = c.name;
+    pin.onclick = ev => { ev.stopPropagation(); showCameraPanel(c); };
+    const lab = el('div', 'plabel', c.name);
+    pins3dEl.append(lab, pin);
+    pins.push({ w: world(c.lat, c.lng), pin, lab });
+  }
+  V3.pins = pins;
+}
+
+function render3d() {
+  if (!V3) return;
+  const { gl } = V3.res;
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const eye = T3D.orbitEye(V3.target, V3.yaw, V3.pitch, V3.dist);
+  const mvp = T3D.mat4Multiply(
+    T3D.mat4Perspective(55, W / H, 5, V3.spanM * 8),
+    T3D.mat4LookAt(eye, V3.target));
+  gl.uniformMatrix4fv(V3.res.uMVP, false, new Float32Array(mvp));
+  gl.uniform1f(V3.res.uExagg, V3.exagg);
+  // Fog starts mattering past a few spans of ground, so it scales with the
+  // property rather than with a constant that suits one radius only.
+  gl.uniform1f(V3.res.uFog, 0.9 / (V3.spanM * 5));
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.drawElements(gl.TRIANGLES, V3.res.count, V3.res.indexType, 0);
+
+  for (const p of V3.pins) {
+    const pt = T3D.projectPoint(mvp, p.w[0], p.w[1] * V3.exagg, p.w[2], W, H);
+    p.pin.style.display = pt.visible ? '' : 'none';
+    p.lab.style.display = pt.visible ? '' : 'none';
+    if (!pt.visible) continue;
+    p.pin.style.left = pt.x + 'px'; p.pin.style.top = pt.y + 'px';
+    p.lab.style.left = pt.x + 'px'; p.lab.style.top = pt.y + 'px';
+    const z = Math.max(1, Math.round((1 - pt.depth) * 500));
+    p.pin.style.zIndex = z; p.lab.style.zIndex = z;
+  }
+  V3.raf = requestAnimationFrame(render3d);
+}
+
+function exitView3d() {
+  if (!V3) return;
+  cancelAnimationFrame(V3.raf);
+  view3dEl.hidden = true;
+  view3dBtn.classList.remove('on');
+  pins3dEl.textContent = '';
+  V3 = null;
+}
+
+async function enterView3d() {
+  if (V3 || view3dLoading || !D.live) return;
+  view3dLoading = true;
+  view3dBtn.textContent = 'Building 3D…';
+  try {
+    // The same fetch, cache and coverage rules the flat terrain uses; a view
+    // with no LiDAR under it says so through the terrain note rather than
+    // rendering a guess.
+    if (!TERRAIN || !TERRAIN.covered || !TERRAIN.elev || !terrainCoversView()) {
+      await loadTerrain();
+    }
+    if (!TERRAIN || !TERRAIN.covered || !TERRAIN.elev) return;
+    const b = TERRAIN.bounds, g = TERRAIN.grid;
+    const elev = T3D.dequantizeElev(
+      T3D.bytesToU16(unb64(TERRAIN.elev.b64)), TERRAIN.elev.min, TERRAIN.elev.scale);
+    const tex = await textureFor3d(b);
+    const uv = (c, r) => {
+      const lng = b.west + c * (b.east - b.west) / (g.cols - 1);
+      const lat = b.south + r * (b.north - b.south) / (g.rows - 1);
+      return [(projX(lng, tex.z) - tex.originX) / tex.canvas.width,
+              (projY(lat, tex.z) - tex.originY) / tex.canvas.height];
+    };
+    const mesh = T3D.buildTerrainMesh({
+      cols: g.cols, rows: g.rows, dxM: g.spacingM, dyM: g.spacingM, elev, uv,
+    });
+    if (!mesh) return;
+    size3dCanvas();
+    const res = initGL(mesh, tex.canvas);
+    const spanM = Math.max(g.cols, g.rows) * g.spacingM;
+    V3 = {
+      res, mesh, elev, spanM,
+      target: [0, 0, 0],
+      yaw: 0, pitch: 55, dist: spanM * 1.05,
+      exagg: Number(exaggInput.value) || 1.5,
+      pins: [], raf: 0,
+    };
+    size3dCanvas();
+    build3dPins();
+    view3dEl.hidden = false;
+    view3dBtn.classList.add('on');
+    say3dHint();
+    render3d();
+  } catch (err) {
+    terrainNote('3D failed: ' + err.message);
+    exitView3d();
+  } finally {
+    view3dLoading = false;
+    view3dBtn.textContent = '3D view';
+  }
+}
+
+/** The HUD line: how to drive it, and how honest the relief is. */
+function say3dHint() {
+  if (!hint3dEl) return;
+  const st = TERRAIN && TERRAIN.stats;
+  hint3dEl.textContent = 'Drag to orbit · scroll to zoom · shift-drag to slide.'
+    + (st ? ' ' + st.reliefFt + ' ft of relief on this ground.' : '')
+    + (V3 && V3.exagg > 1
+      ? ' Hills stretched ' + V3.exagg + '× — slide to 1× for true scale.'
+      : ' True vertical scale.');
+}
+
+view3dBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (V3) exitView3d();
+  else enterView3d();
+};
+document.getElementById('exit3d').onclick = () => exitView3d();
+exaggInput.oninput = () => {
+  if (V3) V3.exagg = Number(exaggInput.value) || 1;
+  exaggSay.textContent = exaggInput.value + '×';
+  say3dHint();
+};
+
+// One finger orbits; a second zooms and slides. Pointer events carry both.
+const p3 = new Map();     // pointerId -> {x, y}
+let pinch0 = null;        // {dist, cx, cy} at the moment the second finger lands
+gl3dCanvas.addEventListener('pointerdown', e => {
+  if (!V3) return;
+  e.preventDefault();
+  gl3dCanvas.setPointerCapture(e.pointerId);
+  p3.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (p3.size === 2) {
+    const [a, bb] = [...p3.values()];
+    pinch0 = { dist: Math.hypot(a.x - bb.x, a.y - bb.y), d0: V3.dist };
+  }
+  view3dEl.classList.add('drag');
+});
+gl3dCanvas.addEventListener('pointermove', e => {
+  if (!V3 || !p3.has(e.pointerId)) return;
+  const prev = p3.get(e.pointerId);
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  p3.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (p3.size === 2 && pinch0) {
+    const [a, bb] = [...p3.values()];
+    const d = Math.hypot(a.x - bb.x, a.y - bb.y);
+    if (d > 1) V3.dist = Math.max(60, Math.min(V3.spanM * 4, pinch0.d0 * pinch0.dist / d));
+    return;
+  }
+  if (e.shiftKey || e.buttons === 2) {
+    // Slide the target across the ground, in the direction the screen moves.
+    const k = V3.dist * 0.0016;
+    const basis = T3D.orbitBasis(V3.yaw);
+    V3.target[0] += (-dx * basis.rightX + dy * basis.fwdX) * k;
+    V3.target[2] += (-dx * basis.rightZ + dy * basis.fwdZ) * k;
+  } else {
+    V3.yaw = (V3.yaw + dx * 0.35 + 360) % 360;
+    V3.pitch = Math.max(12, Math.min(85, V3.pitch + dy * 0.25));
+  }
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  gl3dCanvas.addEventListener(ev, e => {
+    p3.delete(e.pointerId);
+    if (p3.size < 2) pinch0 = null;
+    if (!p3.size) view3dEl.classList.remove('drag');
+  });
+}
+gl3dCanvas.addEventListener('wheel', e => {
+  if (!V3) return;
+  e.preventDefault();
+  V3.dist = Math.max(60, Math.min(V3.spanM * 4, V3.dist * (e.deltaY > 0 ? 1.15 : 0.87)));
+}, { passive: false });
+gl3dCanvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('resize', () => { if (V3) size3dCanvas(); });
+
 // ---- the tool tree ------------------------------------------------------
 // Groups fold, and the whole tree folds from its root — which is what makes
 // this usable on a phone, where the open tree is a third of the screen. No

@@ -132,11 +132,13 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   }
   /* The one-question screen. Server-only, so the static page hides it rather
      than offering a link that 404s off a file:// copy. */
-  header .tonight { align-self: center; white-space: nowrap;
-    color: var(--accent); text-decoration: none; font-size: 14px; font-weight: 600;
-    border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
-  header .tonight:hover { border-color: var(--accent); }
-  header .tonight.first { margin-left: auto; }
+  /* Scoped to the top bar now that the header is one; the old header-element
+     scoping quietly dropped these to bare blue links when the layout moved. */
+  #topbar .tonight { align-self: center; white-space: nowrap;
+    color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+    background: var(--panel); }
+  #topbar .tonight:hover { border-color: var(--accent); }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);

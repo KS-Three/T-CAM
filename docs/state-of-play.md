@@ -69,6 +69,11 @@ Rules for anything added from here:
 | **Lane handles** — drag the tip for reach, either side handle for width | Driven in a browser with a real mouse: 20° → 91° wide, then 52 m → 82 m with the width unchanged, saved, reopened from the server |
 | **Lane sizes typed, in yards** — how far out and how wide across the end, rather than dragged at | Driven in a browser against the real server: 85 yd out and 62 yd across typed into the form, stored as a 20° half-angle, reloaded and reopened unchanged; the widened lane cost two winds |
 | **Build stamp** — the server says which commit it is running, and whether the files have moved on since | Verified live: banner names the branch and sha, `/api/health` flipped to `stale: true` naming the touched file |
+| **Full-screen map** — the dashboard IS the map; the old page slides in as the Camp report drawer | Driven in a browser, light and dark, desktop and phone width |
+| **Tool tree** — Stands / Scouting / Ground branches with guide lines, collapsible from any node | Driven with a real mouse: branch folded, root folded, reopened |
+| **Stand hunting report** — click a pin, get the coming sit's verdict, reasons, winds, lanes, covering cameras; Edit one button further | Driven live: red stand's panel named the lane the wind runs down; Edit opened the form and closed the panel |
+| **Ranked pin colours** — green / orange / red from the coming sit, refreshed with the stands | Driven live against a plan fixture: three stands, three colours, all correct |
+| **3D view** — imagery draped over the 3DEP grid, orbit/zoom/slide, relief slider 1–4×, pins riding the ground | Driven headless over real USGS LiDAR (222 ft of relief) and real Esri tiles: orbit moved the pins, report opened off the terrain, exit clean; mesh/matrix maths unit-tested in Node and compared against the browser copy |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.

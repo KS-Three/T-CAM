@@ -547,6 +547,38 @@ export function hillshade(grid, {
 }
 
 /**
+ * The elevations themselves, packed for the wire.
+ *
+ * The 3D view needs the raw grid in the browser, and Float64 JSON would be
+ * megabytes of digits the source data cannot back — 3DEP is good to about a
+ * tenth of a metre. Quantized to 65,534 steps across the grid's own relief
+ * the worst-case error on this ground is millimetres, and the payload is two
+ * bytes a sample before base64.
+ *
+ * Bytes are written little-endian BY HAND rather than through the platform's
+ * typed-array memory, so the format is the format wherever this runs. 0xFFFF
+ * marks a hole — water, or ground 3DEP has not flown — because zero is a real
+ * elevation and would read as a sea-level pit in the middle of Wisconsin.
+ * terrain3d.mjs owns the matching unpack, and a test round-trips the pair.
+ */
+export function packElevations(grid, stats = gridStats(grid)) {
+  const n = grid.cols * grid.rows;
+  const min = Number.isFinite(stats.min) ? stats.min : 0;
+  const relief = (Number.isFinite(stats.max) ? stats.max : min) - min;
+  const scale = relief > 0 ? relief / 65534 : 1;
+  const bytes = new Uint8Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const z = grid.z[i];
+    const q = Number.isFinite(z)
+      ? Math.max(0, Math.min(65534, Math.round((z - min) / scale)))
+      : 65535;
+    bytes[2 * i] = q & 255;
+    bytes[2 * i + 1] = q >> 8;
+  }
+  return { bytes, min, scale };
+}
+
+/**
  * Slope and aspect at one point, from the nearest lattice cell.
  *
  * Nearest-cell rather than interpolated on purpose: aspect is an angle that

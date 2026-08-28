@@ -83,7 +83,7 @@ are never written to disk, never logged, and never stored in this repo.
 
 | Page | What it is for |
 | --- | --- |
-| `/` | The dashboard: best sits ahead, which stands earn their keep, the map |
+| `/` | The map, full screen: every stand wearing tonight's verdict, with the camp report in a drawer |
 | `/tonight` | One screen: which stand, the walk in, when to leave, log the sit |
 | `/journal` | The season, and what it is entitled to claim from it |
 | `/review` | Tagging photos — keyboard-driven, built for volume |
@@ -521,6 +521,59 @@ Every factor is published whitetail behaviour, not a pattern learned from your
 cameras. Once photos accumulate, those sightings can be scored against these
 same factors to find which ones actually predict movement on your ground — and
 at that point the evidence should correct this model, not the reverse.
+
+## The map is the app
+
+The dashboard used to be a page of cards with a map in the middle. It is now
+the other way around (2026-08-28): **the map fills the screen**, and everything
+else overlays it or slides in over it.
+
+- **The tool tree** (top-left) replaces the flat stack of buttons: Stands,
+  Scouting and Ground branches with guide lines, collapsible per branch and
+  from the root — which is what makes it usable on a phone, where the open
+  tree is a third of the screen.
+- **Camp report** (top-right) slides the old page in from the right: alerts,
+  best sits, wind history, the review queue, camera cards, recent photos. It
+  scrolls on its own, so browsing it never moves the map underneath.
+- **Click a stand and its hunting report opens** — not the edit form. The
+  panel carries the coming sit's verdict as a coloured chip, the ranking's
+  reasons word for word, the winds it is judged on and where they came from,
+  its lanes, and the cameras covering it. Edit is one button further away,
+  because mostly you are not editing — you are deciding.
+- **Click a camera and its card opens** in the same panel: the exact card the
+  drawer shows, built by one function so the two can never disagree.
+- **Stand pins wear tonight's verdict**: green when the coming sit's wind
+  works, red when it would run your scent down a lane, orange for every honest
+  in-between — winds not recorded, no forecast yet, or a thermal quietly
+  arguing with a wind that looks fine. Unknown is deliberately not green. The
+  colours refresh with the stands, so a lane you just saved can flip tonight's
+  answer in front of you.
+
+### 3D
+
+Press **3D view** (under Ground) and the map stands up: the satellite imagery
+draped over the same USGS 3DEP LiDAR the hillshade reads, lit from the same
+north-west the hillshade uses, with your stands and cameras riding the ground
+in their ranking colours. Drag to orbit, scroll to zoom, shift-drag to slide;
+on a phone, one finger orbits and two zoom.
+
+The **Relief slider** stretches hills from true scale (1×) to 4×, and the HUD
+says so while it is stretched — this ground is gentle, and a rendering that
+quietly exaggerated it would be a diagram wearing a photograph's clothes. The
+lighting stays honest under the slider: the mesh carries the ground's true
+slope and the shader rebuilds normals for the current setting, rather than
+baking normals that are only right for one.
+
+There is no mapping library behind this — the page keeps its no-dependency
+rule (the offline test literally asserts it contacts no external host). The
+mesh, matrices and projection are a few hundred lines in
+[`terrain3d.mjs`](terrain3d.mjs), tested in Node and emitted into the page the
+same way the measuring and lane arithmetic are, so the mesh the browser drapes
+and the mesh the tests measure cannot drift. Elevations travel quantized to
+two bytes a sample (millimetre error against 3DEP's own tenth-of-a-metre), and
+tiles come through the server's own cache like every other tile. Like Terrain,
+it needs the server and real 3DEP coverage; a view with neither says so
+instead of rendering a guess.
 
 ## Map layers
 

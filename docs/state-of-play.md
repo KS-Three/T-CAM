@@ -41,10 +41,10 @@ Rules for anything added from here:
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits | 443 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits, tracks | 501 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
-| **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
+| **Stands** — drop, name, type, move, delete, good-winds, shooting lanes | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
 | **Parcel ownership** — click for owner, acres, class, county, mailing address | Live against the Wisconsin service at a real camera; button-to-card path re-verified with a real mouse |
 | **Hunt planner** — ranks sits by rut, fronts, pressure, wind, rain, moon | Unit-tested; live forecast fetch verified |
 | **LiDAR terrain** — hillshade + adaptive contours from free USGS 3DEP | Live at 1 m resolution at the Green Lake camera |
@@ -65,6 +65,9 @@ Rules for anything added from here:
 | **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Tested against stub owners; `?parcels=off` for outside Wisconsin |
 | **Offline** — /tonight, the map and sit logging with no server reachable | Driven end to end: server killed, page served by the worker, sit queued, server restarted, sit arrived |
 | **Track recording** — record the walk in off the phone's GPS, judged against the route you drew | Driven in a browser with real geolocation and with a scripted 3-minute walk: 180 fixes, teleport and bad fix both rejected, 275 m, compared to the route on save |
+| **Shooting lanes** — mark where you can shoot; the winds are derived from the shape, not ticked | Cross-checked against `routes.mjs`, which computes scent independently, on every lane bearing × all 16 winds; the browser copy compiled in a vm and compared to Node's on the same lanes |
+| **Lane handles** — drag the tip for reach, either side handle for width | Driven in a browser with a real mouse: 20° → 91° wide, then 52 m → 82 m with the width unchanged, saved, reopened from the server |
+| **Build stamp** — the server says which commit it is running, and whether the files have moved on since | Verified live: banner names the branch and sha, `/api/health` flipped to `stale: true` naming the touched file |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -202,6 +205,55 @@ Consequences that are deliberate:
   a browser run where compressed timing tripped the speed gate and the page
   announced having strayed 140 m from a route it had never really measured.
 
+## What a shooting lane is, and what it decides
+
+Added 2026-08-28. This replaced sixteen wind tick-boxes as the primary input,
+and the reasoning matters more than the code: **you do not know a stand's winds
+directly.** You know where you can see and shoot from it — the lane cut through
+the popple, the field edge, the opening over the crossing. Ticking boxes was
+doing that derivation in your head, every time, and getting it slightly wrong.
+
+**Trace a lane, and the winds follow.** Open a stand, press Trace, click where
+you can shoot to. One click per lane.
+
+**Why the geometry is exact rather than sampled.** A lane radiates FROM the
+stand, so every point along it lies on one bearing from the stand — the far end,
+the near end, and everything between. That collapses "does my scent reach any
+part of this lane" into a single angular test against one bearing. It is the
+one place in this program where the honest answer is also the cheap one.
+
+**Three handles per lane**, doing deliberately different jobs:
+
+- the **tip** moves the far end — how far the shot reaches and which way it
+  points;
+- the **two side handles** open and close the cone and change nothing else, so
+  the centre line stays where you put it.
+
+A single corner handle doing both would make it impossible to widen a lane
+without also shortening it.
+
+**Widening costs winds, and is meant to.** Each lane is tested against its own
+half-angle, so the shape you drew is the shape you are judged on. The scent
+plume still dominates — 30 degrees either side against a lane's 10 by default —
+so a lane's width moves the answer at the margins, not wholesale.
+
+**A lane never widened stores no width at all.** It reads back as "use the
+default", so changing that default later moves every lane nobody adjusted and
+leaves alone every lane somebody did. A stored copy of today's number would
+outlive any change to it and quietly disagree with lanes traced after.
+
+**The ticked winds are kept, not replaced.** They are used where a stand has no
+lanes, and where both exist the disagreement is REPORTED rather than resolved. A
+hand-picked set can hold something geometry cannot see — a thermal that always
+drains one way, a road you will not shoot toward — and it can equally be a guess
+made once and never revisited. You have stood in the tree; the arithmetic has
+not.
+
+Bounds: a half-angle under 3 degrees is a line, over 80 is a 160-degree fan you
+can see across rather than shoot down. The map clamps a drag to those; the
+database's own check is looser (above 0, below 90) because it is guarding
+against nonsense arriving over the API, not enforcing a judgement.
+
 ## Next, in order
 
 1. **Record a walk in, on the real phone.** The recorder is driven and tested
@@ -222,6 +274,12 @@ Consequences that are deliberate:
 6. Moultrie, if a capture arrives.
 7. Historical imagery, if a working NAIP endpoint can be found.
 
+**Open, and Kent's to settle:** whether the sixteen wind tick-boxes should
+disappear entirely once a stand has lanes. They currently stay, relabelled "Or
+override by hand", because a ticked set can hold something geometry cannot see.
+The argument for removing them is that two inputs for one answer is how they
+drift apart. Not decided; do not decide it in passing.
+
 ## The structural debt worth naming
 
 **Both splits are done** (2026-08-28). `spypoint-sync.mjs` was 2,408 lines, of
@@ -231,9 +289,18 @@ was then 2,100 lines of which about 1,300 were the map. The files now are:
 | File | Lines | Holds |
 | --- | --- | --- |
 | `spypoint-sync.mjs` | ~420 | the sync, and the files it writes |
-| `dashboard-page.mjs` | ~600 | alerts, wind rose, review queue, sit ranking, cards, photos |
-| `map-view.mjs` | ~1,600 | the map: layers, pins, markers, routes, measure, terrain, parcels |
+| `dashboard-page.mjs` | ~680 | alerts, wind rose, review queue, sit ranking, cards, photos |
+| `map-view.mjs` | ~2,400 | the map: layers, pins, markers, routes, lanes, measure, terrain, parcels |
 | `tonight-page.mjs`, `journal-page.mjs`, `review-page.mjs` | ~500 each | one screen each |
+
+**`map-view.mjs` has grown back to the size that triggered the split.** It was
+1,600 lines when it came out of the dashboard on 2026-08-28 and is 2,400 by the
+end of that same day — the same length `spypoint-sync.mjs` was when it became
+unworkable. Nothing is wrong with it yet, and splitting it on a line count alone
+would be cargo-culting the last split rather than learning from it; the seam
+worth watching for is the forms (stand, marker, route — three of them, sharing a
+class and now a close path) coming out as their own file. Naming it here so the
+next person sees a trend rather than a number.
 
 The template-literal hazard that motivated it is still real for every page:
 escapes inside such a literal resolve when the PAGE IS BUILT rather than when
@@ -294,6 +361,32 @@ Two smaller notes:
   warning about exactly this: writing the trap down is not the same as obeying
   it.
 - Never edit a shipped migration — add another.
+- **A server left running from before a `git pull` serves the old page for
+  ever.** `serve.mjs` builds every page from template literals at import time —
+  once, at startup — with no build step and no watcher, so the browser shows a
+  feature missing that is right there in the repository, and nothing says why.
+  This cost a full round trip on 2026-08-28: the lane tracing was reported as
+  "not there" by a checkout three commits behind a running server. **Restart
+  after every pull**, and when in doubt read the startup banner (it names the
+  branch and commit) or `curl /api/health` — `build.stale` is true when a source
+  file has changed since the process booted, and `build.staleSince` names it.
+- **A panel in the middle of the map covers the thing it edits.** Harmless while
+  a form was something you filled in and closed; fatal once the map behind it
+  grew handles. Measured with a real drag: the press landed on the wind tick
+  grid and the cone never moved. Any new map-side form has the same problem —
+  `centreClearOfForm()` is the fix, and it measures the form's real box because
+  the box changes with content and screen size.
+- **Handles that sit where geometry puts them will pile up.** On a default
+  20-degree cone the rim corners are a tenth of the lane's length from the tip —
+  10 pixels on a 60-pixel lane — so the tip's grab circle covered both and a
+  "widen" drag moved the far end instead. Targets have to scale with the thing
+  they handle, and be pulled off each other deliberately.
+- **An SVG rebuilt on every draw destroys the element you are dragging.** The
+  overlay is `innerHTML`-replaced each frame, including the frame the drag
+  itself causes. Listen on the SVG and capture the pointer to it, never to the
+  handle: on touch the browser implicitly captures to the original target, and
+  the rest of the gesture then goes to a detached node and simply stops
+  arriving.
 - **The dashboard is theme-aware** — light by default, dark under
   `prefers-color-scheme`. A colour hardcoded in chart code is therefore wrong in
   one of the two modes. The wind rose's ramp lives in the theme's custom

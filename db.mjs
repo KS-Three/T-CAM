@@ -472,6 +472,28 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX tracks_started ON tracks(started_at);');
     },
   },
+  {
+    version: 10,
+    name: 'shooting lanes on stands',
+    up: db => {
+      // What a stand can actually see and shoot.
+      //
+      // This is the input that good_winds was always standing in for. You do
+      // not know a stand's winds directly; you know where the lanes are, and
+      // the winds follow. Ticking sixteen boxes was doing that derivation in
+      // your head every time.
+      //
+      // A column rather than a table, and JSON rather than rows, for the same
+      // reason routes store their points that way: a stand's lanes are read
+      // and written whole, never queried lane by lane.
+      //
+      // good_winds STAYS. Lanes are better evidence, but a hand-picked set can
+      // encode something geometry cannot see — a thermal that always drains
+      // one way, a road you will not shoot toward — and dropping the column
+      // would silently discard what is already recorded.
+      db.exec('ALTER TABLE stands ADD COLUMN lanes TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -749,8 +771,30 @@ export function normalizeWinds(winds) {
   return seen.length ? seen.join(',') : null;
 }
 
+/**
+ * Lanes in, JSON out. A lane whose endpoint is not a real coordinate is
+ * refused rather than stored: Number(null) is 0 and 0,0 is in the Atlantic,
+ * and a lane pointing there would quietly rule out half the compass.
+ */
+export function normalizeLanes(lanes) {
+  if (lanes === null || lanes === undefined) return null;
+  if (!Array.isArray(lanes)) throw new Error('lanes must be a list');
+  const out = [];
+  for (const l of lanes) {
+    const to = l?.to;
+    if (!Array.isArray(to) || to.length < 2
+        || !Number.isFinite(to[0]) || !Number.isFinite(to[1])
+        || Math.abs(to[1]) > 90 || Math.abs(to[0]) > 180) {
+      throw new Error('each lane needs a [longitude, latitude] endpoint');
+    }
+    const label = l.label === undefined || l.label === null ? null : String(l.label).trim();
+    out.push({ to: [to[0], to[1]], label: label || null });
+  }
+  return out.length ? JSON.stringify(out) : null;
+}
+
 export function createStand(db, { name, type = 'stand', lat, lng,
-  propertyId = null, goodWinds = null, notes = null }) {
+  propertyId = null, goodWinds = null, notes = null, lanes = null }) {
   if (!name || !String(name).trim()) throw new Error('a stand needs a name');
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     throw new Error('a stand needs coordinates');
@@ -763,10 +807,11 @@ export function createStand(db, { name, type = 'stand', lat, lng,
   }
   const now = nowIso();
   const info = db.prepare(`
-    INSERT INTO stands (property_id, name, type, lat, lng, good_winds, notes, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?)
+    INSERT INTO stands
+      (property_id, name, type, lat, lng, good_winds, notes, lanes, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(propertyId, String(name).trim(), type, lat, lng,
-    normalizeWinds(goodWinds), notes, now, now);
+    normalizeWinds(goodWinds), notes, normalizeLanes(lanes), now, now);
   return db.prepare('SELECT * FROM stands WHERE id = ?').get(info.lastInsertRowid);
 }
 
@@ -783,6 +828,7 @@ export function updateStand(db, id, patch = {}) {
     property_id: patch.propertyId !== undefined ? patch.propertyId : existing.property_id,
     good_winds: patch.goodWinds !== undefined ? normalizeWinds(patch.goodWinds) : existing.good_winds,
     notes: patch.notes !== undefined ? patch.notes : existing.notes,
+    lanes: patch.lanes !== undefined ? normalizeLanes(patch.lanes) : existing.lanes,
   };
   if (!next.name) throw new Error('a stand needs a name');
   if (!STAND_TYPES.includes(next.type)) {
@@ -794,10 +840,10 @@ export function updateStand(db, id, patch = {}) {
 
   db.prepare(`
     UPDATE stands SET name = ?, type = ?, lat = ?, lng = ?, property_id = ?,
-                      good_winds = ?, notes = ?, updated_at = ?
+                      good_winds = ?, notes = ?, lanes = ?, updated_at = ?
     WHERE id = ?
   `).run(next.name, next.type, next.lat, next.lng, next.property_id,
-    next.good_winds, next.notes, nowIso(), id);
+    next.good_winds, next.notes, next.lanes, nowIso(), id);
   return db.prepare('SELECT * FROM stands WHERE id = ?').get(id);
 }
 
@@ -819,6 +865,10 @@ export function allStands(db, { nearMetres = 400 } = {}) {
   `).all().map(s => ({
     ...s,
     winds: s.good_winds ? s.good_winds.split(',') : [],
+    // Parsed, not derived. Turning lanes into winds needs the scent geometry
+    // in routes.mjs, which imports this file — so the derivation lives in
+    // coverage.mjs and callers ask it. This layer only stores and returns.
+    lanes: s.lanes ? JSON.parse(s.lanes) : [],
     nearbyCameras: cams
       .map(c => ({ id: c.id, name: c.name, metres: Math.round(distanceM(s.lat, s.lng, c.lat, c.lng)) }))
       .filter(c => c.metres <= nearMetres)
@@ -827,9 +877,16 @@ export function allStands(db, { nearMetres = 400 } = {}) {
 }
 
 /**
- * Is this stand huntable on this wind? Unknown winds answer null rather than
- * true: "I have not told it yet" and "yes" must not look the same, or the tool
- * would recommend sitting somewhere the deer will smell you.
+ * Is this stand huntable on this wind, by its TICKED winds alone?
+ *
+ * Unknown winds answer null rather than true: "I have not told it yet" and
+ * "yes" must not look the same, or the tool would recommend sitting somewhere
+ * the deer will smell you.
+ *
+ * This does not look at shooting lanes. Anything ranking a stand should call
+ * windsForStand() in coverage.mjs, which prefers lanes where they exist and
+ * says which source it used; this remains for the ticked-winds case and for
+ * callers that genuinely want only what was hand-entered.
  */
 export function standHuntableOn(stand, windFromDeg) {
   const winds = stand.good_winds ? stand.good_winds.split(',') : [];

@@ -44,6 +44,7 @@ import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
 import { suggestStands, onYourGround } from './stand-suggester.mjs';
+import { windsForStand } from './coverage.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
 import { buildTrack, compareToRoute } from './track.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
@@ -537,14 +538,23 @@ export function createServer({ out = OPT.out } = {}) {
       }
       // --- stands -------------------------------------------------------
       if (url.pathname === '/api/stands') {
-        if (req.method === 'GET') return sendJson(res, 200, allStands(db));
+        if (req.method === 'GET') {
+          // The derivation travels with the stand. The page draws lanes and
+          // shows the winds they imply, and re-deriving it in the browser is
+          // how the two quietly start disagreeing.
+          return sendJson(res, 200, allStands(db).map(s => {
+            const c = windsForStand(s);
+            return { ...s, coverage: c.derived, windSource: c.source,
+                     effectiveWinds: c.winds, windsCompared: c.compared };
+          }));
+        }
         if (req.method === 'POST') {
           const b = await readJson(req);
           try {
             return sendJson(res, 201, createStand(db, {
               name: b.name, type: b.type, lat: Number(b.lat), lng: Number(b.lng),
               propertyId: b.propertyId ?? null, goodWinds: b.goodWinds ?? null,
-              notes: b.notes ?? null,
+              notes: b.notes ?? null, lanes: b.lanes ?? null,
             }));
           } catch (err) {
             // A bad stand is the caller's mistake, not a server fault, and the
@@ -560,7 +570,7 @@ export function createServer({ out = OPT.out } = {}) {
           const b = await readJson(req);
           try {
             const patch = {};
-            for (const k of ['name', 'type', 'notes', 'goodWinds', 'propertyId']) {
+            for (const k of ['name', 'type', 'notes', 'goodWinds', 'propertyId', 'lanes']) {
               if (b[k] !== undefined) patch[k] = b[k];
             }
             if (b.lat !== undefined) patch.lat = Number(b.lat);

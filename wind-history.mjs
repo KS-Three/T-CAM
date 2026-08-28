@@ -24,6 +24,8 @@
  * window would weight late-season evenings wrongly.
  */
 
+import { windsForStand } from './coverage.mjs';
+
 const ARCHIVE = 'https://archive-api.open-meteo.com/v1/archive';
 
 export const ENDPOINT = () => process.env.TRAILCAM_ARCHIVE_URL || ARCHIVE;
@@ -162,14 +164,19 @@ export function climatology(archives, { months = SEASON_MONTHS } = {}) {
 export function standCoverage(stands, clim) {
   const covered = new Map();
   const rows = stands.map(s => {
-    const winds = s.winds ?? (s.good_winds ? s.good_winds.split(',') : []);
+    // Lanes where they are marked, ticked winds otherwise — one derivation,
+    // shared with the ranking, so the two screens cannot disagree about which
+    // winds a stand has.
+    const cover = windsForStand(s);
+    const winds = cover.winds;
     if (!winds.length) {
-      return { id: s.id, name: s.name, winds: [], pct: null, amPct: null, pmPct: null };
+      return { id: s.id, name: s.name, winds: [], source: cover.source,
+               pct: null, amPct: null, pmPct: null };
     }
     for (const w of winds) covered.set(w, (covered.get(w) ?? 0) + 1);
     const sum = (table) => Math.round(10 * winds.reduce((a, w) => a + (table[w] ?? 0), 0)) / 10;
     return {
-      id: s.id, name: s.name, winds,
+      id: s.id, name: s.name, winds, source: cover.source,
       pct: sum(clim.byPoint),
       amPct: sum(clim.byWindow.AM),
       pmPct: sum(clim.byWindow.PM),

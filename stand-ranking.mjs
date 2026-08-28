@@ -24,7 +24,8 @@
  * one that stays quiet, because you might believe it.
  */
 
-import { COMPASS, standHuntableOn, distanceM } from './db.mjs';
+import { COMPASS, distanceM } from './db.mjs';
+import { windsForStand } from './coverage.mjs';
 
 /**
  * Thermal strength by slope. The bands are coarse deliberately — the honest
@@ -95,19 +96,30 @@ export function rankStands({ stands = [], sit, terrainAt = () => null }) {
     const add = (n, why) => { total += n; parts.push({ points: n, why }); };
 
     // 1. Wind. The one that decides it.
-    const huntable = standHuntableOn(
-      { good_winds: (stand.winds ?? []).join(',') || stand.good_winds || null }, windDir);
+    //
+    // Lanes first where they are marked, because they are derived from
+    // geometry you measured rather than boxes you ticked from memory — and
+    // the reason says which, so a ranking can be argued with.
+    const cover = windsForStand(stand);
+    const huntable = cover.source === 'none' || windFrom === null
+      ? null : cover.winds.includes(windFrom);
+    const by = cover.source === 'lanes' ? 'its shooting lanes' : 'the winds you recorded';
     if (windDir === null) {
       parts.push({ points: 0, why: 'no wind forecast for this window' });
     } else if (huntable === null) {
       parts.push({
         points: 0,
-        why: 'good winds not recorded for this stand — set them and it can be ranked',
+        why: 'no shooting lanes or good winds recorded for this stand — mark the '
+          + 'lanes on the map and it can be ranked',
       });
     } else if (huntable) {
-      add(30, `wind is ${windFrom}, which this stand is set up for`);
+      add(30, `wind is ${windFrom}, which ${by} allow`);
     } else {
-      add(-40, `wind is ${windFrom} — this stand is not huntable on it`);
+      const blocked = cover.derived?.blocked?.find(b => b.point === windFrom);
+      add(-40, blocked
+        ? `wind is ${windFrom} — that blows your scent down the `
+          + (blocked.lane.label ? blocked.lane.label + ' lane' : `${blocked.lane.point} lane`)
+        : `wind is ${windFrom} — this stand is not huntable on it`);
     }
 
     // 2. Thermal, where the ground has enough slope to make one.

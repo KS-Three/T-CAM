@@ -62,7 +62,9 @@ test('the stand that suits the wind wins', () => {
   assert.equal(ranked[0].huntable, true);
   assert.equal(ranked[1].huntable, false);
   assert.ok(ranked[0].total > ranked[1].total);
-  assert.ok(ranked[0].reasons.some(r => /set up for/.test(r.why)));
+  // The reason names the wind and says what allows it — lanes where they are
+  // marked, the ticked winds otherwise.
+  assert.ok(ranked[0].reasons.some(r => /wind is NW, which .* allow/.test(r.why)));
 });
 
 test('a stand with no recorded winds is unknown, never a quiet yes', () => {
@@ -71,8 +73,10 @@ test('a stand with no recorded winds is unknown, never a quiet yes', () => {
   const ranked = rankStands({ sit: sitNW, stands: [stand('Untold', [])] });
   assert.equal(ranked[0].huntable, null);
   assert.equal(ranked[0].total, 0, 'unknown scores zero, not a bonus');
-  assert.ok(ranked[0].reasons.some(r => /not recorded/.test(r.why)),
-    'and it says what to do about it');
+  assert.ok(ranked[0].reasons.some(r => /no shooting lanes or good winds recorded/.test(r.why)),
+    'it says what is missing');
+  assert.ok(ranked[0].reasons.some(r => /mark the lanes on the map/.test(r.why)),
+    'and what to do about it');
 });
 
 test('a known-good stand outranks an unknown one', () => {

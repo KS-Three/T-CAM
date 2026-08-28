@@ -41,6 +41,7 @@
  */
 
 import { browserSource as measureSource } from './measure.mjs';
+import { browserSource as coverSource } from './coverage.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -94,8 +95,13 @@ export const mapStyles = `
               border-radius: 8px; padding: 7px 12px; font-size: 12px; color: var(--ink);
               box-shadow: 0 2px 12px rgba(0,0,0,.35); }
   .terrainnote b { color: var(--ink); }
+  /* The map clips its overflow, so a form taller than 420px loses its ends —
+     and with them the Save row. It was already close with sixteen wind buttons
+     and a notes box; the lane section tipped it over and the buttons became
+     literally unclickable. Scroll inside instead of growing past the edge. */
   .standform { position: absolute; left: 50%; top: 50%; z-index: 5;
                transform: translate(-50%, -50%); width: min(340px, 90%);
+               max-height: calc(100% - 20px); overflow-y: auto;
                background: var(--panel); border: 1px solid var(--line);
                border-radius: 10px; padding: 16px; box-shadow: 0 6px 28px rgba(0,0,0,.4); }
   .standform h3 { margin: 0 0 10px; font-size: 15px; }
@@ -197,6 +203,57 @@ export const mapStyles = `
   /* Suggested stands. Deliberately a different SHAPE from a real stand pin,
      not merely a different colour: these are places to go and walk, and one
      must never be mistaken at a glance for somewhere you actually hunt. */
+  /* Shooting lanes. Drawn from the stand outward, with a node at the far end
+     where the shot ends — the two together read as "I can shoot to there",
+     which a bare line does not. */
+  #contours path.lane { stroke: rgba(255,140,80,.95); stroke-width: 2.4; fill: none;
+                        stroke-linecap: round; }
+  #contours circle.lane { fill: rgba(255,140,80,.95); stroke: rgba(50,20,0,.6); stroke-width: 1; }
+  /* Tracing puts the form away and moves it to a strip along the bottom.
+     Measured while driving the feature: the full form covers 47% of the map,
+     and a right-hand panel still swallowed two clicks out of three in a
+     natural pattern around the stand. A short strip along one edge blocks far
+     less of the ground you are trying to point at, and works better on a
+     phone besides. */
+  .standform.tracing { left: 10px; right: 10px; top: auto; bottom: 10px;
+                       /* The base rule centres with a translate. Changing the
+                          offsets without clearing it shifts the strip half its
+                          own width off the left edge and clips the text. */
+                       transform: none;
+                       width: auto; max-width: none; max-height: 132px; padding: 10px 12px; }
+  .standform.tracing .standmain { display: none; }
+  /* Inside the strip the derived winds come first — they are the answer, and
+     a fourth lane used to push them past the strip's height and out of sight
+     at exactly the moment they changed. That ordering is done in the DOM, not
+     with a CSS order property: an earlier flex version left the save row
+     sorting alongside the heading, which was both wrong and hard to follow.
+     Everything except the lane section is put away. */
+  .standform.tracing h3 { margin: 0 0 4px; font-size: 13px; }
+  .standform.tracing .standmain,
+  .standform.tracing .formrow,
+  .standform.tracing > button.danger { display: none; }
+  .standform.tracing .lanewinds { margin: 0 0 6px; }
+  .standform.tracing .lanetrace { margin: 0 0 6px; }
+  .standform.tracing > label { margin: 0 0 3px; }
+  .standform.tracing .lanelist { flex-direction: row; flex-wrap: wrap;
+                                 overflow-y: auto; min-height: 0; }
+  .standform.tracing .lanerow { flex: 0 1 auto; }
+  .standform.tracing .lanerow input { flex: 0 1 110px; }
+  .lanelist { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+  .lanerow { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  .lanerow .dir { font-weight: 700; min-width: 34px; }
+  .lanerow .len { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .lanerow input { flex: 1; padding: 3px 6px; font-size: 12px; }
+  .lanerow button { border: 1px solid var(--line); background: var(--bg); color: var(--muted);
+                    border-radius: 5px; cursor: pointer; padding: 2px 7px; font-size: 12px; }
+  .lanerow button:hover { color: var(--bad); border-color: var(--bad); }
+  .lanetrace { margin-top: 7px; width: 100%; padding: 6px; border-radius: 6px;
+               font: 600 12px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer;
+               border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .lanetrace.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .lanewinds { margin-top: 7px; font-size: 12px; color: var(--muted); }
+  .lanewinds b { color: var(--ink); }
+  .lanewinds .no { color: var(--bad); }
   .sugg { position: absolute; width: 20px; height: 20px; cursor: pointer; z-index: 3;
           transform: translate(-50%, -50%); border-radius: 3px;
           background: rgba(255,225,120,.30); border: 2px dashed #d9a441; }
@@ -289,6 +346,7 @@ export const mapMarkup = String.raw`
 
 export const mapScript = String.raw`
 ${measureSource('MEASURE')}
+${coverSource('COVER')}
 
 // ---- map --------------------------------------------------------------
 const TS = 256;
@@ -849,6 +907,7 @@ function clearMapModes(keep) {
     ownBtn.textContent = 'Who owns this?';
   }
   if (keep !== 'route' && drawing) cancelRoute();
+  if (keep !== 'lane' && laneEdit) { laneEdit = null; }
   if (keep !== 'measure' && measuring) stopMeasuring();
   // The caller puts it back if it is arming something. Leaving it on is how
   // the map ends up stuck showing a crosshair with no mode behind it.
@@ -942,6 +1001,39 @@ addEventListener('keydown', e => {
     draw();
   }
 });
+// ---- shooting lanes ----------------------------------------------------
+// What a stand can actually see and shoot, which is the thing you know when
+// you are standing under the tree. The winds follow from it — ticking sixteen
+// boxes was doing that derivation in your head every time, and getting it
+// slightly wrong.
+//
+// Traced while the stand form is open: the form stays up, the map arms, and
+// each click drops the far end of a lane. The winds are recomputed and shown
+// as each one lands, because a derivation you only see after saving is one you
+// cannot correct.
+let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while tracing
+
+function lanePaths(left, top) {
+  const out = [];
+  const sets = [];
+  if (laneEdit) sets.push({ from: laneEdit.stand, lanes: laneEdit.lanes });
+  for (const st of STANDS) {
+    if (laneEdit && editing && st.id === editing.id) continue;   // being edited
+    if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes });
+  }
+  for (const { from, lanes } of sets) {
+    for (const l of lanes) {
+      if (!l || !Array.isArray(l.to)) continue;
+      out.push('<path class="lane" d="'
+        + svgPath([[from.lng, from.lat], l.to], left, top, false) + '"></path>');
+      const x = projX(l.to[0], zoom) - left, y = projY(l.to[1], zoom) - top;
+      out.push('<circle class="lane" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1)
+        + '" r="3.5"></circle>');
+    }
+  }
+  return out;
+}
+
 // ---- recorded tracks ---------------------------------------------------
 // Where you actually walked, drawn beside the route you drew. A track whose
 // fixes were poor is dashed rather than hidden: it still says roughly where
@@ -1311,6 +1403,7 @@ function parcelPaths(left, top) {
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
   return out.concat(routePaths(left, top))
+    .concat(lanePaths(left, top))
     .concat(trackPaths(left, top))
     .concat(measurePaths(left, top))
     .concat(suggestPaths(left, top));
@@ -1553,12 +1646,18 @@ function openStandForm(stand) {
   const chosen = new Set(stand.winds || []);
 
   const form = el('div', 'standform');
-  form.appendChild(el('h3', null, isNew ? 'New stand' : 'Edit stand'));
+  const head = el('h3', null, isNew ? 'New stand' : 'Edit stand');
+  form.appendChild(head);
+  // Everything that is not the lane section lives in here, so tracing can put
+  // it away: the form covers nearly half the map, and the ground you need to
+  // click is very often underneath it.
+  const fields = el('div', 'standmain');
+  form.appendChild(fields);
 
   const name = document.createElement('input');
   name.value = stand.name || '';
   name.placeholder = 'East Ridge ladder';
-  form.append(el('label', null, 'Name'), name);
+  fields.append(el('label', null, 'Name'), name);
 
   const type = document.createElement('select');
   for (const [v, labelText] of TYPES) {
@@ -1567,9 +1666,110 @@ function openStandForm(stand) {
     if ((stand.type || 'stand') === v) o.selected = true;
     type.appendChild(o);
   }
-  form.append(el('label', null, 'Type'), type);
+  fields.append(el('label', null, 'Type'), type);
 
-  form.appendChild(el('label', null, 'Huntable on these winds (the wind comes FROM)'));
+  // --- shooting lanes -------------------------------------------------------
+  // The input you actually have. Mark where you can shoot; the winds follow.
+  const lanes = (stand.lanes || []).map(l => ({ to: l.to.slice(), label: l.label ?? null }));
+  form.insertBefore(el('label', null, 'Shooting lanes'), fields);
+  const laneList = el('div', 'lanelist');
+  const laneWinds = el('div', 'lanewinds');
+  const traceBtn = document.createElement('button');
+  traceBtn.type = 'button';
+  traceBtn.className = 'lanetrace';
+
+  const paintLanes = () => {
+    laneList.textContent = '';
+    const derived = COVER.huntableFromLanes({ lat: stand.lat, lng: stand.lng }, lanes);
+    (derived ? derived.lanes : []).forEach((g, i) => {
+      const r = el('div', 'lanerow');
+      r.appendChild(el('span', 'dir', g.point));
+      r.appendChild(el('span', 'len', g.metres + ' m'));
+      const label = document.createElement('input');
+      label.placeholder = 'name it (optional)';
+      label.value = lanes[i].label || '';
+      label.oninput = () => { lanes[i].label = label.value.trim() || null; };
+      r.appendChild(label);
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = 'remove';
+      x.onclick = () => { lanes.splice(i, 1); paintLanes(); draw(); };
+      r.appendChild(x);
+      laneList.appendChild(r);
+    });
+
+    laneWinds.textContent = '';
+    if (!derived) {
+      laneWinds.appendChild(el('span', null,
+        'None marked. Press Trace and click where you can shoot to \u2014 '
+        + 'one click per lane. The winds are worked out from them.'));
+    } else if (!derived.winds.length) {
+      const n = el('span', 'no');
+      n.textContent = derived.why;
+      laneWinds.appendChild(n);
+    } else {
+      laneWinds.appendChild(document.createTextNode('Huntable on '));
+      const b = el('b', null, derived.winds.join(', '));
+      laneWinds.appendChild(b);
+      laneWinds.appendChild(document.createTextNode(
+        ' \u2014 ' + derived.winds.length + ' of 16. The rest blow your scent down a lane.'));
+      // Not forbidden — it might be a long field edge you genuinely watch —
+      // but 400 m is not a shot, and a lane that long is usually a misplaced
+      // click that quietly rules out winds you could have hunted.
+      const far = derived.lanes.filter(g => g.metres > 300);
+      if (far.length) {
+        const w = el('div', null, far.length === 1
+          ? 'That ' + far[0].metres + ' m lane is a long way for a shot \u2014 worth checking '
+            + 'you meant it, since it rules winds out either way.'
+          : far.length + ' lanes are over 300 m, which is a long way for a shot.');
+        w.style.marginTop = '4px';
+        w.style.color = 'var(--warn)';
+        laneWinds.appendChild(w);
+      }
+      // Only where a hand-picked set exists to disagree with.
+      const cmp = COVER.compareToManual(derived, [...chosen]);
+      if (cmp && cmp.agree === false) {
+        const d = el('div', null, cmp.why);
+        d.style.marginTop = '4px';
+        d.style.color = 'var(--warn)';
+        laneWinds.appendChild(d);
+      }
+    }
+    traceBtn.textContent = laneEdit ? 'Done tracing' : (lanes.length ? '+ Another lane' : 'Trace a lane');
+    traceBtn.classList.toggle('on', !!laneEdit);
+    form.classList.toggle('tracing', !!laneEdit);
+    head.textContent = laneEdit
+      ? 'Click where you can shoot to'
+      : (isNew ? 'New stand' : 'Edit stand');
+  };
+
+  traceBtn.onclick = ev => {
+    ev.stopPropagation();
+    if (laneEdit) { laneEdit = null; paintLanes(); draw(); return; }
+    clearMapModes('lane');
+    laneEdit = { stand: { lat: stand.lat, lng: stand.lng }, lanes, onChange: paintLanes };
+    mapEl.classList.add('placing');
+    paintLanes();
+    // Put the stand where you can see AND click around it. Whichever edge the
+    // strip is pinned to it can end up over the stand, and then most of the
+    // ground you want to mark is behind it — which is exactly what happened:
+    // two clicks in three landed on the panel instead of the map. Recentre so
+    // the stand sits above the strip, the way a map app moves a pin clear of a
+    // bottom sheet.
+    const strip = form.getBoundingClientRect().height || 130;
+    const n = TS * 2 ** zoom;
+    const py = projY(stand.lat, zoom) + strip / 2;
+    centre = {
+      lng: stand.lng,
+      lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * py / n))) * 180 / Math.PI,
+    };
+    draw();
+  };
+  for (const n of [laneWinds, traceBtn, laneList]) form.insertBefore(n, fields);
+
+  // --- ticked winds, now the fallback rather than the input -----------------
+  fields.appendChild(el('label', null, lanes.length
+    ? 'Or override by hand (the wind comes FROM)'
+    : 'Huntable on these winds (the wind comes FROM)'));
   const windBox = el('div', 'winds');
   for (const w of WINDS) {
     const b = document.createElement('button');
@@ -1578,16 +1778,20 @@ function openStandForm(stand) {
     b.onclick = () => {
       if (chosen.has(w)) chosen.delete(w); else chosen.add(w);
       b.classList.toggle('on');
+      paintLanes();
     };
     windBox.appendChild(b);
   }
-  form.appendChild(windBox);
-  form.appendChild(el('div', 'hint',
-    'Leave blank if unsure \u2014 the tool then says "unknown" rather than recommending it.'));
+  fields.appendChild(windBox);
+  fields.appendChild(el('div', 'hint',
+    'Lanes decide the ranking where they are marked. Ticks are used when there '
+    + 'are none, and are kept either way \u2014 they can hold something geometry '
+    + 'cannot see, like a road you will not shoot toward.'));
+  paintLanes();
 
   const notes = document.createElement('textarea');
   notes.rows = 2; notes.value = stand.notes || '';
-  form.append(el('label', null, 'Notes'), notes);
+  fields.append(el('label', null, 'Notes'), notes);
 
   const row = el('div', 'formrow');
   const save = document.createElement('button');
@@ -1599,11 +1803,12 @@ function openStandForm(stand) {
         name: name.value, type: type.value,
         lat: stand.lat, lng: stand.lng,
         goodWinds: [...chosen],
+        lanes,
         notes: notes.value || null,
       };
       if (isNew) await apiWrite('POST', '/api/stands', body);
       else await apiWrite('PATCH', '/api/stands/' + stand.id, body);
-      form.remove(); editing = null;
+      form.remove(); editing = null; laneEdit = null;
       await refreshStands();
     } catch (err) {
       save.disabled = false;
@@ -1614,7 +1819,7 @@ function openStandForm(stand) {
   };
   const cancel = document.createElement('button');
   cancel.textContent = 'Cancel';
-  cancel.onclick = () => { form.remove(); editing = null; draw(); };
+  cancel.onclick = () => { form.remove(); editing = null; laneEdit = null; draw(); };
   row.append(save, cancel);
 
   if (!isNew) {
@@ -1725,6 +1930,16 @@ mapEl.addEventListener('click', e => {
   if (!onMapGround(e.target)) return;
   // The click that ends a pan is not a tap on the ground.
   if (dragged) { dragged = false; return; }
+  if (laneEdit) {
+    const rl = mapEl.getBoundingClientRect();
+    const lx = e.clientX - rl.left, ly = e.clientY - rl.top;
+    if (lx < 0 || ly < 0 || lx > rl.width || ly > rl.height) return;
+    const at = pixelToLatLng(lx, ly);
+    laneEdit.lanes.push({ to: [at.lng, at.lat], label: null });
+    laneEdit.onChange();
+    draw();
+    return;
+  }
   if (identifying) {
     const r0 = mapEl.getBoundingClientRect();
     const ix = e.clientX - r0.left, iy = e.clientY - r0.top;

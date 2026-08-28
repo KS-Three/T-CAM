@@ -150,3 +150,8 @@ test('the split did not drop anything from the page', async () => {
   assert.doesNotMatch(markup, /\\u[0-9a-fA-F]{4}/,
     'no unresolved escape reached the markup, where nothing would resolve it');
 });
+
+test('the journal page script parses', async () => {
+  const { journalHtml } = await import('../journal-page.mjs');
+  assert.doesNotThrow(() => new vm.Script(inlineScript(journalHtml())));
+});

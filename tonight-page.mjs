@@ -126,6 +126,7 @@ function render() {
   parts.push(conditionsCard(sit));
   const others = othersCard(sit);
   if (others) parts.push(others);
+  parts.push(logCard(sit));
   const better = betterDayCard();
   if (better) parts.push(better);
   if (sits[1]) parts.push(nextCard(sits[1]));
@@ -372,6 +373,122 @@ function betterDayCard() {
   return c;
 }
 
+// Logging the sit HERE, on the screen that made the prediction, is the whole
+// reason this is not a separate app. The rating, the forecast wind and the
+// stand are all on the page already, so they are frozen into the record
+// exactly as they were said — and re-running the planner tomorrow cannot
+// quietly rewrite what was predicted today.
+function logCard(sit) {
+  const c = card('How did it go?');
+  const intro = el('div', 'note',
+    'Worth thirty seconds: until this is filled in, nothing this tool tells you '
+    + 'can ever be shown to be wrong.');
+  c.appendChild(intro);
+
+  const form = el('div', 'logform');
+  const field = (label, node, wide) => {
+    const wrap = el('div', wide ? 'wide' : null);
+    wrap.appendChild(el('label', null, label));
+    wrap.appendChild(node);
+    form.appendChild(wrap);
+    return node;
+  };
+  const number = (min) => {
+    const i = document.createElement('input');
+    i.type = 'number'; i.min = String(min); i.inputMode = 'numeric';
+    i.placeholder = '';
+    return i;
+  };
+  const deer = field('Deer seen', number(0));
+  const bucks = field('Bucks', number(0));
+
+  const wind = document.createElement('select');
+  const blank = document.createElement('option');
+  blank.value = ''; blank.textContent = 'as forecast (' + (sit.windFrom || '?') + ')';
+  wind.appendChild(blank);
+  for (const p of ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                   'S','SSW','SW','WSW','W','WNW','NW','NNW']) {
+    const o = document.createElement('option');
+    o.value = p; o.textContent = p;
+    wind.appendChild(o);
+  }
+  field('Wind actually', wind);
+
+  const notes = document.createElement('textarea');
+  notes.placeholder = 'came off the point at last light, two does then a young buck';
+  field('Notes', notes, true);
+  c.appendChild(form);
+
+  const checks = el('div', 'checks');
+  const mk = (text) => {
+    const l = document.createElement('label');
+    const b = document.createElement('input');
+    b.type = 'checkbox';
+    l.append(b, document.createTextNode(text));
+    checks.appendChild(l);
+    return b;
+  };
+  const shot = mk('Took a shot');
+  const harvested = mk('Harvested');
+  c.appendChild(checks);
+
+  const row = el('div', 'logrow');
+  const save = document.createElement('button');
+  save.className = 'primary';
+  save.textContent = 'Log this sit';
+  const status = el('div', 'note');
+  status.style.marginTop = '8px';
+  save.onclick = async () => {
+    save.disabled = true;
+    save.textContent = 'Saving\u2026';
+    // A blank count stays blank. "I saw nothing" is a zero and "I did not
+    // count" is neither, and the analysis depends on telling them apart.
+    const body = {
+      standId: sit.pick ? sit.pick.id : null,
+      date: sit.date,
+      window: sit.window,
+      predicted: {
+        score: sit.score, rating: sit.rating,
+        windFrom: sit.windFrom, temp: sit.temp,
+      },
+      windFrom: wind.value || sit.windFrom || null,
+      temp: sit.temp,
+      deer: deer.value === '' ? null : Number(deer.value),
+      bucks: bucks.value === '' ? null : Number(bucks.value),
+      shot: shot.checked,
+      harvested: harvested.checked,
+      notes: notes.value.trim() || null,
+    };
+    try {
+      const res = await fetch('/api/sits', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const saved = await res.json();
+      if (!res.ok) throw new Error(saved.error || ('HTTP ' + res.status));
+      form.remove(); checks.remove(); row.remove();
+      intro.textContent = 'Logged. ' + (body.deer === null
+        ? 'No count recorded for this one.'
+        : body.deer + ' deer.')
+        + ' It is in the journal now.';
+      const link = document.createElement('a');
+      link.href = '/journal';
+      link.textContent = 'See the journal';
+      link.style.color = 'var(--accent)';
+      status.textContent = '';
+      status.appendChild(link);
+    } catch (err) {
+      status.textContent = 'Could not save: ' + err.message;
+      save.disabled = false;
+      save.textContent = 'Log this sit';
+    }
+  };
+  row.appendChild(save);
+  c.append(row, status);
+  return c;
+}
+
 function nextCard(sit) {
   // A sentence, not a key/value row: the label is a phrase like "7 days out —
   // morning of 2026-09-03", which in a two-column row squeezes the answer into
@@ -467,6 +584,23 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
   .other .rs { color: var(--muted); font-size: 13.5px; }
   .other .sc { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+  .logform { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+             gap: 10px 12px; margin-top: 10px; }
+  .logform label { display: block; color: var(--muted); font-size: 12px;
+                   text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
+  .logform input, .logform select, .logform textarea {
+    width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); font: inherit; font-size: 15px; }
+  .logform .wide { grid-column: 1 / -1; }
+  .logform textarea { min-height: 56px; resize: vertical; }
+  .logrow { display: flex; gap: 8px; margin-top: 12px; }
+  .logrow button { flex: 1; padding: 9px; border-radius: 8px; cursor: pointer;
+                   font: 600 14px/1 ui-sans-serif, system-ui, sans-serif;
+                   border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .logrow button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .checks { display: flex; gap: 16px; align-items: center; margin-top: 10px; font-size: 14px; }
+  .checks label { display: flex; gap: 6px; align-items: center; text-transform: none;
+                  letter-spacing: 0; font-size: 14px; color: var(--ink); margin: 0; }
   .note { color: var(--muted); font-size: 14px; }
   .bad-note { color: var(--bad); }
   .loading { color: var(--muted); padding: 30px 0; text-align: center; }
@@ -477,6 +611,7 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
   <nav>
     <a href="/">Map</a>
     <a href="/review">Review</a>
+    <a href="/journal">Journal</a>
   </nav>
 </header>
 

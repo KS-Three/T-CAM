@@ -131,10 +131,11 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   }
   /* The one-question screen. Server-only, so the static page hides it rather
      than offering a link that 404s off a file:// copy. */
-  header .tonight { align-self: center; margin-left: auto; white-space: nowrap;
+  header .tonight { align-self: center; white-space: nowrap;
     color: var(--accent); text-decoration: none; font-size: 14px; font-weight: 600;
     border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
   header .tonight:hover { border-color: var(--accent); }
+  header .tonight.first { margin-left: auto; }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
@@ -247,7 +248,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
       <div class="sub" id="sub"></div>
     </div>
     <div class="sub" id="plan"></div>
-    <a class="tonight" id="tonightLink" href="/tonight" hidden>Tonight &rarr;</a>
+    <a class="tonight first" id="tonightLink" href="/tonight" hidden>Tonight &rarr;</a>
+    <a class="tonight" id="journalLink" href="/journal" hidden>Journal</a>
   </header>
   <div id="alerts"></div>
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
@@ -475,6 +477,8 @@ loadReviewCount();
 // is the question you act on while putting your boots by the door.
 const tonightLink = document.getElementById('tonightLink');
 if (D.live && tonightLink) tonightLink.hidden = false;
+const journalLink = document.getElementById('journalLink');
+if (D.live && journalLink) journalLink.hidden = false;
 
 const standPlanEl = document.getElementById('standPlan');
 

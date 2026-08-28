@@ -381,6 +381,58 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX routes_stand ON routes(stand_id);');
     },
   },
+  {
+    version: 8,
+    name: 'sit journal',
+    up: db => {
+      // What actually happened when you sat there.
+      //
+      // This is the table that makes every prediction in the program
+      // falsifiable. Until it has rows, the planner's rating, the stand
+      // ranking and the route verdict are all reasoning from general theory
+      // about deer with no way of ever being shown wrong on THIS ground. A
+      // season of these turns that around.
+      //
+      // The prediction is copied in at log time rather than looked up later,
+      // and that is the whole design of this table. A forecast is rewritten
+      // constantly — re-run the planner and yesterday's "prime" evening is now
+      // whatever the archive says it was. Scoring a prediction against a
+      // number that has since been revised is not scoring anything. So what
+      // the tool SAID, before the sit, is frozen here beside what happened.
+      db.exec(`
+        CREATE TABLE sits (
+          id                INTEGER PRIMARY KEY,
+          stand_id          INTEGER REFERENCES stands(id) ON DELETE SET NULL,
+          date              TEXT NOT NULL,
+          window            TEXT NOT NULL,
+          started_at        TEXT,
+          ended_at          TEXT,
+
+          -- What the tool said beforehand. Frozen; never recomputed.
+          predicted_score   REAL,
+          predicted_rating  TEXT,
+          predicted_wind    TEXT,
+          predicted_temp    REAL,
+
+          -- What the ground did.
+          wind_from         TEXT,
+          temp              REAL,
+          deer              INTEGER,
+          bucks             INTEGER,
+          does              INTEGER,
+          fawns             INTEGER,
+          shot              INTEGER NOT NULL DEFAULT 0,
+          harvested         INTEGER NOT NULL DEFAULT 0,
+          notes             TEXT,
+
+          created_at        TEXT NOT NULL,
+          updated_at        TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX sits_date ON sits(date, window);');
+      db.exec('CREATE INDEX sits_stand ON sits(stand_id);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1218,3 +1270,136 @@ export function updateRoute(db, id, patch = {}) {
 
 export const deleteRoute = (db, id) =>
   db.prepare('DELETE FROM routes WHERE id = ?').run(id).changes > 0;
+
+// ---------------------------------------------------------------------------
+// The sit journal
+//
+// What actually happened when you sat there. Storage only — every claim made
+// FROM these rows lives in sit-journal.mjs, so the file that keeps the record
+// and the file that draws conclusions from it stay separable.
+// ---------------------------------------------------------------------------
+
+export const SIT_WINDOWS = ['AM', 'PM'];
+
+const intOrNull = v => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+};
+const numOrNull = v => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Record a sit.
+ *
+ * `predicted` is what the tool said BEFORE it, copied in rather than looked up
+ * later. Re-running the planner rewrites its own history — yesterday's "prime"
+ * evening becomes whatever the archive now says — and scoring a prediction
+ * against a number that has since been revised is not scoring anything.
+ */
+export function logSit(db, {
+  standId = null, date, window, startedAt = null, endedAt = null,
+  predicted = {}, windFrom = null, temp = null,
+  deer = null, bucks = null, does = null, fawns = null,
+  shot = false, harvested = false, notes = null,
+} = {}) {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+    throw new Error('a sit needs a date, as YYYY-MM-DD');
+  }
+  if (!SIT_WINDOWS.includes(window)) {
+    throw new Error(`window must be one of ${SIT_WINDOWS.join(', ')}`);
+  }
+  if (standId !== null && standId !== undefined
+      && !db.prepare('SELECT id FROM stands WHERE id = ?').get(standId)) {
+    throw new Error(`no stand with id ${standId}`);
+  }
+  // "I saw nothing" and "I did not count" are different facts and the analysis
+  // depends on telling them apart, so a blank stays null and is never zeroed.
+  const counts = {
+    deer: intOrNull(deer), bucks: intOrNull(bucks),
+    does: intOrNull(does), fawns: intOrNull(fawns),
+  };
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO sits (
+      stand_id, date, window, started_at, ended_at,
+      predicted_score, predicted_rating, predicted_wind, predicted_temp,
+      wind_from, temp, deer, bucks, does, fawns, shot, harvested, notes,
+      created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    standId ?? null, String(date), window, startedAt, endedAt,
+    numOrNull(predicted.score), predicted.rating ?? null,
+    predicted.windFrom ?? null, numOrNull(predicted.temp),
+    windFrom, numOrNull(temp),
+    counts.deer, counts.bucks, counts.does, counts.fawns,
+    shot ? 1 : 0, harvested ? 1 : 0, notes,
+    now, now,
+  );
+  return sitById(db, Number(info.lastInsertRowid));
+}
+
+const sitRow = r => r && ({
+  ...r,
+  shot: !!r.shot,
+  harvested: !!r.harvested,
+  predicted: {
+    score: r.predicted_score, rating: r.predicted_rating,
+    windFrom: r.predicted_wind, temp: r.predicted_temp,
+  },
+});
+
+export const sitById = (db, id) => sitRow(db.prepare(`
+  SELECT s.*, st.name AS stand_name, st.lat AS stand_lat, st.lng AS stand_lng
+  FROM sits s LEFT JOIN stands st ON st.id = s.stand_id
+  WHERE s.id = ?
+`).get(id)) ?? null;
+
+export const allSits = (db, { limit = 500, standId = null } = {}) => db.prepare(`
+  SELECT s.*, st.name AS stand_name, st.lat AS stand_lat, st.lng AS stand_lng
+  FROM sits s LEFT JOIN stands st ON st.id = s.stand_id
+  ${standId === null ? '' : 'WHERE s.stand_id = ?'}
+  ORDER BY s.date DESC, s.window DESC, s.id DESC
+  LIMIT ?
+`).all(...(standId === null ? [limit] : [standId, limit])).map(sitRow);
+
+const SIT_FIELDS = {
+  standId: 'stand_id', startedAt: 'started_at', endedAt: 'ended_at',
+  windFrom: 'wind_from', temp: 'temp', deer: 'deer', bucks: 'bucks',
+  does: 'does', fawns: 'fawns', notes: 'notes',
+};
+
+export function updateSit(db, id, patch = {}) {
+  const row = sitById(db, id);
+  if (!row) throw new Error(`no sit with id ${id}`);
+  const sets = [], vals = [];
+  for (const [key, col] of Object.entries(SIT_FIELDS)) {
+    if (!(key in patch)) continue;
+    let v = patch[key];
+    if (['deer', 'bucks', 'does', 'fawns'].includes(key)) v = intOrNull(v);
+    if (key === 'temp') v = numOrNull(v);
+    if (key === 'standId' && v !== null && v !== undefined
+        && !db.prepare('SELECT id FROM stands WHERE id = ?').get(v)) {
+      throw new Error(`no stand with id ${v}`);
+    }
+    sets.push(`${col} = ?`); vals.push(v ?? null);
+  }
+  for (const key of ['shot', 'harvested']) {
+    if (key in patch) { sets.push(`${key} = ?`); vals.push(patch[key] ? 1 : 0); }
+  }
+  // The prediction is deliberately NOT patchable. It is a record of what was
+  // said beforehand; letting it be edited afterwards would quietly turn this
+  // table from evidence into a story.
+  if (!sets.length) return row;
+  sets.push('updated_at = ?'); vals.push(nowIso());
+  db.prepare(`UPDATE sits SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+  return sitById(db, id);
+}
+
+export function deleteSit(db, id) {
+  const info = db.prepare('DELETE FROM sits WHERE id = ?').run(id);
+  return info.changes > 0;
+}

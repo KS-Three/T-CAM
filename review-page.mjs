@@ -117,6 +117,7 @@ export function reviewHtml({ species = [], bucks = [], remaining = 0 } = {}) {
   <span class="count" id="count"></span>
   <a href="/">&larr; back to the map</a>
   <a href="/tonight">Tonight &rarr;</a>
+  <a href="/journal">Journal</a>
 </header>
 
 <main id="main"></main>

@@ -35,6 +35,7 @@ import {
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS,
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
+  logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
 } from './db.mjs';
 import { dashboardHtml } from './dashboard-page.mjs';
 import { readPlan } from './spypoint-sync.mjs';
@@ -42,11 +43,13 @@ import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
 import { suggestStands } from './stand-suggester.mjs';
+import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { reviewHtml } from './review-page.mjs';
 import { tonightHtml } from './tonight-page.mjs';
+import { journalHtml } from './journal-page.mjs';
 import {
   fetchArchive, climatology, standCoverage, SEASON_MONTHS,
 } from './wind-history.mjs';
@@ -494,6 +497,11 @@ export function createServer({ out = OPT.out } = {}) {
         }));
       }
 
+      // The season, and what it is entitled to claim from it.
+      if (req.method === 'GET' && (url.pathname === '/journal' || url.pathname === '/journal/')) {
+        return send(res, 200, 'text/html; charset=utf-8', journalHtml());
+      }
+
       // Tonight. One screen, one question, read on a phone in the kitchen.
       if (req.method === 'GET' && (url.pathname === '/tonight' || url.pathname === '/tonight/')) {
         return send(res, 200, 'text/html; charset=utf-8', tonightHtml());
@@ -935,6 +943,62 @@ export function createServer({ out = OPT.out } = {}) {
             : !stands.length ? 'No stands yet — drop a pin on the map to add one.'
             : null,
         });
+      }
+
+      // The sit journal: what actually happened when you sat there.
+      //
+      // The table that makes every other prediction in this program
+      // falsifiable. Reads are cheap and the analysis is pure, so it is all
+      // computed per request rather than cached.
+      if (url.pathname === '/api/sits') {
+        if (req.method === 'GET') {
+          const standId = url.searchParams.get('stand');
+          const sits = allSits(db, {
+            limit: Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 500)),
+            standId: standId === null || standId === '' ? null : Number(standId),
+          });
+          return sendJson(res, 200, {
+            sits,
+            summary: sitSummary(sits),
+            calibration: calibration(sits),
+            wind: windAccuracy(sits),
+            stands: standPerformance(sits),
+            windows: SIT_WINDOWS,
+          });
+        }
+        if (req.method === 'POST') {
+          let body;
+          try { body = await readJson(req); } catch (err) { return sendJson(res, 400, { error: err.message }); }
+          try {
+            return sendJson(res, 201, logSit(db, body));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+        return sendJson(res, 405, { error: 'GET or POST' });
+      }
+      const sitMatch = url.pathname.match(/^\/api\/sits\/(\d+)$/);
+      if (sitMatch) {
+        const id = Number(sitMatch[1]);
+        if (req.method === 'GET') {
+          const row = sitById(db, id);
+          return row ? sendJson(res, 200, row) : sendJson(res, 404, { error: 'no such sit' });
+        }
+        if (req.method === 'PATCH') {
+          let body;
+          try { body = await readJson(req); } catch (err) { return sendJson(res, 400, { error: err.message }); }
+          try {
+            return sendJson(res, 200, updateSit(db, id, body));
+          } catch (err) {
+            return sendJson(res, /no sit with id/.test(err.message) ? 404 : 400, { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteSit(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: 'no such sit' });
+        }
+        return sendJson(res, 405, { error: 'GET, PATCH or DELETE' });
       }
 
       // Where to hang the next stand.

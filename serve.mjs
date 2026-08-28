@@ -30,12 +30,16 @@ import {
   openDb, allCameras, counts, allStands, createStand, updateStand, deleteStand,
   STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering, terrainGridAt,
   allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
+  groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
+  detectionsForVisit, addDetection, updateDetection, deleteDetection,
+  allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS,
 } from './db.mjs';
 import { dashboardHtml, readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
+import { reviewHtml } from './review-page.mjs';
 import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
@@ -99,6 +103,23 @@ export function cameraFromRow(r) {
  * unconfirmed species tags. group_concat is used rather than a second query
  * because the grid only needs a label, not the detection rows themselves.
  */
+/**
+ * A photo row as the browser needs it: addressed by URL rather than by a
+ * filesystem path it could not read, and falling back to the camera's own URL
+ * when the file has not been downloaded yet — which is the normal state for a
+ * photo the sync has listed but not yet fetched.
+ */
+export function photoForClient(p) {
+  return {
+    id: p.id,
+    takenAt: p.taken_at,
+    file: p.file_path
+      ? `/photos/${encodeURI(p.file_path.split(path.sep).join('/'))}` : null,
+    url: p.url ?? null,
+    downloaded: !!p.downloaded_at,
+  };
+}
+
 export function recentPhotos(db, limit = 200) {
   return db.prepare(`
     SELECT p.id, p.taken_at AS date, p.file_path AS file, p.url,
@@ -370,6 +391,16 @@ export function createServer({ out = OPT.out } = {}) {
           dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true, s.markers,
                         sourceDescriptors({ proxied: true })));
       }
+      // The review screen. A separate page from the dashboard on purpose: this
+      // is a task you sit down to do, not something to glance at beside a map.
+      if (req.method === 'GET' && (url.pathname === '/review' || url.pathname === '/review/')) {
+        return send(res, 200, 'text/html; charset=utf-8', reviewHtml({
+          species: SPECIES, deerClasses: DEER_CLASS,
+          bucks: allBucks(db),
+          remaining: allVisits(db, { unreviewed: true, limit: 100000 }).length,
+        }));
+      }
+
       // The API boundary a phone app would later speak to.
       if (req.method === 'GET' && url.pathname === '/api/state') {
         return sendJson(res, 200, await buildState(db, out));
@@ -424,6 +455,114 @@ export function createServer({ out = OPT.out } = {}) {
         }
       }
 
+
+      // --- review: visits, detections, bucks ------------------------------
+      //
+      // A VISIT is the unit you tag, not a photo. These cameras fire two frames
+      // per trigger and a deer working through sets off several triggers, so
+      // tagging per photo would mean labelling the same animal six times.
+      if (req.method === 'GET' && url.pathname === '/api/visits') {
+        const unreviewed = url.searchParams.get('unreviewed') === '1';
+        const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+        const cameraId = url.searchParams.get('camera') || null;
+        const visits = allVisits(db, { unreviewed, limit, cameraId }).map(v => ({
+          ...v,
+          photos: photosForVisit(db, v.id).map(photoForClient),
+          detections: detectionsForVisit(db, v.id),
+        }));
+        return sendJson(res, 200, {
+          visits,
+          // Counted separately from the page, so the queue can say how much is
+          // left rather than how much it happened to fetch.
+          remaining: allVisits(db, { unreviewed: true, limit: 100000 }).length,
+          species: SPECIES, deerClasses: DEER_CLASS,
+        });
+      }
+
+      const visitMatch = url.pathname.match(/^\/api\/visits\/(\d+)$/);
+      if (visitMatch && req.method === 'GET') {
+        const v = visitById(db, Number(visitMatch[1]));
+        if (!v) return sendJson(res, 404, { error: `no visit with id ${visitMatch[1]}` });
+        return sendJson(res, 200, {
+          ...v,
+          photos: photosForVisit(db, v.id).map(photoForClient),
+          detections: detectionsForVisit(db, v.id),
+        });
+      }
+
+      const reviewMatch = url.pathname.match(/^\/api\/visits\/(\d+)\/review$/);
+      if (reviewMatch && req.method === 'POST') {
+        const b = await readJson(req);
+        try {
+          return sendJson(res, 200, reviewVisit(db, Number(reviewMatch[1]), {
+            reviewed: b.reviewed !== false, notes: b.notes,
+          }));
+        } catch (err) {
+          return sendJson(res, /no visit/.test(err.message) ? 404 : 400, { error: err.message });
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/regroup') {
+        const b = await readJson(req);
+        const gap = Number(b.gapSeconds);
+        return sendJson(res, 200, groupVisits(db,
+          Number.isFinite(gap) && gap > 0 ? { gapSeconds: gap } : {}));
+      }
+
+      if (url.pathname === '/api/detections') {
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          try {
+            if (!b.photoId) throw new Error('a detection needs a photo');
+            const made = addDetection(db, {
+              photoId: b.photoId, species: b.species ?? null,
+              count: Number(b.count) || 1, buckId: b.buckId ?? null,
+              // Anything created here came from a person looking at the frame.
+              source: 'manual', confirmed: b.confirmed !== false, notes: b.notes ?? null,
+            });
+            // Validated through the same path an edit takes, so the rules
+            // cannot differ between creating and changing a detection.
+            return sendJson(res, 201, updateDetection(db, made.id, {}));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
+      const detMatch = url.pathname.match(/^\/api\/detections\/(\d+)$/);
+      if (detMatch) {
+        const id = Number(detMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            const patch = {};
+            for (const k of ['species', 'count', 'buckId', 'confirmed', 'notes']) {
+              if (b[k] !== undefined) patch[k] = b[k];
+            }
+            return sendJson(res, 200, updateDetection(db, id, patch));
+          } catch (err) {
+            return sendJson(res, /no detection/.test(err.message) ? 404 : 400, { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteDetection(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: `no detection with id ${id}` });
+        }
+      }
+
+      if (url.pathname === '/api/bucks') {
+        if (req.method === 'GET') return sendJson(res, 200, allBucks(db));
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          const name = (b.name ?? '').trim();
+          if (!name) return sendJson(res, 400, { error: 'a buck needs a name' });
+          try {
+            return sendJson(res, 201, upsertBuck(db, name, b.notes ?? null));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
       // --- scouting markers ---------------------------------------------
       // Sign found on the ground. Same shape as stands deliberately: one CRUD
       // pattern for everything the map lets you place.
@@ -539,7 +678,16 @@ export function createServer({ out = OPT.out } = {}) {
       // Which stand, for a given sit. The planner says WHEN; this says WHERE.
       if (req.method === 'GET' && url.pathname === '/api/stand-plan') {
         const plan = await readPlan(out);
-        const stands = allStands(db);
+        // Confirmed detections per camera, attached to the stands each camera
+        // covers. This is the number the ranking has been scoring as zero
+        // because no photos existed; it starts counting the moment they do.
+        const recent = recentDetectionCounts(db);
+        const stands = allStands(db).map(st => ({
+          ...st,
+          nearbyCameras: (st.nearbyCameras ?? []).map(c => ({
+            ...c, recentDetections: recent[c.id] ?? 0,
+          })),
+        }));
         const terrainAt = standTerrainLookup(db);
         const hasTerrain = stands.some(st => terrainAt(st) !== null);
         const howMany = Math.min(10, Math.max(1, Number(url.searchParams.get('sits')) || 3));

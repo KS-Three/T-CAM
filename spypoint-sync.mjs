@@ -31,7 +31,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
-import { openDb, upsertCamera, upsertPhoto, addDetection, counts } from './db.mjs';
+import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits } from './db.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 
 // Re-exported from the provider rather than defined twice: two copies of the
@@ -387,6 +387,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                  padding: 8px 10px; font-size: 11px; color: var(--muted);
                  box-shadow: 0 2px 10px rgba(0,0,0,.35); }
   .terrainnote b { color: var(--ink); }
+  .reviewlink { font-size: 12px; font-weight: 400; color: var(--accent);
+                text-decoration: none; margin-left: 10px; }
   .sitplan { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
              margin-bottom: 10px; background: var(--panel); }
   .sitplan h3 { margin: 0 0 2px; font-size: 14px; }
@@ -477,6 +479,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <div id="alerts"></div>
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
   <div id="planArea"></div>
+  <h2 class="section">Review photos <a class="reviewlink" id="reviewLink" href="/review">tag what is in them &rarr;</a></h2>
+  <div id="reviewArea"></div>
   <h2 class="section">Where to sit</h2>
   <div id="standPlan"></div>
   <h2 class="section">Cameras</h2>
@@ -890,6 +894,50 @@ function openMarkerForm(marker) {
   mapEl.appendChild(form);
   name.focus();
 }
+
+
+// ---- review queue -----------------------------------------------------
+// A pointer to the screen where photos become data. Everything downstream —
+// buck identity, movement, the camera term in the stand ranking — waits on
+// somebody having looked at a frame and said what was in it.
+const reviewArea = document.getElementById('reviewArea');
+const reviewLink = document.getElementById('reviewLink');
+
+async function loadReviewCount() {
+  if (!D.live) {
+    reviewLink.style.display = 'none';
+    reviewArea.appendChild(el('div', 'empty', 'Tagging needs the server.'));
+    return;
+  }
+  try {
+    const data = await (await fetch('/api/visits?unreviewed=1&limit=1')).json();
+    reviewArea.textContent = '';
+    if (!data.remaining) {
+      reviewArea.appendChild(el('div', 'empty',
+        data.visits.length === 0 && !data.remaining
+          ? 'No photos to review. They appear here after a sync brings some in.'
+          : 'All caught up \u2014 every visit has been looked at.'));
+      return;
+    }
+    const box = el('div', 'sitplan');
+    box.appendChild(el('h3', null,
+      plural(data.remaining, 'visit') + ' waiting to be tagged'));
+    box.appendChild(el('div', 'verdict',
+      'A visit is one animal\u2019s appearance, not one frame \u2014 these cameras '
+      + 'fire two frames per trigger, so you tag once per visit rather than once '
+      + 'per photo.'));
+    const go = el('a', null, 'Start reviewing \u2192');
+    go.href = '/review';
+    go.style.color = 'var(--accent)';
+    go.style.fontWeight = '600';
+    go.style.textDecoration = 'none';
+    box.appendChild(go);
+    reviewArea.appendChild(box);
+  } catch {
+    reviewArea.appendChild(el('div', 'empty', 'Could not load the review queue.'));
+  }
+}
+loadReviewCount();
 
 // ---- where to sit -----------------------------------------------------
 // The planner ranks WHEN. This ranks WHERE within one of those windows, which
@@ -1976,6 +2024,16 @@ async function main() {
   }
 
   if (db) {
+    // Group photos into visits, so the review screen has a queue the moment the
+    // sync finishes. Done here rather than on demand because it must happen
+    // after EVERY sync: a download that failed and got retried lands a photo
+    // between two already-grouped ones, and only a regroup notices.
+    if (!OPT.dryRun) {
+      const g = groupVisits(db);
+      log(`Visits: ${g.visits} to review from ${g.grouped} photo(s)`
+        + (g.ungrouped ? `, ${g.ungrouped} without a timestamp left ungrouped` : ''));
+    }
+
     const c = counts(db);
     log(`Store: ${c.cameras} camera(s), ${c.photos} photo(s), ${c.detections} detection(s), `
       + `${c.bucks} buck(s), ${c.weatherHours} weather hour(s).`);

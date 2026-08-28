@@ -305,6 +305,26 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX markers_property ON markers(property_id);');
     },
   },
+  {
+    version: 5,
+    name: 'visit review state',
+    up: db => {
+      // Whether a visit has been LOOKED AT, which is not the same as whether it
+      // has detections on it.
+      //
+      // A visit with no detections is ambiguous without this: it could be one
+      // nobody has opened yet, or one that was opened and genuinely held
+      // nothing — a branch in the wind, a raccoon, an empty frame. Those are
+      // different claims, and the analysis has to be able to tell them apart or
+      // it will treat every unreviewed visit as evidence of no deer.
+      //
+      // NULL means not reviewed. The same rule as everywhere else here: absence
+      // is unknown, never zero.
+      db.exec('ALTER TABLE visits ADD COLUMN reviewed_at TEXT;');
+      db.exec('ALTER TABLE visits ADD COLUMN notes TEXT;');
+      db.exec('CREATE INDEX visits_reviewed ON visits(reviewed_at);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -827,4 +847,210 @@ export function allMarkers(db, { now = new Date() } = {}) {
     // different thing from sign found today.
     daysOld: m.found_at ? Math.floor((now - new Date(m.found_at)) / 86400000) : null,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Visits: one animal's appearance, which is the unit you actually tag
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a gap ends a visit.
+ *
+ * These cameras fire two frames per trigger, so grouping by trigger alone would
+ * still leave you tagging the same deer twice. Five minutes is the span over
+ * which an animal is plausibly still the same animal working through the same
+ * spot; longer and a second deer at the same scrape gets folded into the first.
+ */
+export const VISIT_GAP_SECONDS = 300;
+
+/**
+ * Group a camera's photos into visits.
+ *
+ * Idempotent: it recomputes from scratch, so it can be re-run after a sync
+ * brings in photos that fall between existing ones — which happens routinely,
+ * because a download can fail and be retried on the next run.
+ *
+ * Photos with no timestamp are left ungrouped rather than guessed into a visit.
+ * A photo with an unknown time cannot be known to belong with its neighbours,
+ * and quietly attaching it would put an animal at a time it may not have been
+ * there.
+ */
+export function groupVisits(db, { gapSeconds = VISIT_GAP_SECONDS } = {}) {
+  const gapMs = gapSeconds * 1000;
+  let visits = 0, grouped = 0, ungrouped = 0;
+
+  const cameras = db.prepare('SELECT id FROM cameras').all();
+  db.exec('BEGIN');
+  try {
+    // Rebuilt rather than appended to, so regrouping after a partial sync gives
+    // the same answer as grouping the whole set at once.
+    db.exec('UPDATE photos SET visit_id = NULL;');
+    db.exec('DELETE FROM visits;');
+
+    for (const cam of cameras) {
+      const photos = db.prepare(`
+        SELECT id, taken_at FROM photos
+        WHERE camera_id = ? AND taken_at IS NOT NULL
+        ORDER BY taken_at
+      `).all(cam.id);
+
+      let current = null;
+      for (const p of photos) {
+        const t = new Date(p.taken_at).getTime();
+        if (!Number.isFinite(t)) { ungrouped++; continue; }
+        if (!current || t - current.lastMs > gapMs) {
+          const info = db.prepare(`
+            INSERT INTO visits (camera_id, started_at, ended_at, photo_count)
+            VALUES (?, ?, ?, 0)
+          `).run(cam.id, p.taken_at, p.taken_at);
+          current = { id: Number(info.lastInsertRowid), lastMs: t, count: 0 };
+          visits++;
+        }
+        db.prepare('UPDATE photos SET visit_id = ? WHERE id = ?').run(current.id, p.id);
+        current.lastMs = t;
+        current.count++;
+        grouped++;
+        db.prepare('UPDATE visits SET ended_at = ?, photo_count = ? WHERE id = ?')
+          .run(p.taken_at, current.count, current.id);
+      }
+    }
+    ungrouped += db.prepare(
+      'SELECT COUNT(*) n FROM photos WHERE taken_at IS NULL').get().n;
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { visits, grouped, ungrouped };
+}
+
+const visitRow = v => ({
+  ...v,
+  reviewed: !!v.reviewed_at,
+  spanSeconds: v.started_at && v.ended_at
+    ? Math.round((new Date(v.ended_at) - new Date(v.started_at)) / 1000) : null,
+});
+
+export function visitById(db, id) {
+  // Joined to the camera for the same reason allVisits is: the review screen
+  // refetches a single visit after every tag, and a bare visit row has no
+  // camera name — so the heading silently emptied itself the moment you tagged
+  // anything. One shape for a visit, however it was fetched.
+  const v = db.prepare(`
+    SELECT v.*, c.name AS camera_name, c.lat AS camera_lat, c.lng AS camera_lng
+    FROM visits v JOIN cameras c ON c.id = v.camera_id
+    WHERE v.id = ?
+  `).get(id);
+  return v ? visitRow(v) : null;
+}
+
+/**
+ * Visits for review, newest first.
+ *
+ * `unreviewed` is the working mode: it is the queue of what you have not looked
+ * at yet, which is the whole point of the screen.
+ */
+export function allVisits(db, { unreviewed = false, limit = 200, cameraId = null } = {}) {
+  const where = [];
+  const args = [];
+  if (unreviewed) where.push('v.reviewed_at IS NULL');
+  if (cameraId) { where.push('v.camera_id = ?'); args.push(cameraId); }
+  const rows = db.prepare(`
+    SELECT v.*, c.name AS camera_name, c.lat AS camera_lat, c.lng AS camera_lng
+    FROM visits v JOIN cameras c ON c.id = v.camera_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY v.started_at DESC
+    LIMIT ?
+  `).all(...args, limit);
+  return rows.map(visitRow);
+}
+
+export const photosForVisit = (db, visitId) =>
+  db.prepare('SELECT * FROM photos WHERE visit_id = ? ORDER BY taken_at, id').all(visitId);
+
+/** Mark a visit looked at. Passing reviewed:false puts it back in the queue. */
+export function reviewVisit(db, id, { reviewed = true, notes } = {}) {
+  const v = visitById(db, id);
+  if (!v) throw new Error(`no visit with id ${id}`);
+  db.prepare('UPDATE visits SET reviewed_at = ?, notes = ? WHERE id = ?')
+    .run(reviewed ? nowIso() : null, notes !== undefined ? notes : v.notes, id);
+  return visitById(db, id);
+}
+
+// ---------------------------------------------------------------------------
+// Detections
+// ---------------------------------------------------------------------------
+
+export const SPECIES = ['deer', 'turkey', 'bear', 'coyote', 'raccoon', 'other'];
+
+/** Antlered or not — recorded separately from species, because it is a judgement. */
+export const DEER_CLASS = ['buck', 'doe', 'fawn', 'unknown'];
+
+export const detectionsForVisit = (db, visitId) => db.prepare(`
+  SELECT d.*, b.name AS buck_name
+  FROM detections d
+  JOIN photos p ON p.id = d.photo_id
+  LEFT JOIN bucks b ON b.id = d.buck_id
+  WHERE p.visit_id = ?
+  ORDER BY d.id
+`).all(visitId);
+
+export const detectionsForPhoto = (db, photoId) => db.prepare(`
+  SELECT d.*, b.name AS buck_name FROM detections d
+  LEFT JOIN bucks b ON b.id = d.buck_id
+  WHERE d.photo_id = ? ORDER BY d.id
+`).all(photoId);
+
+export function updateDetection(db, id, patch = {}) {
+  const row = db.prepare('SELECT * FROM detections WHERE id = ?').get(id);
+  if (!row) throw new Error(`no detection with id ${id}`);
+  const next = {
+    species: patch.species !== undefined ? patch.species : row.species,
+    count: patch.count !== undefined ? Number(patch.count) : row.count,
+    buckId: patch.buckId !== undefined ? patch.buckId : row.buck_id,
+    confirmed: patch.confirmed !== undefined ? (patch.confirmed ? 1 : 0) : row.confirmed,
+    notes: patch.notes !== undefined ? patch.notes : row.notes,
+  };
+  if (!(next.count >= 1)) throw new Error('a detection counts at least one animal');
+  if (next.species !== null && !SPECIES.includes(next.species)) {
+    throw new Error(`unknown species "${next.species}" — one of ${SPECIES.join(', ')}`);
+  }
+  // A named buck is a deer by definition; letting the two disagree would make
+  // "how many deer" and "how many times I saw this buck" answer differently.
+  if (next.buckId && next.species && next.species !== 'deer') {
+    throw new Error('a detection assigned to a named buck must be a deer');
+  }
+  db.prepare(`
+    UPDATE detections SET species = ?, count = ?, buck_id = ?, confirmed = ?, notes = ?
+    WHERE id = ?
+  `).run(next.species, next.count, next.buckId, next.confirmed, next.notes, id);
+  return db.prepare('SELECT * FROM detections WHERE id = ?').get(id);
+}
+
+export const deleteDetection = (db, id) =>
+  db.prepare('DELETE FROM detections WHERE id = ?').run(id).changes > 0;
+
+export const allBucks = db => db.prepare(`
+  SELECT b.*, COUNT(d.id) AS sightings
+  FROM bucks b LEFT JOIN detections d ON d.buck_id = b.id
+  GROUP BY b.id ORDER BY b.name
+`).all();
+
+/**
+ * How many CONFIRMED animals a camera has seen lately.
+ *
+ * Confirmed only, deliberately: an unreviewed machine guess is not evidence,
+ * and the stand ranking must not treat it as such.
+ */
+export function recentDetectionCounts(db, { days = 30, species = 'deer', now = new Date() } = {}) {
+  const since = new Date(now.getTime() - days * 86400000).toISOString();
+  const rows = db.prepare(`
+    SELECT p.camera_id AS camera_id, SUM(d.count) AS n
+    FROM detections d
+    JOIN photos p ON p.id = d.photo_id
+    WHERE d.confirmed = 1 AND p.taken_at >= ?
+      ${species ? 'AND d.species = ?' : ''}
+    GROUP BY p.camera_id
+  `).all(...(species ? [since, species] : [since]));
+  return Object.fromEntries(rows.map(r => [r.camera_id, Number(r.n)]));
 }

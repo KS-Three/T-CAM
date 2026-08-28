@@ -34,7 +34,7 @@
  * differ. You have stood in the tree; the arithmetic has not.
  */
 
-import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG } from './routes.mjs';
+import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG, offsetPoint } from './routes.mjs';
 import { distanceM } from './db.mjs';
 
 /**
@@ -91,19 +91,97 @@ export function laneSpread(lane, fallback = LANE_SPREAD_DEG) {
   return Math.min(MAX_LANE_SPREAD_DEG, Math.max(MIN_LANE_SPREAD_DEG, s));
 }
 
+/**
+ * The shortest a lane may be.
+ *
+ * Not a judgement about shots — a five-metre lane is a real thing under a
+ * tree — but about not storing a lane that has collapsed to a point. Below
+ * this there is no bearing to speak of, the cone has no area, and the lane
+ * silently stops counting toward the winds while still sitting in the list.
+ *
+ * There is deliberately no maximum. A four-hundred-metre lane is usually a
+ * misplaced click, and the form says so, but it might genuinely be the far
+ * edge of a field you watch — and refusing to store what somebody means is a
+ * worse failure than showing them a number they will recognise as wrong.
+ */
+export const MIN_LANE_REACH_M = 5;
+
+/**
+ * How wide a lane is on the ground where the shot ends, in metres.
+ *
+ * The stored width is a half-angle, and that is the right thing to STORE: it
+ * is what the wind test needs, and it does not change when the lane gets
+ * longer. It is the wrong thing to ASK FOR. Nobody standing under a tree knows
+ * an opening in degrees. They know it is about twenty yards across where it
+ * meets the field, because they have walked it — so that is the number the
+ * form takes, and this is the conversion between the two.
+ *
+ * One definition, used by the box you type in, the readout on the cone and the
+ * geometry the winds come out of, because three copies of a tangent is exactly
+ * how the width you set stops being the width you are judged on.
+ */
+export const laneWidthM = (metres, spreadDeg) =>
+  2 * metres * Math.tan(spreadDeg * Math.PI / 180);
+
+/**
+ * The inverse: the half-angle that makes a lane `widthM` across at `metres`.
+ *
+ * Clamped to the same bounds a drag is. Typing two hundred yards across a
+ * forty-yard lane lands on the widest a lane may be rather than on a fan that
+ * is not a lane at all — and because it clamps rather than refuses, the number
+ * that comes back is the one that gets stored and shown, so the box always
+ * ends up agreeing with the cone.
+ */
+export function spreadForWidthM(metres, widthM) {
+  if (!isNum(metres) || !isNum(widthM) || metres <= 0 || widthM <= 0) return null;
+  const deg = Math.atan(widthM / (2 * metres)) * 180 / Math.PI;
+  const clamped = Math.min(MAX_LANE_SPREAD_DEG, Math.max(MIN_LANE_SPREAD_DEG, deg));
+  return Math.round(clamped * 10) / 10;
+}
+
+/**
+ * The far end of a lane moved to a given reach, keeping the bearing it has.
+ *
+ * What the reach box does, and the reason it is a separate operation from the
+ * tip handle rather than the same one: typing a distance must not swing the
+ * lane onto different ground. That is the same separation the two kinds of
+ * handle exist for — length and direction on the tip, width on the rim — one
+ * step further, because a number you type is the one input that can be exact.
+ */
+export function laneAtReach(stand, lane, metres) {
+  const to = lane?.to;
+  if (!Array.isArray(to) || !isNum(to[0]) || !isNum(to[1])) return null;
+  if (!isNum(stand?.lat) || !isNum(stand?.lng) || !isNum(metres)) return null;
+  const deg = bearing(stand.lat, stand.lng, to[1], to[0]);
+  const p = offsetPoint(stand.lat, stand.lng, deg, Math.max(MIN_LANE_REACH_M, metres));
+  return [p.lng, p.lat];
+}
+
 /** Where a lane points, how far it reaches, and how wide it opens. */
 export function laneGeometry(stand, lane, { spreadDeg = LANE_SPREAD_DEG } = {}) {
   const to = lane?.to;
   if (!Array.isArray(to) || !isNum(to[0]) || !isNum(to[1])) return null;
   if (!isNum(stand?.lat) || !isNum(stand?.lng)) return null;
   const deg = bearing(stand.lat, stand.lng, to[1], to[0]);
+  const metres = Math.round(distanceM(stand.lat, stand.lng, to[1], to[0]));
+  const spread = laneSpread(lane, spreadDeg);
   return {
     to,
     label: lane.label ?? null,
     bearingDeg: Math.round(deg * 10) / 10,
     point: COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16],
-    metres: Math.round(distanceM(stand.lat, stand.lng, to[1], to[0])),
-    spreadDeg: laneSpread(lane, spreadDeg),
+    metres,
+    spreadDeg: spread,
+    // The same width said the way it would be said out loud. Carried on the
+    // geometry rather than worked out again by whoever is displaying it, so
+    // the form, the cone's own readout and the API all quote one number.
+    //
+    // To a tenth of a metre, not a whole one, because it is shown in yards: a
+    // whole metre is more than a yard, so rounding here first would cost the
+    // last digit of what is displayed. Typing "40 yd wide" and watching it
+    // settle back to 39 is exactly the kind of small betrayal that stops
+    // somebody trusting a box.
+    widthM: Math.round(laneWidthM(metres, spread) * 10) / 10,
   };
 }
 
@@ -228,6 +306,7 @@ export function windsForStand(stand, { halfAngleDeg = CONE_HALF_ANGLE_DEG } = {}
 export function browserSource(globalName = 'COVER') {
   const consts = {
     CONE_HALF_ANGLE_DEG, LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG,
+    MIN_LANE_REACH_M,
   };
   const body = [
     `const COMPASS = ${JSON.stringify(COMPASS)};`,
@@ -235,8 +314,12 @@ export function browserSource(globalName = 'COVER') {
     `const isNum = ${isNum.toString()};`,
     `const distanceM = ${distanceM.toString()};`,
     `const bearing = ${bearing.toString()};`,
+    `const offsetPoint = ${offsetPoint.toString()};`,
     `const angleBetween = ${angleBetween.toString()};`,
     `const laneSpread = ${laneSpread.toString()};`,
+    `const laneWidthM = ${laneWidthM.toString()};`,
+    `const spreadForWidthM = ${spreadForWidthM.toString()};`,
+    `const laneAtReach = ${laneAtReach.toString()};`,
     `const laneGeometry = ${laneGeometry.toString()};`,
     `const laneGeometries = ${laneGeometries.toString()};`,
     `const huntableFromLanes = ${huntableFromLanes.toString()};`,
@@ -245,9 +328,17 @@ export function browserSource(globalName = 'COVER') {
     // turn a dragged handle into a half-angle, and doing that with its own copy
     // of the trigonometry is how the cone you drag and the cone that decides
     // the winds start to differ.
+    //
+    // The width and reach conversions cross for the same reason one step on.
+    // The form takes a lane's size as yards out and yards across, which are not
+    // what is stored — a half-angle is — so something has to convert, and if
+    // that something is a tangent typed into the page then the width you set
+    // and the width you are judged on are two numbers that merely started
+    // equal.
     'return { laneGeometry, laneGeometries, huntableFromLanes, compareToManual,'
-    + ' laneSpread, bearing, angleBetween,'
-    + ' LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG };',
+    + ' laneSpread, laneWidthM, spreadForWidthM, laneAtReach, bearing, offsetPoint,'
+    + ' angleBetween, LANE_SPREAD_DEG, MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG,'
+    + ' MIN_LANE_REACH_M };',
   ].join('\n');
   return `const ${globalName} = (function () {\n${body}\n})();`;
 }

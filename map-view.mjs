@@ -273,6 +273,21 @@ export const mapStyles = `
      hard boundary on a shot that fades. */
   #contours path.laneedge { fill: none; stroke: rgba(210,230,255,.55);
                             stroke-width: 1.2; stroke-dasharray: 5 4; }
+  /* What the lane measures, written on the ground beside it.
+
+     The form carries the same two numbers, and that was not enough: while you
+     are dragging a handle your eyes are on the cone, and while tracing the
+     form is a strip along the bottom whose row for this lane may have scrolled
+     out of it. A number that only exists where you are not looking is a number
+     you adjust by guessing.
+
+     Stroked and then filled rather than given a background plate, because a
+     box behind every tip would cover the ground the lane ends on — which is
+     the thing being aimed at. */
+  #contours text.lanesay { font: 700 11px ui-sans-serif, system-ui, sans-serif;
+                           fill: #eaf1ff; stroke: rgba(6,14,36,.9); stroke-width: 3;
+                           paint-order: stroke; text-anchor: middle;
+                           dominant-baseline: middle; pointer-events: none; }
   /* Tracing puts the form away and moves it to a strip along the bottom.
      Measured while driving the feature: the full form covers 47% of the map,
      and a right-hand panel still swallowed two clicks out of three in a
@@ -284,7 +299,15 @@ export const mapStyles = `
                           offsets without clearing it shifts the strip half its
                           own width off the left edge and clips the text. */
                        transform: none;
-                       width: auto; max-width: none; max-height: 132px; padding: 10px 12px; }
+                       width: auto; max-width: none; max-height: 168px; padding: 10px 12px;
+                       /* A column, so the lane list can be the part that
+                          scrolls. The list already asked to (overflow-y and
+                          min-height:0 below) and the request was inert without
+                          this: it was laid out at full height below the
+                          strip's bottom edge and simply vanished, taking the
+                          rows with it the moment one grew past a single line.
+                          Seen in a screenshot, not in a test. */
+                       display: flex; flex-direction: column; }
   .standform.tracing .standmain { display: none; }
   /* Inside the strip the derived winds come first — they are the answer, and
      a fourth lane used to push them past the strip's height and out of sight
@@ -296,22 +319,48 @@ export const mapStyles = `
   .standform.tracing .standmain,
   .standform.tracing .formrow,
   .standform.tracing > button.danger { display: none; }
-  .standform.tracing .lanewinds { margin: 0 0 6px; }
-  .standform.tracing .lanetrace { margin: 0 0 6px; }
-  .standform.tracing > label { margin: 0 0 3px; }
+  /* The winds are the part allowed to grow, and therefore the part that
+     scrolls when the strip runs out of room: the line that matters is its
+     first, and what would be pushed off is the "this disagrees with what was
+     ticked" note underneath it. */
+  .standform.tracing .lanewinds { margin: 0 0 6px; flex: 1 1 auto;
+                                  overflow-y: auto; min-height: 0; }
+  .standform.tracing .lanetrace { margin: 0 0 6px; flex: 0 0 auto; }
+  /* The heading already says what this is while tracing, so the section label
+     under it is 18 pixels of repetition in the one place there is no room. */
+  .standform.tracing > label { display: none; }
+  /* Room for a row or two, scrolling past that, and it does not get squeezed
+     to nothing when the winds above it run long — which is exactly what
+     flex: 1 gave it. */
   .standform.tracing .lanelist { flex-direction: row; flex-wrap: wrap;
-                                 overflow-y: auto; min-height: 0; }
+                                 overflow-y: auto; min-height: 0;
+                                 flex: 0 0 auto; max-height: 56px; }
   .standform.tracing .lanerow { flex: 0 1 auto; }
-  .standform.tracing .lanerow input { flex: 0 1 110px; }
-  .lanelist { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
-  .lanerow { display: flex; gap: 8px; align-items: center; font-size: 12px; }
-  .lanerow .dir { font-weight: 700; min-width: 34px; }
-  .lanerow .len { color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* The opening angle, shown next to the distance because the two together are
-     the lane: how far the shot goes and how much of it you can swing on. */
-  .lanerow .wide { color: var(--muted); font-variant-numeric: tabular-nums;
-                   white-space: nowrap; }
-  .lanerow input { flex: 1; padding: 3px 6px; font-size: 12px; }
+  /* Naming a lane is not what you are doing while tracing — you are clicking
+     points at the far end of one — and the name box is the whole reason a row
+     needs a second line. Out of the strip, still in the panel. */
+  .standform.tracing .lanerow .name { display: none; }
+  .lanelist { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+  /* The row wraps, because it is now four controls rather than two readouts
+     and three hundred pixels of form does not hold them on one line. The name
+     box is the one given a flexible basis, so what wraps away first is the
+     optional field rather than the numbers that define the lane. */
+  .lanerow { display: flex; gap: 6px; align-items: center; font-size: 12px;
+             flex-wrap: wrap; }
+  .lanerow .dir { font-weight: 700; min-width: 30px; }
+  /* A number and its unit, read as one control. The unit is spelled out beside
+     the box rather than left to a placeholder, because a placeholder vanishes
+     the moment the box has a value in it — which here is always. */
+  .lanenum { display: inline-flex; align-items: center; gap: 3px; }
+  .lanenum input { width: 58px; padding: 3px 5px; font-size: 12px; text-align: right;
+                   font-variant-numeric: tabular-nums; }
+  .lanenum .u { color: var(--muted); white-space: nowrap; }
+  /* The half-angle doubled, which is what is actually stored, kept beside the
+     width it was computed from. Read-only on purpose: it is the same fact as
+     the box next to it, and a second box for one value is how two inputs for
+     one answer start again. */
+  .lanerow .deg { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .lanerow .name { flex: 1 1 110px; min-width: 0; padding: 3px 6px; font-size: 12px; }
   .lanerow button { border: 1px solid var(--line); background: var(--bg); color: var(--muted);
                     border-radius: 5px; cursor: pointer; padding: 2px 7px; font-size: 12px; }
   .lanerow button:hover { color: var(--bad); border-color: var(--bad); }
@@ -1087,7 +1136,7 @@ addEventListener('keydown', e => {
 // each click drops the far end of a lane. The winds are recomputed and shown
 // as each one lands, because a derivation you only see after saving is one you
 // cannot correct.
-let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while tracing
+let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onLanes, onNumbers } while tracing
 
 // The lanes belonging to the stand form that is currently open, whether or not
 // it is armed for tracing.
@@ -1099,7 +1148,13 @@ let laneEdit = null;    // { stand: {lat,lng}, lanes: [], onChange } while traci
 // removing a lane redrew it and widening one would have shown nothing until
 // after a save — the form's copy is the live one, and this is what makes the
 // map read from it.
-let laneForm = null;    // { standId, stand: {lat,lng}, lanes: [], onChange }
+let laneForm = null;    // { standId, stand: {lat,lng}, lanes: [], onLanes, onNumbers }
+
+// Which handle is being held, if any. Declared up here with the rest of the
+// lane state rather than beside the listener that sets it, because the drawing
+// code reads it — the cone tells you its width while you are dragging its
+// width — and draw() runs before that part of the script has been reached.
+let gripDrag = null;    // { i, kind } while a handle is held
 
 /**
  * Put the stand form away and forget everything hanging off it.
@@ -1133,6 +1188,18 @@ function closeStandForm() {
 // here with a second copy of that rule is how a picture starts disagreeing
 // with the model behind it, and the picture is what you would believe.
 const laneHalfDeg = l => COVER.laneSpread(l);
+
+// Yards, because a shot is thought about in yards — the same call measure.mjs
+// makes for the same reason, and M_PER_YARD is taken from there rather than
+// written again here. Everything stored and computed stays in metres; this is
+// only the last step before a number is shown or the first after one is typed.
+const toYd = m => Math.round(m / MEASURE.M_PER_YARD);
+const fromYd = yd => yd * MEASURE.M_PER_YARD;
+
+// Past this a lane gets a second look in the form. It is a judgement about
+// shots rather than a rule about lanes — nothing is refused — and it is stated
+// in yards because that is the unit the whole section now speaks in.
+const LONG_LANE_YD = 300;
 
 /** Screen bearing of a lane, in radians, measured the way a compass is. */
 const screenBearing = (ax, ay, ex, ey) => Math.atan2(ex - ax, ay - ey);
@@ -1219,7 +1286,38 @@ function laneGrips(ax, ay, l, i, left, top) {
     grip(lx, ly, 'left', dot * 0.85),
     grip(rx, ry, 'right', dot * 0.85),
     grip(ex, ey, 'tip', dot),
-  ];
+    laneSay(ax, ay, l, i, r, a),
+  ].filter(Boolean);
+}
+
+/**
+ * What this lane measures, written beside it on the ground.
+ *
+ * Standing state is the reach, because that is the number you check against
+ * the ground you can see — "is that really eighty yards to the field edge".
+ * While a width handle is held it becomes the width instead: that is the
+ * number the drag is changing, it is the one that has no other reading on the
+ * map, and showing both at once would put two figures in the same place at the
+ * moment one of them is moving.
+ *
+ * Both come off the geometry rather than being worked out here, so the label
+ * on the cone, the boxes in the form and the winds underneath are three views
+ * of one calculation.
+ */
+function laneSay(ax, ay, l, i, r, a) {
+  const g = laneForm && COVER.laneGeometry(laneForm.stand, l);
+  if (!g) return null;
+  const wide = gripDrag && gripDrag.i === i && gripDrag.kind !== 'tip';
+  const text = wide ? toYd(g.widthM) + ' yd wide' : toYd(g.metres) + ' yd';
+  // Always just past the tip, on the centre line, whichever number it is
+  // showing. Following the handle instead was the obvious thing and was wrong:
+  // a width handle on a wide cone swings back around toward the stand, and the
+  // readout landed on the stand's own label. Here it is clear of everything,
+  // it is where the eye already is, and it does not move while a drag changes
+  // what it says.
+  const [x, y] = rimPoint(ax, ay, r + 16, a);
+  return '<text class="lanesay" x="' + x.toFixed(1) + '" y="' + y.toFixed(1)
+    + '">' + text + '</text>';
 }
 
 function lanePaths(left, top) {
@@ -1942,6 +2040,10 @@ function openStandForm(stand) {
     // just by having its form opened.
     ...(Number.isFinite(l.spread) ? { spread: l.spread } : {}),
   }));
+  // Where the lanes radiate from. One object, handed to the map below as well,
+  // so the boxes in this form and the handles on the cone are measuring from
+  // the same point rather than from two snapshots of it.
+  const at = { lat: stand.lat, lng: stand.lng };
   form.insertBefore(el('label', null, 'Shooting lanes'), fields);
   const laneList = el('div', 'lanelist');
   const laneWinds = el('div', 'lanewinds');
@@ -1949,36 +2051,145 @@ function openStandForm(stand) {
   traceBtn.type = 'button';
   traceBtn.className = 'lanetrace';
 
-  const paintLanes = () => {
-    laneList.textContent = '';
-    const derived = COVER.huntableFromLanes({ lat: stand.lat, lng: stand.lng }, lanes);
-    (derived ? derived.lanes : []).forEach((g, i) => {
-      const r = el('div', 'lanerow');
-      r.appendChild(el('span', 'dir', g.point));
-      r.appendChild(el('span', 'len', g.metres + ' m'));
-      // The FULL opening, not the half-angle the model works in: "40 degrees
-      // wide" is what you would say standing in it, and the halving is an
-      // implementation detail nobody should have to hold in their head.
-      r.appendChild(el('span', 'wide', Math.round(g.spreadDeg * 2) + '\u00b0 wide'));
-      const label = document.createElement('input');
-      label.placeholder = 'name it (optional)';
-      label.value = lanes[i].label || '';
-      label.oninput = () => { lanes[i].label = label.value.trim() || null; };
-      r.appendChild(label);
-      const x = document.createElement('button');
-      x.type = 'button'; x.textContent = 'remove';
-      x.onclick = () => { lanes.splice(i, 1); paintLanes(); draw(); };
-      r.appendChild(x);
-      laneList.appendChild(r);
-    });
+  // One entry per lane, in the same order, holding the fields that have to be
+  // written as a drag moves them. Kept rather than looked up, because the row
+  // is rebuilt only when the SET of lanes changes: rebuilding it to show a new
+  // number would destroy the box you were typing that number into, which is
+  // what made typing one impossible before this existed.
+  const rows = [];
 
+  /**
+   * One lane: which way, how far, how wide, what it is called, and Remove.
+   *
+   * The reach and the width are BOXES, not readouts. The handles on the map
+   * are still the fastest way to put a lane roughly where it goes, and rough
+   * is exactly their limit — you know this one runs eighty yards to the field
+   * edge and opens about twenty across at the end, because you have walked it,
+   * and until now the only way to say so was to drag until a readout happened
+   * to agree with the number already in your head.
+   */
+  const laneRow = i => {
+    const r = el('div', 'lanerow');
+    const dir = el('span', 'dir', '');
+    r.appendChild(dir);
+
+    const num = (unit, title) => {
+      const box = el('span', 'lanenum');
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      // A phone shows a plain number pad for this rather than the full
+      // keyboard, which matters because this gets used in a tree.
+      inp.inputMode = 'decimal';
+      inp.min = '1'; inp.step = '1';
+      inp.title = title;
+      box.append(inp, el('span', 'u', unit));
+      r.appendChild(box);
+      return inp;
+    };
+    const reach = num('yd out',
+      'How far the shot reaches. Changing it slides the far end along the '
+      + 'bearing the lane already has \u2014 to swing it onto different ground, '
+      + 'drag the tip.');
+    const width = num('yd wide',
+      'How wide the opening is where the shot ends. A lane is a cone, so '
+      + 'making it longer also makes it wider on the ground; the angle beside '
+      + 'this box is the part that stays put.');
+    const deg = el('span', 'deg', '');
+    r.appendChild(deg);
+
+    // The numbers follow every keystroke, the same way they follow a drag: a
+    // derivation you only see after committing is one you cannot correct. What
+    // does NOT happen here is a rebuild of this row — see syncRows.
+    reach.oninput = () => {
+      const yd = Number(reach.value);
+      if (!Number.isFinite(yd) || yd <= 0) return;
+      const to = COVER.laneAtReach(at, lanes[i], fromYd(yd));
+      if (!to) return;
+      lanes[i].to = to;
+      afterEdit();
+    };
+    width.oninput = () => {
+      const yd = Number(width.value);
+      if (!Number.isFinite(yd) || yd <= 0) return;
+      const g = COVER.laneGeometry(at, lanes[i]);
+      const spread = g && COVER.spreadForWidthM(g.metres, fromYd(yd));
+      if (!spread) return;
+      lanes[i].spread = spread;
+      afterEdit();
+    };
+    // On leaving the box, or pressing Enter in it, both are written back from
+    // what was actually STORED — so a width beyond what a lane may open to
+    // shows the value it was pulled back to rather than the one that was
+    // refused, and the boxes always end up agreeing with the cone.
+    //
+    // Written here rather than by rebuilding the row, because a rebuild on
+    // Enter would take the box out from under a finger still resting on it.
+    const settle = () => {
+      const g = COVER.laneGeometry(at, lanes[i]);
+      if (g) {
+        reach.value = String(toYd(g.metres));
+        width.value = String(toYd(g.widthM));
+      }
+      afterEdit();
+    };
+    reach.onchange = width.onchange = settle;
+
+    const label = document.createElement('input');
+    label.className = 'name';
+    label.placeholder = 'name it (optional)';
+    label.value = lanes[i].label || '';
+    label.oninput = () => { lanes[i].label = label.value.trim() || null; };
+    r.appendChild(label);
+
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = 'remove';
+    x.onclick = () => { lanes.splice(i, 1); paintLanes(); draw(); };
+    r.appendChild(x);
+    return { el: r, dir, reach, width, deg };
+  };
+
+  /**
+   * The numbers in the rows, written in place.
+   *
+   * A drag changes exactly the two values the boxes hold, and they have to
+   * follow it — but replacing the rows to show that would take the box out
+   * from under the caret mid-word. So the DOM is written rather than rebuilt,
+   * and whichever field has the focus is left alone: it already says what its
+   * owner is in the middle of typing.
+   *
+   * Geometry is asked for per lane rather than taken from the derived list,
+   * which drops any lane it cannot place and would therefore hand row 1 the
+   * numbers belonging to lane 2 — and, before this, handed its Remove button
+   * the wrong lane as well.
+   */
+  const syncRows = () => {
+    rows.forEach((row, i) => {
+      const g = COVER.laneGeometry(at, lanes[i]);
+      if (!g) {
+        row.dir.textContent = '?';
+        row.deg.textContent = '';
+        return;
+      }
+      row.dir.textContent = g.point;
+      // The FULL opening, not the half-angle the model works in: "40 degrees"
+      // is what you would say standing in it, and the halving is an
+      // implementation detail nobody should have to hold in their head.
+      row.deg.textContent = Math.round(g.spreadDeg * 2) + '\u00b0';
+      if (document.activeElement !== row.reach) row.reach.value = String(toYd(g.metres));
+      if (document.activeElement !== row.width) row.width.value = String(toYd(g.widthM));
+    });
+  };
+
+  /** The answer the lanes add up to, and the state of the trace button. */
+  const paintWinds = () => {
+    const derived = COVER.huntableFromLanes(at, lanes);
     laneWinds.textContent = '';
     if (!derived) {
       laneWinds.appendChild(el('span', null,
         'None marked. Press Trace and click where you can shoot to \u2014 '
-        + 'one click per lane. Then drag the tip to change how far it reaches, '
-        + 'or either side handle to open it wider. The winds are worked out '
-        + 'from the shape.'));
+        + 'one click per lane. Then say how far and how wide each one is, '
+        + 'either by typing yards into its row or by dragging the tip and the '
+        + 'side handles. The winds are worked out from the shape.'));
     } else if (!derived.winds.length) {
       const n = el('span', 'no');
       n.textContent = derived.why;
@@ -1990,14 +2201,16 @@ function openStandForm(stand) {
       laneWinds.appendChild(document.createTextNode(
         ' \u2014 ' + derived.winds.length + ' of 16. The rest blow your scent down a lane.'));
       // Not forbidden — it might be a long field edge you genuinely watch —
-      // but 400 m is not a shot, and a lane that long is usually a misplaced
-      // click that quietly rules out winds you could have hunted.
-      const far = derived.lanes.filter(g => g.metres > 300);
+      // but this is a long way for a shot, and a lane that long is usually a
+      // misplaced click that quietly rules out winds you could have hunted.
+      // Said in yards, like every other distance in this section.
+      const far = derived.lanes.filter(g => toYd(g.metres) > LONG_LANE_YD);
       if (far.length) {
         const w = el('div', null, far.length === 1
-          ? 'That ' + far[0].metres + ' m lane is a long way for a shot \u2014 worth checking '
-            + 'you meant it, since it rules winds out either way.'
-          : far.length + ' lanes are over 300 m, which is a long way for a shot.');
+          ? 'That ' + toYd(far[0].metres) + ' yd lane is a long way for a shot \u2014 worth '
+            + 'checking you meant it, since it rules winds out either way.'
+          : far.length + ' lanes are over ' + LONG_LANE_YD + ' yd, which is a long way '
+            + 'for a shot.');
         w.style.marginTop = '4px';
         w.style.color = 'var(--warn)';
         laneWinds.appendChild(w);
@@ -2019,6 +2232,22 @@ function openStandForm(stand) {
     head.textContent = laneEdit
       ? 'Click where you can shoot to'
       : (isNew ? 'New stand' : 'Edit stand');
+  };
+
+  /** A typed edit: everything follows it except the row that caused it. */
+  const afterEdit = () => { syncRows(); paintWinds(); draw(); };
+
+  /** Rebuild the list. For when a lane arrives or leaves, not for a number. */
+  const paintLanes = () => {
+    laneList.textContent = '';
+    rows.length = 0;
+    lanes.forEach((l, i) => {
+      const row = laneRow(i);
+      rows.push(row);
+      laneList.appendChild(row.el);
+    });
+    syncRows();
+    paintWinds();
   };
 
   traceBtn.onclick = ev => {
@@ -2084,9 +2313,17 @@ function openStandForm(stand) {
   // the label boxes are already editing.
   laneForm = {
     standId: stand.id || null,
-    stand: { lat: stand.lat, lng: stand.lng },
+    stand: at,
     lanes,
-    onChange: paintLanes,
+    // Two callbacks, because the two things that change the lanes need
+    // different work and one of them cannot do the other's.
+    //
+    // A drag moves numbers the rows already hold: they are written rather than
+    // rebuilt, at pointer rate and with a box possibly under the caret. A
+    // click while tracing adds a lane that has no row yet, and syncing would
+    // leave it invisible in the form while the cone for it sat on the map.
+    onNumbers: () => { syncRows(); paintWinds(); },
+    onLanes: paintLanes,
   };
   paintLanes();
 
@@ -2244,7 +2481,9 @@ mapEl.addEventListener('click', e => {
     if (lx < 0 || ly < 0 || lx > rl.width || ly > rl.height) return;
     const at = pixelToLatLng(lx, ly);
     laneEdit.lanes.push({ to: [at.lng, at.lat], label: null });
-    laneEdit.onChange();
+    // A new lane, so the list is rebuilt rather than written over: it has no
+    // row yet, and there is nothing to write into.
+    laneEdit.onLanes();
     draw();
     return;
   }
@@ -2320,8 +2559,6 @@ mapEl.addEventListener('click', e => {
  * the ground; the handles switch it back on for themselves. Events still
  * bubble up through it either way, which is what this relies on.
  */
-let gripDrag = null;    // { i, kind } while a handle is held
-
 contoursEl.addEventListener('pointerdown', e => {
   if (!laneForm) return;
   const g = e.target.closest && e.target.closest('.lanegrip');
@@ -2347,9 +2584,16 @@ contoursEl.addEventListener('pointermove', e => {
     // a cone that collapses to nothing. Hold the last good position instead of
     // storing a degenerate one — the alternative is a lane that silently stops
     // counting toward the winds.
+    //
+    // Two floors, guarding different things. The metre one is the same floor
+    // the reach box enforces, so a lane cannot be dragged to a size that could
+    // not be typed. The pixel one is about getting it back: the handles scale
+    // with the lane, so a cone pulled to nothing at a wide zoom would be too
+    // small to grab again and could only be removed.
     const ax = projX(laneForm.stand.lng, zoom), ay = projY(laneForm.stand.lat, zoom);
     const px = projX(at.lng, zoom), py = projY(at.lat, zoom);
-    if (Math.hypot(px - ax, py - ay) < 8) return;
+    const m = MEASURE.distanceM(laneForm.stand.lat, laneForm.stand.lng, at.lat, at.lng);
+    if (m < COVER.MIN_LANE_REACH_M || Math.hypot(px - ax, py - ay) < 8) return;
     lane.to = [at.lng, at.lat];
   } else {
     // A width handle moves the EDGE, so what it means is the angle between the
@@ -2362,7 +2606,7 @@ contoursEl.addEventListener('pointermove', e => {
       Math.max(COVER.MIN_LANE_SPREAD_DEG, off));
     lane.spread = Math.round(clamped * 10) / 10;
   }
-  laneForm.onChange();
+  laneForm.onNumbers();
   draw();
 });
 

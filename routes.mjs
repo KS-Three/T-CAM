@@ -43,6 +43,28 @@ export function bearing(fromLat, fromLng, toLat, toLng) {
 }
 
 /**
+ * The point `metres` along `bearingDeg` from somewhere — the inverse of the
+ * bearing above, and the thing you need whenever a distance is TYPED rather
+ * than clicked.
+ *
+ * Equirectangular rather than the full great-circle formula, which is exact
+ * enough by a wide margin at the ranges anything here works over: at a
+ * kilometre the error is under a centimetre, and this is used for shooting
+ * lanes and stand setbacks measured in tens of metres.
+ *
+ * It lives here, beside bearing() and with the same radius, because the two
+ * are used as a pair and a second copy of the arithmetic elsewhere is how a
+ * distance typed in and a distance measured back start to disagree.
+ */
+export function offsetPoint(lat, lng, bearingDeg, metres) {
+  const R = 6371008.8;
+  const br = bearingDeg * Math.PI / 180;
+  const dLat = (metres * Math.cos(br)) / R * 180 / Math.PI;
+  const dLng = (metres * Math.sin(br)) / (R * Math.cos(lat * Math.PI / 180)) * 180 / Math.PI;
+  return { lat: lat + dLat, lng: lng + dLng };
+}
+
+/**
  * Smallest angle between two bearings, 0..180.
  *
  * The wrap expression below IS the answer; an earlier version subtracted it

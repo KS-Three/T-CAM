@@ -12,6 +12,7 @@ import {
   laneGeometry, laneGeometries, huntableFromLanes, compareToManual,
   windsForStand, laneSpread, LANE_SPREAD_DEG,
   MIN_LANE_SPREAD_DEG, MAX_LANE_SPREAD_DEG,
+  laneWidthM, spreadForWidthM, laneAtReach, MIN_LANE_REACH_M,
 } from '../coverage.mjs';
 import { CONE_HALF_ANGLE_DEG, scentReaches, COMPASS } from '../routes.mjs';
 import { mapStyles, mapScript } from '../map-view.mjs';
@@ -235,6 +236,206 @@ test('the copy the map runs derives exactly what Node derives', async () => {
     browser.bearing(stand.lat, stand.lng, lane(0).to[1], lane(0).to[0]));
   assert.ok(Math.abs(off - 90) < 0.5, `expected about 90, got ${off}`);
   assert.equal(browser.laneSpread({ spread: off }), MAX_LANE_SPREAD_DEG);
+
+  // The reach and width boxes need the conversions between what is stored (an
+  // endpoint and a half-angle) and what is typed (yards out, yards across).
+  // Those cross too, and have to agree: a width typed on the page and the
+  // width the ranking is computed from are otherwise two numbers that merely
+  // started equal.
+  assert.equal(browser.MIN_LANE_REACH_M, MIN_LANE_REACH_M);
+  for (const [m, deg] of [[60, 10], [140, 45], [15, 3], [400, 80]]) {
+    assert.equal(browser.laneWidthM(m, deg), laneWidthM(m, deg), `${m} m at ${deg}`);
+    const w = laneWidthM(m, deg);
+    assert.equal(browser.spreadForWidthM(m, w), spreadForWidthM(m, w));
+  }
+  assert.equal(browser.spreadForWidthM(40, 2000), spreadForWidthM(40, 2000), 'clamped alike');
+  for (const metres of [5, 60, 300]) {
+    // plain() again: the array comes back from the vm's realm, which a
+    // structural comparison rejects even when every number matches.
+    assert.deepStrictEqual(plain(browser.laneAtReach(stand, lane(37), metres)),
+      plain(laneAtReach(stand, lane(37), metres)), `reach ${metres}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Saying a lane's size in the units it is thought about in
+//
+// The shape is stored as an endpoint and a half-angle, which is right: it is
+// what the wind test needs, and neither number changes meaning over time. It
+// is not what anybody KNOWS. You know a lane runs eighty yards to the field
+// edge and opens about twenty across at the end, because you have walked it —
+// so those are the two numbers the form takes, and these are the conversions
+// that stand between them and what is stored.
+// ---------------------------------------------------------------------------
+
+test('a width in degrees and a width across the end are the same fact', () => {
+  // Worked by hand: a 45-degree half-angle puts the rim edge at 45 degrees off
+  // the centre line, so the half-width equals the length and the full opening
+  // is twice it.
+  assert.ok(Math.abs(laneWidthM(100, 45) - 200) < 1e-9);
+  // And the default: ten degrees at fifty metres is about 17.6 across, which
+  // is the "roughly nineteen metres of frontage at fifty" the constant claims,
+  // measured at the rim rather than along the arc.
+  assert.ok(Math.abs(laneWidthM(50, LANE_SPREAD_DEG) - 17.6) < 0.1);
+  assert.equal(laneWidthM(0, 30), 0, 'a lane with no length has no width');
+});
+
+test('typing a width across the end gives back the angle that draws it', () => {
+  for (const metres of [15, 40, 90, 250]) {
+    for (const deg of [5, LANE_SPREAD_DEG, 25, 60]) {
+      const back = spreadForWidthM(metres, laneWidthM(metres, deg));
+      assert.ok(Math.abs(back - deg) < 0.05,
+        `${deg} degrees at ${metres} m came back as ${back}`);
+    }
+  }
+});
+
+test('a width no lane could open to is pulled back, not refused', () => {
+  // Two hundred metres across a forty-metre lane is not a lane, it is a field
+  // you can see over. Clamping keeps the number that comes back the number
+  // that gets stored and shown, so the box always agrees with the cone; a
+  // refusal would leave the two saying different things.
+  assert.equal(spreadForWidthM(40, 2000), MAX_LANE_SPREAD_DEG);
+  assert.equal(spreadForWidthM(400, 1), MIN_LANE_SPREAD_DEG);
+  // The bounds are the ones a drag is held to, so dragging and typing cannot
+  // produce shapes the other would refuse.
+  assert.equal(laneSpread({ spread: spreadForWidthM(40, 2000) }), MAX_LANE_SPREAD_DEG);
+  // Nonsense is nonsense, and is not coerced into a width. A NaN half-angle
+  // would make every angular test false and quietly free up all sixteen winds.
+  for (const bad of [[0, 10], [60, 0], [60, -5], [NaN, 10], [60, null], ['x', 'y']]) {
+    assert.equal(spreadForWidthM(bad[0], bad[1]), null, JSON.stringify(bad));
+  }
+});
+
+test('the geometry carries the width across the end, so nobody recomputes it', () => {
+  const g = laneGeometry(stand, { ...lane(90, 100), spread: 45 });
+  assert.equal(g.widthM, 200, 'a 45-degree half-angle is as wide as it is long');
+  assert.equal(laneGeometry(stand, lane(90, 50)).widthM,
+    Math.round(laneWidthM(50, LANE_SPREAD_DEG) * 10) / 10,
+    'and the default is reported too');
+  // To a tenth of a metre. A whole metre is more than a yard, so rounding here
+  // would cost the last digit of the yard figure the form shows — and a width
+  // typed as 40 that settles back as 39 is a box nobody trusts again.
+  const round = laneGeometry(stand, { ...lane(0, 63), spread: 17.3 });
+  assert.ok(Math.abs(round.widthM - laneWidthM(63, 17.3)) < 0.05);
+});
+
+test('typing a reach slides the far end without swinging the lane', () => {
+  // The whole reason reach and bearing are separate operations: a distance you
+  // type must not move the lane onto different ground. That is the tip
+  // handle's job, and mixing them would be the single corner handle again.
+  const l = lane(37, 60);
+  const before = laneGeometry(stand, l);
+  const moved = { ...l, to: laneAtReach(stand, l, 150) };
+  const after = laneGeometry(stand, moved);
+  assert.ok(Math.abs(after.metres - 150) <= 1, `expected 150 m, got ${after.metres}`);
+  assert.ok(Math.abs(after.bearingDeg - before.bearingDeg) < 0.05,
+    'the bearing is untouched');
+  assert.equal(after.point, before.point);
+  // And back down again, exactly, so the box is not a one-way trip.
+  const back = laneGeometry(stand, { ...l, to: laneAtReach(stand, moved, 60) });
+  assert.ok(Math.abs(back.metres - 60) <= 1);
+});
+
+test('a reach that would collapse the lane is floored, not stored', () => {
+  const l = lane(0, 60);
+  const g = laneGeometry(stand, { ...l, to: laneAtReach(stand, l, 0) });
+  assert.ok(g.metres >= Math.round(MIN_LANE_REACH_M) - 1 && g.metres <= MIN_LANE_REACH_M + 1,
+    `floored to about ${MIN_LANE_REACH_M} m, got ${g.metres}`);
+  // A lane with no endpoint has no bearing to slide along, so there is nothing
+  // to move and nothing is invented.
+  assert.equal(laneAtReach(stand, {}, 50), null);
+  assert.equal(laneAtReach(stand, lane(0), NaN), null);
+  assert.equal(laneAtReach({ lat: null, lng: null }, lane(0), 50), null);
+});
+
+// ---------------------------------------------------------------------------
+// The form: two boxes, in yards
+// ---------------------------------------------------------------------------
+
+test('reach and width are typed, not only dragged', () => {
+  // The handles put a lane roughly where it goes, and rough is their limit.
+  // You know this one is eighty yards to the field edge; before these boxes
+  // the only way to say so was to drag until a readout happened to agree.
+  const fn = mapScript.slice(mapScript.indexOf('const laneRow = i => {'));
+  const body = fn.slice(0, fn.indexOf('\n  };'));
+  assert.match(body, /inp\.type = 'number'/, 'a real number box');
+  assert.match(body, /inp\.inputMode = 'decimal'/, 'and a number pad on a phone');
+  assert.match(body, /'yd out'/, 'reach in yards');
+  assert.match(body, /'yd wide'/, 'width in yards');
+  assert.match(body, /reach\.oninput/, 'the reach box is live');
+  assert.match(body, /width\.oninput/, 'so is the width box');
+  // The conversions are the model's. A tangent typed into the page is how the
+  // width you set stops being the width you are judged on.
+  assert.match(body, /COVER\.laneAtReach\(/, 'the reach box asks the model to move the end');
+  assert.match(body, /COVER\.spreadForWidthM\(/, 'and the width box for the angle');
+  assert.doesNotMatch(body, /Math\.tan|Math\.atan/, 'and does no trigonometry of its own');
+  // Yards come from measure.mjs, which already decided this program says yards
+  // for a shot. A second 0.9144 on the page is the same failure one unit over.
+  assert.match(mapScript, /MEASURE\.M_PER_YARD/);
+  // Once in the whole page, and that once is the constant measure.mjs emits.
+  assert.equal((mapScript.match(/0\.9144/g) || []).length, 1,
+    'the yard is defined in one place and read everywhere else');
+});
+
+test('a drag writes the boxes rather than rebuilding them', () => {
+  // The rows are rebuilt on every change before this, at pointer rate — and a
+  // rebuild takes the box out from under the caret, which is what would make
+  // typing into one impossible. So a drag syncs and only a lane arriving or
+  // leaving repaints.
+  const fn = mapScript.slice(mapScript.indexOf('const syncRows = () => {'));
+  const body = fn.slice(0, fn.indexOf('\n  };'));
+  assert.match(body, /document\.activeElement !== row\.reach/,
+    'the field being typed into is left alone');
+  assert.match(body, /document\.activeElement !== row\.width/);
+  const form = mapScript.slice(mapScript.indexOf('laneForm = {'));
+  assert.match(form.slice(0, 1100), /onNumbers: \(\) => \{ syncRows\(\); paintWinds\(\); \}/,
+    'a drag syncs');
+  assert.match(mapScript, /laneForm\.onNumbers\(\);/, 'and that is what a drag calls');
+  // A lane that has just been clicked into existence has no row to write into,
+  // so the two are separate callbacks and the click path takes the other one.
+  assert.match(form.slice(0, 1100), /onLanes: paintLanes/);
+  assert.match(mapScript, /laneEdit\.lanes\.push\(\{[^}]*\}\);\n[^]{0,220}laneEdit\.onLanes\(\);/,
+    'tracing a new lane rebuilds the list');
+  assert.match(mapScript, /x\.onclick = \(\) => \{ lanes\.splice\(i, 1\); paintLanes\(\)/,
+    'and removing a lane rebuilds');
+});
+
+test('a row is built per lane, so Remove removes the one you pressed', () => {
+  // The rows used to be built from the DERIVED list, which drops any lane it
+  // cannot place. One unplaceable lane and row 1 carried lane 2's numbers and
+  // lane 2's Remove button.
+  const fn = mapScript.slice(mapScript.indexOf('const paintLanes = () => {'));
+  const body = fn.slice(0, fn.indexOf('\n  };'));
+  assert.match(body, /lanes\.forEach\(\(l, i\) => \{/, 'one row per lane in the array');
+  assert.doesNotMatch(body, /derived/, 'not one row per lane the geometry could place');
+});
+
+test('the lane says its own size on the ground, where you are looking', () => {
+  // The form has the numbers too, and that was not enough: while you drag a
+  // handle your eyes are on the cone, and while tracing the form is a strip
+  // whose row for this lane may have scrolled out of it.
+  const fn = mapScript.slice(mapScript.indexOf('function laneSay('));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /COVER\.laneGeometry\(/, 'off the same geometry as everything else');
+  assert.match(body, /yd wide/, 'the width while a width handle is held');
+  assert.match(body, /toYd\(g\.metres\) \+ ' yd'/, 'the reach otherwise');
+  assert.match(body, /gripDrag\.kind !== 'tip'/, 'which is decided by the handle in hand');
+  assert.match(mapStyles, /text\.lanesay/, 'and it is styled to be readable over imagery');
+  assert.match(mapStyles, /text\.lanesay[^}]*paint-order: stroke/,
+    'outlined rather than boxed, so it does not cover the ground it labels');
+});
+
+test('the lane rows talk in yards, not metres', () => {
+  // Everything stored and computed here is metric and stays that way. Yards
+  // are the last step before a number is shown and the first after one is
+  // typed, which is the same call measure.mjs already made for the same
+  // reason: the answers get used in American conversations.
+  const fn = mapScript.slice(mapScript.indexOf('const paintWinds = () => {'));
+  const body = fn.slice(0, fn.indexOf('\n  };'));
+  assert.doesNotMatch(body, /' m'|\+ ' m /, 'no bare metres in front of anybody');
+  assert.match(body, /LONG_LANE_YD/, 'even the "that is a long way" warning');
+  assert.match(mapScript, /const toYd = m => Math\.round\(m \/ MEASURE\.M_PER_YARD\)/);
 });
 
 test('the stand form can never grow past the map and lose its buttons', () => {
@@ -480,9 +681,15 @@ test('a width drag reads an angle; only the tip moves the lane', () => {
   assert.match(body, /lane\.to = \[at\.lng, at\.lat\]/, 'the tip moves the far end');
   assert.match(body, /lane\.spread = /, 'a rim handle sets the width');
   // The tip dragged onto the stand leaves no length and no bearing, and a lane
-  // with neither silently stops counting toward the winds.
-  assert.match(body, /if \(Math\.hypot\(px - ax, py - ay\) < 8\) return;/,
+  // with neither silently stops counting toward the winds. Two floors refuse
+  // it, and they are not the same guard: the metre one is the floor the reach
+  // box enforces, so a lane cannot be DRAGGED to a size that could not be
+  // TYPED; the pixel one is about being able to grab it back, since the
+  // handles scale with the lane and five metres is sub-pixel at a wide zoom.
+  assert.match(body, /m < COVER\.MIN_LANE_REACH_M \|\| Math\.hypot\(px - ax, py - ay\) < 8\) return;/,
     'a collapsed lane is refused, not stored');
+  assert.match(body, /MEASURE\.distanceM\(laneForm\.stand\.lat/,
+    'and the metre floor is measured on the ground, not in screen pixels');
   // The clamp is the model's, not a second opinion.
   assert.match(body, /COVER\.MAX_LANE_SPREAD_DEG/);
   assert.match(body, /COVER\.MIN_LANE_SPREAD_DEG/);

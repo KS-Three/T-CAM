@@ -28,7 +28,7 @@
  * never seen is worse than one that says "these four spots are worth walking".
  */
 
-import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG } from './routes.mjs';
+import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG, offsetPoint } from './routes.mjs';
 import { distanceM } from './db.mjs';
 
 /**
@@ -72,14 +72,15 @@ const FEATURE_WHY = {
   ridge: 'a ridgeline — deer walk them, though less predictably than a draw or a saddle',
 };
 
-/** Move a point `metres` along a bearing. */
-export function offsetPoint(lat, lng, bearingDeg, metres) {
-  const R = 6371008.8;
-  const br = bearingDeg * Math.PI / 180;
-  const dLat = (metres * Math.cos(br)) / R * 180 / Math.PI;
-  const dLng = (metres * Math.sin(br)) / (R * Math.cos(lat * Math.PI / 180)) * 180 / Math.PI;
-  return { lat: lat + dLat, lng: lng + dLng };
-}
+/**
+ * Move a point `metres` along a bearing.
+ *
+ * Moved to routes.mjs, which owns the rest of this geometry, once the lane
+ * form needed it too — a typed reach has to put the far end somewhere. Kept
+ * exported from here because that is where callers and tests already look for
+ * it, and re-exporting costs nothing next to two copies of the arithmetic.
+ */
+export { offsetPoint };
 
 /**
  * Which winds a stand at `from` can be hunted on, given the deer are at `at`.

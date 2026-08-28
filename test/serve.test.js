@@ -140,6 +140,18 @@ test('health reports the store contents', async t => {
   assert.equal(h.photos, 2);
 });
 
+test('health says which code the process is running, and whether it is stale', async t => {
+  // The pages are built at import time, so a server left running from before a
+  // pull serves the old HTML with nothing to show for it. This is the one
+  // place that can be asked without guessing.
+  const { get } = await serving(t);
+  const h = await (await get('/api/health')).json();
+  assert.match(h.build.commit, /^[0-9a-f]{7}$/);
+  assert.ok(Date.parse(h.build.startedAt), 'stamped with when the process booted');
+  assert.equal(h.build.stale, false, 'a server started from the current tree is not stale');
+  assert.equal(h.build.staleSince, null);
+});
+
 test('unknown paths 404 rather than erroring', async t => {
   const { get } = await serving(t);
   assert.equal((await get('/nope')).status, 404);

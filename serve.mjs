@@ -63,6 +63,7 @@ import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
   slopeAspect, metresToFeet, planGrid, slopeAspectAt,
 } from './terrain.mjs';
+import { buildStamp, isStale, stampLine } from './build-stamp.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);
@@ -81,6 +82,17 @@ export const OPT = {
   host: val('--host', '127.0.0.1'),
   open: has('--open'),
 };
+
+/**
+ * Which code this process is running, captured once at startup.
+ *
+ * The pages are built from template literals at import time, so a pull does
+ * nothing until the server is restarted — and a stale server is invisible from
+ * the browser. This is what makes it visible: the banner says the commit, and
+ * /api/health says whether anything on disk has changed since boot.
+ */
+export const BUILD = buildStamp(path.dirname(fileURLToPath(import.meta.url)));
+export const SOURCE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * SQLite gives snake_case columns; the dashboard renderer was written against
@@ -1255,7 +1267,21 @@ export function createServer({ out = OPT.out } = {}) {
       }
 
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, out, ...counts(db) });
+        const stale = isStale(BUILD, SOURCE_DIR);
+        return sendJson(res, 200, {
+          ok: true,
+          out,
+          build: {
+            commit: BUILD.commit,
+            branch: BUILD.branch,
+            startedAt: new Date(BUILD.startedAt).toISOString(),
+            stale: stale.stale,
+            // Named so the answer is actionable rather than a boolean: this is
+            // the file that changed after the server booted.
+            staleSince: stale.file,
+          },
+          ...counts(db),
+        });
       }
       if (req.method === 'GET' && url.pathname.startsWith('/photos/')) {
         return servePhoto(res, out, url.pathname.slice('/photos/'.length));
@@ -1287,7 +1313,7 @@ async function main() {
   await new Promise(r => server.listen(OPT.port, OPT.host, r));
   const shown = OPT.host === '0.0.0.0' ? localAddress() : OPT.host;
 
-  console.log(`\n  TrailCam is running.\n`);
+  console.log(`\n  TrailCam is running — ${stampLine(BUILD)}.\n`);
   console.log(`    On this computer:  http://127.0.0.1:${OPT.port}`);
   if (OPT.host === '0.0.0.0') {
     console.log(`    On your phone:     http://${shown}:${OPT.port}   (same Wi-Fi)`);

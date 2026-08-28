@@ -201,11 +201,43 @@ The browser talks to a small JSON API rather than a page with data baked in:
 | `GET /api/state` | Everything the page needs in one call |
 | `GET /api/cameras` | Cameras with their property names |
 | `GET /api/photos?limit=N` | Photos newest first, with species tags |
-| `GET /api/health` | Store contents |
+| `GET /api/health` | Store contents, and which commit the process is running |
 | `GET /photos/...` | A synced image |
 
 That boundary is deliberate: the phone app, when it comes, speaks to exactly
 this interface instead of forcing a rewrite.
+
+### "The new feature isn't there"
+
+The pages are built from template literals when the module is imported, which
+happens once, at startup. There is no build step and no file watcher — so a
+server you started before a `git pull` keeps serving the old page indefinitely,
+with nothing in the browser to say so. **Restart the server after every pull.**
+
+Two ways to check rather than guess. The startup banner names the commit:
+
+```
+  TrailCam is running — running main 377aa7a.
+```
+
+And the running server will tell you if the files on disk have moved on since
+it booted:
+
+```powershell
+curl.exe -s http://127.0.0.1:8787/api/health
+# {"ok":true,...,"build":{"commit":"377aa7a","branch":"main",
+#   "startedAt":"2026-08-28T14:02:10.114Z","stale":true,"staleSince":"map-view.mjs"}}
+```
+
+`"stale": true` means exactly one thing: a source file changed after this
+process started, so stop it with Ctrl+C and start it again. `staleSince` names
+the file that changed.
+
+If the banner shows the right commit and `stale` is false but the browser still
+looks old, it is the browser: hard-reload (Ctrl+Shift+R), and if that fails,
+DevTools → Application → Service Workers → Unregister. The worker is
+network-first for pages, so this should be rare — it only serves a cached page
+when the server is unreachable.
 
 Photo paths come from the URL and are therefore untrusted — they are resolved
 and checked to be inside the photo directory before anything is read. A test

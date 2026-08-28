@@ -93,3 +93,13 @@ test('the click that ends a pan does not drop a point', () => {
   assert.match(click.slice(0, 300), /if \(dragged\) \{ dragged = false; return; \}/,
     'and the click that follows it is ignored');
 });
+
+test('the next sit and the better day are not announced twice', () => {
+  // When the chronologically next sit is also the best one coming, both cards
+  // named the same evening. Seen on the real page: "6 days out — morning of
+  // 2026-09-03" printed in two panels, one under the other.
+  const src = tonightHtml();
+  assert.match(src, /b\.date === sits\[1\]\.date && b\.window === sits\[1\]\.window/,
+    'the two cards are compared');
+  assert.match(src, /!\(better && dupe\)/, 'and the duplicate is dropped');
+});

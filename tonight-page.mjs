@@ -171,7 +171,12 @@ function render() {
   parts.push(logCard(sit));
   const better = betterDayCard();
   if (better) parts.push(better);
-  if (sits[1]) parts.push(nextCard(sits[1]));
+  // Only when it is a DIFFERENT sit. When the next one up is also the best one
+  // coming, both cards name the same evening and the page says it twice — the
+  // better-day card says strictly more, so it wins.
+  const b = DATA && DATA.best;
+  const dupe = b && sits[1] && b.date === sits[1].date && b.window === sits[1].window;
+  if (sits[1] && !(better && dupe)) parts.push(nextCard(sits[1]));
   if (DATA.note) {
     const n = card(null);
     n.appendChild(el('div', 'note', DATA.note));
@@ -559,7 +564,7 @@ function logCard(sit) {
 
   const wind = document.createElement('select');
   const blank = document.createElement('option');
-  blank.value = ''; blank.textContent = 'as forecast (' + (sit.windFrom || '?') + ')';
+  blank.value = ''; blank.textContent = 'as forecast';
   wind.appendChild(blank);
   for (const p of ['N','NNE','NE','ENE','E','ESE','SE','SSE',
                    'S','SSW','SW','WSW','W','WNW','NW','NNW']) {

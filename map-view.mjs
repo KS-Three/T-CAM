@@ -197,8 +197,43 @@ export const mapStyles = `
   .layermenu button.on { border-color: var(--accent); }
   /* Top-LEFT: the zoom buttons own the top-right and the layer switcher the
      bottom-left, so this is the only free corner. */
-  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex;
-              flex-direction: column; gap: 6px; }
+  /* The map tools, as a tree. Eight buttons in a flat stack had stopped
+     reading as anything — a quarter of the map's height of undifferentiated
+     grey. Grouped under branches they read the way they are used: you come to
+     the map to do something ABOUT stands, or scouting, or the ground, and the
+     other groups fold away. The guide lines are the point, not decoration:
+     they are what says "Suggest a stand" belongs to Stands. */
+  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3;
+              display: flex; flex-direction: column; gap: 0; width: 178px; }
+  .tt-root { text-align: left; font-weight: 700; }
+  .tt-root::before { content: '▾'; display: inline-block; margin-right: 6px;
+                     transition: transform .15s ease; }
+  #tooltree.closed .tt-root::before { transform: rotate(-90deg); }
+  #tooltree.closed .tt-body { display: none; }
+  .tt-body { display: flex; flex-direction: column; margin-top: 2px; }
+  /* One trunk down the left; every row hangs a branch off it. The last row in
+     each group closes its trunk with an L rather than running past the join. */
+  .tt-group, .tt-leaf { position: relative; margin-left: 9px; padding-left: 12px; }
+  .tt-group::before, .tt-leaf::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    border-left: 2px solid var(--line); }
+  .tt-group:last-child::before, .tt-leaf:last-child::before { bottom: auto; height: 14px; }
+  .tt-group > .tt-head::before, .tt-leaf > button::before {
+    content: ''; position: absolute; left: -12px; top: 13px; width: 10px;
+    border-top: 2px solid var(--line); }
+  .tt-group > .tt-head, .tt-leaf > button { position: relative; }
+  .tt-head { text-align: left; color: var(--muted); font-weight: 700; }
+  .tt-head::after { content: '▾'; float: right; transition: transform .15s ease; }
+  .tt-group.closed .tt-head::after { transform: rotate(-90deg); }
+  .tt-group.closed .tt-kids { display: none; }
+  .tt-kids { display: flex; flex-direction: column; position: relative;
+             margin-left: 9px; padding-left: 12px; }
+  .tt-kids::before { content: ''; position: absolute; left: 0; top: 0;
+                     bottom: 11px; border-left: 2px solid var(--line); }
+  .tt-kids > button { position: relative; text-align: left; }
+  .tt-kids > button::before { content: ''; position: absolute; left: -12px;
+                              top: 12px; width: 10px; border-top: 2px solid var(--line); }
+  .maptools button { width: 100%; margin-top: 3px; }
   /* The terrain layers cover the whole map, so they MUST not take clicks —
      without pointer-events:none they would swallow every press meant for the
      ground and break stand placement and ownership lookup alike. */
@@ -430,6 +465,58 @@ export const mapStyles = `
            transform: translate(-50%, -100%) rotate(-45deg);
            border: 2px solid #fff; border-radius: 50% 50% 50% 0;
            background: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  /* The stand's verdict for the coming sit, worn on the pin. Fixed colours
+     rather than theme variables, because they sit on satellite imagery which
+     does not change with the theme — and because green/orange/red is a code
+     that must not drift. The glow is what makes them read at a glance from
+     across the map, which is the entire point of putting the answer here
+     instead of only in a panel. */
+  .stand.rank-good { background: #2e9e57; box-shadow: 0 0 0 4px rgba(46,158,87,.30), 0 1px 4px rgba(0,0,0,.5); }
+  .stand.rank-mid  { background: #d98f14; box-shadow: 0 0 0 4px rgba(217,143,20,.30), 0 1px 4px rgba(0,0,0,.5); }
+  .stand.rank-bad  { background: #c8392e; box-shadow: 0 0 0 4px rgba(200,57,46,.32), 0 1px 4px rgba(0,0,0,.5); }
+  /* What you selected: the hunting report for a stand, or a camera's card.
+     Left of the zoom buttons, under the top bar. */
+  .selpanel { position: absolute; right: 54px; top: 52px; z-index: 6; width: 330px;
+              max-width: calc(100% - 70px); max-height: calc(100% - 120px);
+              overflow-y: auto; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 10px; padding: 12px 14px;
+              box-shadow: 0 6px 28px rgba(0,0,0,.4); }
+  .selpanel h3 { margin: 0 24px 2px 0; font-size: 15px; }
+  .selpanel .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                     background: none; border: 0; color: var(--muted); font-size: 17px; }
+  .selpanel .kind { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .selpanel .sitline { color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
+  .selpanel .sitline b { color: var(--ink); }
+  .rankchip { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0;
+              font: 700 12px/1 ui-sans-serif, system-ui, sans-serif;
+              padding: 5px 10px; border-radius: 999px; }
+  .rankchip i { width: 9px; height: 9px; border-radius: 50%; }
+  .rankchip.good { background: rgba(46,158,87,.15); color: #2e9e57; }
+  .rankchip.good i { background: #2e9e57; }
+  .rankchip.mid { background: rgba(217,143,20,.15); color: #b06d15; }
+  .rankchip.mid i { background: #d98f14; }
+  .rankchip.bad { background: rgba(200,57,46,.14); color: #c8392e; }
+  .rankchip.bad i { background: #c8392e; }
+  .rankchip.unknown { background: rgba(128,128,128,.14); color: var(--muted); }
+  .rankchip.unknown i { background: var(--muted); }
+  .selpanel ul.reasons { margin: 6px 0 0; padding-left: 18px; font-size: 12px;
+                         color: var(--muted); }
+  .selpanel ul.reasons li { margin: 3px 0; }
+  .selpanel ul.reasons li.plus { color: var(--ok); }
+  .selpanel ul.reasons li.minus { color: var(--bad); }
+  .selpanel .fact { display: flex; justify-content: space-between; gap: 12px;
+                    font-size: 12px; padding: 3px 0; color: var(--muted); }
+  .selpanel .fact b { color: var(--ink); font-weight: 600; text-align: right; }
+  .selpanel .camrow { font-size: 12px; color: var(--muted); padding: 2px 0; }
+  .selpanel .camrow a { color: var(--accent); cursor: pointer; }
+  .selpanel .btns { display: flex; gap: 8px; margin-top: 12px; }
+  .selpanel .btns button { flex: 1; padding: 7px; border-radius: 6px; cursor: pointer;
+                           font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                           border: 1px solid var(--line); background: var(--bg);
+                           color: var(--ink); }
+  .selpanel .btns button.primary { background: var(--accent); color: #fff;
+                                   border-color: var(--accent); }
+  .selpanel .note { margin-top: 8px; font-size: 12px; color: var(--muted); }
   /* Sign markers carry a LETTER as well as a colour, so a rub and a scrape are
      told apart on a sunlit phone screen and in greyscale. */
   .mark { position: absolute; width: 18px; height: 18px; cursor: pointer;
@@ -441,16 +528,35 @@ export const mapStyles = `
 export const mapMarkup = String.raw`
   <div id="map"><div id="tiles"></div><canvas id="terrain"></canvas><svg id="contours"></svg><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">&minus;</button></div>
-    <div class="maptools">
-      <button id="addStand" type="button">+ Add stand</button>
-      <button id="whoOwns" type="button">Who owns this?</button>
-      <button id="terrainBtn" type="button">Terrain</button>
-      <button id="markBtn" type="button">+ Mark sign</button>
-      <button id="offlineBtn" type="button">Save offline</button>
-      <button id="routeBtn" type="button">+ Walk-in route</button>
-      <button id="measureBtn" type="button">Measure</button>
-      <button id="suggestBtn" type="button">Suggest a stand</button>
+    <div class="maptools" id="tooltree">
+      <button class="tt-root" id="ttRoot" type="button">Tools</button>
+      <div class="tt-body">
+        <div class="tt-group">
+          <button class="tt-head" type="button">Stands</button>
+          <div class="tt-kids">
+            <button id="addStand" type="button">+ Add stand</button>
+            <button id="suggestBtn" type="button">Suggest a stand</button>
+          </div>
+        </div>
+        <div class="tt-group">
+          <button class="tt-head" type="button">Scouting</button>
+          <div class="tt-kids">
+            <button id="markBtn" type="button">+ Mark sign</button>
+            <button id="routeBtn" type="button">+ Walk-in route</button>
+          </div>
+        </div>
+        <div class="tt-group">
+          <button class="tt-head" type="button">Ground</button>
+          <div class="tt-kids">
+            <button id="terrainBtn" type="button">Terrain</button>
+            <button id="measureBtn" type="button">Measure</button>
+            <button id="whoOwns" type="button">Who owns this?</button>
+          </div>
+        </div>
+        <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
+      </div>
     </div>
+    <div class="selpanel" id="selpanel" hidden></div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
         <span id="layerLabel"></span>
@@ -614,8 +720,8 @@ function draw() {
     const p = el('div', 'pin ' + c.health.level);
     p.style.left = x + 'px'; p.style.top = y + 'px';
     p.title = c.name + ' \u2014 last contact ' + fmtDate(c.lastSeen);
-    p.onclick = () => document.getElementById('cam-' + c.id)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (selected && selected.kind === 'camera' && selected.id === c.id) p.classList.add('sel');
+    p.onclick = ev => { ev.stopPropagation(); showCameraPanel(c); };
     pinsEl.append(lab, p);
   }
 
@@ -626,7 +732,10 @@ function draw() {
     if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
     const lab = el('div', 'slabel', s.name);
     lab.style.left = x + 'px'; lab.style.top = y + 'px';
-    const pin = el('div', 'stand' + (editing && editing.id === s.id ? ' sel' : ''));
+    const rank = rankOf(s.id);
+    const pin = el('div', 'stand' + (rank ? ' rank-' + rank : '')
+      + ((editing && editing.id === s.id)
+        || (selected && selected.kind === 'stand' && selected.id === s.id) ? ' sel' : ''));
     pin.style.left = x + 'px'; pin.style.top = y + 'px';
     // The winds this stand is actually judged on, which since the tick-boxes
     // went is the lanes wherever they exist. Showing the ticked set here would
@@ -637,7 +746,7 @@ function draw() {
       + (s.nearbyCameras && s.nearbyCameras.length
         ? ' \u00b7 covers ' + s.nearbyCameras.map(c => c.name + ' (' + c.metres + 'm)').join(', ')
         : '');
-    pin.onclick = ev => { ev.stopPropagation(); openStandForm(s); };
+    pin.onclick = ev => { ev.stopPropagation(); showStandReport(s); };
     pinsEl.append(lab, pin);
   }
 
@@ -1166,6 +1275,7 @@ let gripDrag = null;    // { i, kind } while a handle is held
  */
 function closeStandForm() {
   document.querySelector('.standform')?.remove();
+  closeSelPanel();
   editing = null;
   laneEdit = null;
   laneForm = null;
@@ -1834,6 +1944,192 @@ let STANDS = D.stands || [];
 let placing = false;
 let editing = null;
 
+// ---- the coming sit's verdict, per stand --------------------------------
+// The ranking the tonight screen runs, fetched here so the map can wear it:
+// each pin is tinted by whether the NEXT sit's wind works for that stand.
+// One fetch at load and one after each save — the answer changes when the
+// lanes do, and a colour that lags the edit that changed it would be worse
+// than no colour.
+let RANKING = null;    // { sit, byId: {standId: rankedRow} } or null
+
+async function refreshRanking() {
+  if (!D.live) return;
+  try {
+    const t = await (await fetch('/api/tonight')).json();
+    const sit = t.sits && t.sits[0];
+    if (!sit || !sit.stands || !sit.stands.length) { RANKING = null; draw(); return; }
+    const byId = {};
+    for (const r of sit.stands) byId[r.id] = r;
+    RANKING = { sit, byId };
+  } catch (err) { RANKING = null; }
+  draw();
+}
+
+/**
+ * One stand's colour: green, orange or red.
+ *
+ * Green is "the coming sit's wind works, nothing arguing"; red is "your scent
+ * blows down a lane"; orange is every honest in-between — winds not recorded,
+ * no forecast to judge against, or a thermal quietly working against a wind
+ * that looks fine. Unknown is deliberately NOT green: a stand that has not
+ * said its winds must not look like one that works.
+ */
+function rankOf(id) {
+  const r = RANKING && RANKING.byId[id];
+  if (!r) return null;
+  if (r.huntable === false) return 'bad';
+  if (r.huntable === true) {
+    return r.reasons && r.reasons.some(x => x.points < 0) ? 'mid' : 'good';
+  }
+  return 'mid';
+}
+
+// ---- the select panel ----------------------------------------------------
+// Clicking a pin used to jump straight into the edit form, which answers the
+// wrong question: mostly you are not editing, you are deciding — is this the
+// stand for the sit in front of me? So a click opens the report, and the form
+// is one button further away.
+const selPanel = document.getElementById('selpanel');
+let selected = null;   // { kind: 'stand'|'camera', id } while the panel is up
+
+function closeSelPanel() {
+  selPanel.hidden = true;
+  selPanel.textContent = '';
+  selected = null;
+}
+
+function panelShell(title, kindLine) {
+  selPanel.textContent = '';
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'close'; x.textContent = '\u00d7';
+  x.onclick = () => { closeSelPanel(); draw(); };
+  selPanel.appendChild(x);
+  selPanel.appendChild(el('h3', null, title));
+  if (kindLine) selPanel.appendChild(el('div', 'kind', kindLine));
+  selPanel.hidden = false;
+}
+
+const RANK_WORDS = {
+  good: 'Good for the coming sit',
+  mid: 'Marginal \u2014 look at why',
+  bad: 'Wrong wind \u2014 scent runs down a lane',
+  unknown: 'Not ranked',
+};
+
+/** The hunting report for one stand. */
+function showStandReport(s) {
+  closeStandForm();
+  clearMapModes();
+  selected = { kind: 'stand', id: s.id };
+  panelShell(s.name, s.type.replace('-', ' ')
+    + (s.notes ? ' \u00b7 ' + s.notes : ''));
+
+  const r = RANKING && RANKING.byId[s.id];
+  const rank = rankOf(s.id) || 'unknown';
+  const chip = el('div', 'rankchip ' + rank);
+  chip.appendChild(document.createElement('i'));
+  chip.appendChild(document.createTextNode(RANK_WORDS[rank]
+    + (r ? ' \u00b7 ' + (r.total > 0 ? '+' : '') + r.total + ' pts' : '')));
+  selPanel.appendChild(chip);
+
+  if (r && RANKING.sit) {
+    const sit = RANKING.sit;
+    const line = el('div', 'sitline');
+    line.appendChild(document.createTextNode('Ranked for '));
+    line.appendChild(el('b', null, sit.when || sit.date + ' ' + sit.window));
+    if (sit.windFrom) {
+      line.appendChild(document.createTextNode(' \u00b7 wind '));
+      line.appendChild(el('b', null, sit.windFrom));
+      if (Number.isFinite(sit.windSpeed)) {
+        line.appendChild(document.createTextNode(' at ' + Math.round(sit.windSpeed) + ' mph'));
+      }
+    }
+    selPanel.appendChild(line);
+    const ul = el('ul', 'reasons');
+    for (const part of r.reasons || []) {
+      const li = el('li', part.points > 0 ? 'plus' : part.points < 0 ? 'minus' : null,
+        part.why + (part.points ? ' (' + (part.points > 0 ? '+' : '') + part.points + ')' : ''));
+      ul.appendChild(li);
+    }
+    selPanel.appendChild(ul);
+  } else {
+    selPanel.appendChild(el('div', 'note', D.live
+      ? 'No ranking yet \u2014 run the planner (node hunt-planner.mjs) and the '
+        + 'coming sits can judge this stand.'
+      : 'Ranking needs the server.'));
+  }
+
+  // The facts that decide the ranking, so the verdict can be argued with.
+  const winds = s.effectiveWinds && s.effectiveWinds.length ? s.effectiveWinds : (s.winds || []);
+  const windRow = el('div', 'fact');
+  windRow.appendChild(el('span', null, 'Huntable winds'));
+  windRow.appendChild(el('b', null, winds.length
+    ? winds.join(', ') + (s.windSource === 'lanes' ? ' (from its lanes)' : '')
+    : 'not recorded'));
+  selPanel.appendChild(windRow);
+  if (s.lanes && s.lanes.length) {
+    const geo = COVER.laneGeometries({ lat: s.lat, lng: s.lng }, s.lanes);
+    const longest = geo.length ? Math.max(...geo.map(g => g.metres)) : 0;
+    const laneRowEl = el('div', 'fact');
+    laneRowEl.appendChild(el('span', null, 'Shooting lanes'));
+    laneRowEl.appendChild(el('b', null, geo.length + (geo.length === 1 ? ' lane' : ' lanes')
+      + (longest ? ', longest ' + toYd(longest) + ' yd' : '')));
+    selPanel.appendChild(laneRowEl);
+  }
+  if (s.nearbyCameras && s.nearbyCameras.length) {
+    const head = el('div', 'fact');
+    head.appendChild(el('span', null, 'Covered by'));
+    selPanel.appendChild(head);
+    for (const nc of s.nearbyCameras) {
+      const row = el('div', 'camrow');
+      const a = el('a', null, nc.name);
+      a.onclick = () => {
+        const cam = D.cameras.find(c => c.id === nc.id || c.name === nc.name);
+        if (cam) showCameraPanel(cam);
+      };
+      row.appendChild(a);
+      row.appendChild(document.createTextNode(' \u00b7 ' + nc.metres + ' m away'));
+      selPanel.appendChild(row);
+    }
+  }
+
+  const btns = el('div', 'btns');
+  if (D.live) {
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.className = 'primary'; edit.textContent = 'Edit stand';
+    edit.onclick = () => { closeSelPanel(); openStandForm(s); };
+    btns.appendChild(edit);
+  }
+  const done = document.createElement('button');
+  done.type = 'button'; done.textContent = 'Close';
+  done.onclick = () => { closeSelPanel(); draw(); };
+  btns.appendChild(done);
+  selPanel.appendChild(btns);
+  draw();
+}
+
+/** A camera's card, in the same panel. */
+function showCameraPanel(c) {
+  closeStandForm();
+  clearMapModes();
+  selected = { kind: 'camera', id: c.id };
+  panelShell(c.name, 'camera');
+  // The card the report drawer shows, reused whole — two renderings of one
+  // camera is how they end up disagreeing about battery life.
+  selPanel.appendChild(cameraCard(c, { withId: false }));
+  const btns = el('div', 'btns');
+  const more = document.createElement('button');
+  more.type = 'button'; more.textContent = 'Show in camp report';
+  more.onclick = () => { revealInDrawer('cam-' + c.id); };
+  btns.appendChild(more);
+  const done = document.createElement('button');
+  done.type = 'button'; done.textContent = 'Close';
+  done.onclick = () => { closeSelPanel(); draw(); };
+  btns.appendChild(done);
+  selPanel.appendChild(btns);
+  draw();
+}
+
 const TYPES = [['stand','Ladder / hang-on'],['tripod','Tripod'],['ground-blind','Ground blind'],
                ['box-blind','Box blind'],['saddle','Saddle'],['other','Other']];
 
@@ -1967,8 +2263,12 @@ async function apiWrite(method, path, body) {
 
 async function refreshStands() {
   STANDS = await (await fetch('/api/stands')).json();
+  // The colours are derived from the stands, so they refresh together: a lane
+  // just saved can flip tonight's verdict.
+  refreshRanking();
   draw();
 }
+refreshRanking();
 
 // The drop/edit form. A row with an id is an edit; {lat,lng} alone is new.
 /**
@@ -2383,6 +2683,22 @@ function openStandForm(stand) {
   if (isNew) name.focus();
   draw();
 }
+// ---- the tool tree ------------------------------------------------------
+// Groups fold, and the whole tree folds from its root — which is what makes
+// this usable on a phone, where the open tree is a third of the screen. No
+// state is kept: the tree opens fresh each visit, expanded, because a tool
+// you cannot see is a tool you forget the map has.
+document.getElementById('ttRoot').onclick = ev => {
+  ev.stopPropagation();
+  document.getElementById('tooltree').classList.toggle('closed');
+};
+for (const head of document.querySelectorAll('.tt-head')) {
+  head.onclick = ev => {
+    ev.stopPropagation();
+    head.parentElement.classList.toggle('closed');
+  };
+}
+
 // ---- map type control -------------------------------------------------
 const layersEl = document.querySelector('.layers');
 const toggleEl = document.getElementById('layerToggle');

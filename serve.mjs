@@ -170,11 +170,27 @@ export function recentPhotos(db, limit = 200) {
   }));
 }
 
+/**
+ * Stands the way a page needs them: with the wind derivation attached.
+ *
+ * One function, used by the baked dashboard payload AND /api/stands. They
+ * were two shapes for a while — the API carried effectiveWinds and the baked
+ * page did not — so the map's tooltips and report panel were blank until the
+ * first save forced a refetch. Two producers of one thing is how that happens.
+ */
+export function standsForClient(db) {
+  return allStands(db).map(s => {
+    const c = windsForStand(s);
+    return { ...s, coverage: c.derived, windSource: c.source,
+             effectiveWinds: c.winds, windsCompared: c.compared };
+  });
+}
+
 export async function buildState(db, out) {
   const cameras = allCameras(db).map(cameraFromRow);
   const photos = recentPhotos(db);
   const plan = await readPlan(out);
-  const stands = allStands(db);
+  const stands = standsForClient(db);
   const markers = allMarkers(db);
   return { generatedAt: new Date().toISOString(), cameras, photos, stands, markers,
            plan, counts: counts(db) };
@@ -554,11 +570,7 @@ export function createServer({ out = OPT.out } = {}) {
           // The derivation travels with the stand. The page draws lanes and
           // shows the winds they imply, and re-deriving it in the browser is
           // how the two quietly start disagreeing.
-          return sendJson(res, 200, allStands(db).map(s => {
-            const c = windsForStand(s);
-            return { ...s, coverage: c.derived, windSource: c.source,
-                     effectiveWinds: c.winds, windsCompared: c.compared };
-          }));
+          return sendJson(res, 200, standsForClient(db));
         }
         if (req.method === 'POST') {
           const b = await readJson(req);

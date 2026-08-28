@@ -301,3 +301,49 @@ test('map controls are not stolen by the drag handler', async () => {
   assert.doesNotMatch(down, /closest\(/,
     'the drag handler must not grow its own exclusion list again');
 });
+
+test('arming one map mode disarms every other one', async () => {
+  // The successor to the bug above, and the same shape. Each button used to
+  // carry its own list of modes to turn off, and the lists had already rotted:
+  // "+ Add stand" turned nothing off at all, "Who owns this?" turned off only
+  // stand placing. Adding a measure mode broke Add stand outright — measuring
+  // claimed the map click first, so the button armed and then silently did
+  // nothing, which is precisely the failure the whitelist above was written to
+  // end.
+  //
+  // Structural, for the same reason: it asserts that ONE function knows every
+  // mode, which is what makes the drift impossible. The behaviour itself was
+  // driven in a real browser across all twenty ordered pairs of the five
+  // buttons — each left exactly one mode armed and no stale crosshair.
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
+  const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, [], true);
+
+  assert.equal((html.match(/function clearMapModes\(/g) || []).length, 1,
+    'exactly one place that knows the map modes');
+
+  // Every mode is disarmed there, so a new one is added here or nowhere.
+  const body = html.match(/function clearMapModes\([\s\S]*?\n\}/)?.[0] ?? '';
+  for (const mode of ['placing', 'marking', 'identifying', 'drawing', 'measuring']) {
+    assert.match(body, new RegExp('\\b' + mode + '\\b'), `${mode} is disarmed there`);
+  }
+
+  // And every button that arms a mode goes through it.
+  assert.ok((html.match(/clearMapModes\('(stand|mark|parcel|route|measure)'\)/g) || []).length >= 5,
+    'each mode arms itself through the shared disarm');
+
+  // The old shape: one button reaching in to click another.
+  assert.doesNotMatch(html, /onclick\(new Event\('click'\)\)/,
+    'no button drives another button to turn it off');
+});
+
+test('the measure tool ships the same arithmetic the tests check', async () => {
+  // measure.mjs is emitted into the page rather than rewritten for it, so the
+  // acreage the map shows and the acreage test/measure.test.js verifies come
+  // from one definition. Interpolating it as a value also keeps its backticks
+  // and escapes out of the surrounding template literal.
+  const { dashboardHtml } = await import('../dashboard-page.mjs');
+  const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', null, [], true);
+  assert.match(html, /const MEASURE = \(function \(\)/, 'the geometry is in the page');
+  assert.match(html, /ringArea/, 'including the spherical area');
+  assert.match(html, /MEASURE\.measure\(/, 'and the map calls it');
+});

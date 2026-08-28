@@ -29,6 +29,7 @@
  */
 
 import { sourceDescriptors } from './tile-sources.mjs';
+import { browserSource as measureSource } from './measure.mjs';
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
@@ -278,6 +279,21 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   #contours path.route { stroke: rgba(190,140,255,.95); stroke-width: 3; fill: none;
                          stroke-linecap: round; stroke-linejoin: round; }
   #contours path.route.draft { stroke-dasharray: 6 5; }
+  /* The measuring readout. Sits under the tip rather than beside it, because
+     the numbers change on every click and a moving box beside a moving box is
+     hard to read. */
+  .measurebox { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+                z-index: 6; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 8px; padding: 8px 14px; color: var(--ink);
+                box-shadow: 0 2px 12px rgba(0,0,0,.35); text-align: center;
+                min-width: 190px; }
+  .measurebox .big { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .measurebox .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  #contours path.measure { stroke: rgba(255,235,120,.95); stroke-width: 2.6; fill: none;
+                           stroke-linecap: round; stroke-linejoin: round; }
+  #contours path.measure.ring { fill: rgba(255,235,120,.14); }
+  #contours circle.measure { fill: rgba(255,235,120,.95); stroke: rgba(40,35,0,.6);
+                             stroke-width: 1; }
   .routetip { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
               z-index: 6; background: var(--panel); border: 1px solid var(--accent);
               border-radius: 8px; padding: 7px 12px; font-size: 12px; color: var(--ink);
@@ -429,6 +445,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
       <button id="markBtn" type="button">+ Mark sign</button>
       <button id="offlineBtn" type="button">Save offline</button>
       <button id="routeBtn" type="button">+ Walk-in route</button>
+      <button id="measureBtn" type="button">Measure</button>
     </div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
@@ -444,6 +461,8 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
 </div>
 <script type="application/json" id="data">${payload}</script>
 <script>
+${measureSource('MEASURE')}
+
 const D = JSON.parse(document.getElementById('data').textContent);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
   if (x !== undefined) n.textContent = x; return n; };
@@ -748,8 +767,7 @@ markBtn.onclick = ev => {
   ev.stopPropagation();
   if (!D.live) return;
   marking = !marking;
-  if (marking && placing) addBtn.onclick(new Event('click'));
-  if (marking && identifying) ownBtn.onclick(new Event('click'));
+  if (marking) clearMapModes('mark');
   markBtn.classList.toggle('on', marking);
   markBtn.textContent = marking ? 'Click the map\u2026' : '+ Mark sign';
   mapEl.classList.toggle('placing', marking);
@@ -876,10 +894,7 @@ routeBtn.onclick = ev => {
     return terrainNote('Drop a stand first \u2014 a route is the way in to one, '
       + 'so there is nothing to judge it against until a stand exists.');
   }
-  // Turn off the other map modes, so a click means one thing.
-  if (placing) addBtn.onclick(new Event('click'));
-  if (marking) markBtn.onclick(new Event('click'));
-  if (identifying) ownBtn.onclick(new Event('click'));
+  clearMapModes('route');
   drawing = { standId: null, points: [] };
   routeBtn.classList.add('on');
   routeBtn.textContent = 'Finish route';
@@ -976,6 +991,134 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === 'Enter') { e.preventDefault(); finishRoute(); }
   else if (e.key === 'Escape') { e.preventDefault(); cancelRoute(); }
+});
+
+// ---- measuring ---------------------------------------------------------
+// How far is that, and how many acres is this. Two questions the map got asked
+// constantly and could not answer, and the only map tool here that needs
+// nothing from the server: it is arithmetic on points you clicked, so it works
+// on the static page and with the laptop shut in the truck.
+//
+// The arithmetic itself is measure.mjs, emitted into this page rather than
+// rewritten for it, so the acreage the map shows and the acreage the tests
+// check are computed by the same code.
+let measuring = null;    // { points: [] }
+const measureBtn = document.getElementById('measureBtn');
+
+/**
+ * Arming one map mode disarms every other one.
+ *
+ * This used to be done pairwise, each button naming the modes it happened to
+ * know about, and the list had already rotted: "+ Add stand" turned nothing
+ * off, "Who owns this?" turned off only stand placing, and adding measuring
+ * broke Add stand outright — measuring took the click first, so the button
+ * armed and then silently did nothing. That is the same shape of failure the
+ * onMapGround whitelist was written to end, and it gets the same treatment.
+ * One function knows all the modes; a mode added tomorrow is disarmed here or
+ * not at all, rather than in four places somebody has to remember.
+ */
+function clearMapModes(keep) {
+  if (keep !== 'stand' && placing) {
+    placing = false;
+    addBtn.classList.remove('on');
+    addBtn.textContent = '+ Add stand';
+  }
+  if (keep !== 'mark' && marking) {
+    marking = false;
+    markBtn.classList.remove('on');
+    markBtn.textContent = '+ Mark sign';
+  }
+  if (keep !== 'parcel' && identifying) {
+    identifying = false;
+    ownBtn.classList.remove('on');
+    ownBtn.textContent = 'Who owns this?';
+  }
+  if (keep !== 'route' && drawing) cancelRoute();
+  if (keep !== 'measure' && measuring) stopMeasuring();
+  // The caller puts it back if it is arming something. Leaving it on is how
+  // the map ends up stuck showing a crosshair with no mode behind it.
+  mapEl.classList.remove('placing');
+}
+
+function measurePaths(left, top) {
+  if (!measuring || !measuring.points.length) return [];
+  const pts = measuring.points;
+  const out = [];
+  if (pts.length >= 2) {
+    // Shown closed once there are three points, because that is the moment it
+    // starts having an area and the fill is what says so.
+    const ring = pts.length >= 3;
+    out.push('<path class="measure' + (ring ? ' ring' : '') + '" d="'
+      + svgPath(pts, left, top, ring) + '"></path>');
+  }
+  for (const p of pts) {
+    const px = projX(p[0], zoom) - left, py = projY(p[1], zoom) - top;
+    out.push('<circle class="measure" cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1)
+      + '" r="4"></circle>');
+  }
+  return out;
+}
+
+// One box, carrying both the numbers and the next instruction. Two stacked
+// panels at the top of the map cover the shape you are drawing under them,
+// which is the one thing you need to see while drawing it.
+function measureBox() {
+  document.querySelector('.measurebox')?.remove();
+  if (!measuring) return;
+  const m = MEASURE.measure(measuring.points);
+  const box = el('div', 'measurebox');
+  if (!m.points) {
+    box.appendChild(el('div', 'sub', 'Click a point on the map to start.'));
+  } else if (m.points === 1) {
+    box.appendChild(el('div', 'sub', 'Click another point for a distance.'));
+  } else {
+    box.appendChild(el('div', 'big', m.length));
+    if (m.area) {
+      box.appendChild(el('div', 'big', m.area));
+      box.appendChild(el('div', 'sub', 'around ' + m.perimeter + ' of edge'));
+    } else {
+      box.appendChild(el('div', 'sub', 'one more point gives you an area'));
+    }
+  }
+  const keys = el('div', 'sub');
+  keys.innerHTML = '<b>Backspace</b> undo &middot; <b>Esc</b> clear';
+  keys.style.marginTop = '5px';
+  keys.style.opacity = '.75';
+  box.appendChild(keys);
+  mapEl.appendChild(box);
+}
+
+measureBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (measuring) return stopMeasuring();
+  clearMapModes('measure');
+  measuring = { points: [] };
+  measureBtn.classList.add('on');
+  measureBtn.textContent = 'Done';
+  mapEl.classList.add('placing');
+  measureBox();
+  draw();
+};
+
+function stopMeasuring() {
+  measuring = null;
+  measureBtn.classList.remove('on');
+  measureBtn.textContent = 'Measure';
+  mapEl.classList.remove('placing');
+  document.querySelector('.measurebox')?.remove();
+  draw();
+}
+
+addEventListener('keydown', e => {
+  if (!measuring) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'Escape') { e.preventDefault(); stopMeasuring(); }
+  else if (e.key === 'Backspace') {
+    e.preventDefault();
+    measuring.points.pop();
+    measureBox();
+    draw();
+  }
 });
 
 // ---- which stands earn their keep -------------------------------------
@@ -1406,7 +1549,7 @@ function parcelPaths(left, top) {
   const out = PARCEL_RINGS
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
-  return out.concat(routePaths(left, top));
+  return out.concat(routePaths(left, top)).concat(measurePaths(left, top));
 }
 
 /** The parcel boundary alone, when the terrain layer is off. */
@@ -1593,7 +1736,7 @@ if (!D.live) {
   ownBtn.onclick = ev => {
     ev.stopPropagation();
     identifying = !identifying;
-    if (identifying && placing) addBtn.onclick(new Event('click'));
+    if (identifying) clearMapModes('parcel');
     ownBtn.classList.toggle('on', identifying);
     ownBtn.textContent = identifying ? 'Click the map\u2026' : 'Who owns this?';
     mapEl.classList.toggle('placing', identifying);
@@ -1614,6 +1757,7 @@ if (!D.live) {
   addBtn.onclick = ev => {
     ev.stopPropagation();
     placing = !placing;
+    if (placing) clearMapModes('stand');
     addBtn.classList.toggle('on', placing);
     addBtn.textContent = placing ? 'Click the map\u2026' : '+ Add stand';
     mapEl.classList.toggle('placing', placing);
@@ -1828,6 +1972,16 @@ mapEl.addEventListener('click', e => {
     ownBtn.textContent = 'Who owns this?';
     mapEl.classList.remove('placing');
     lookupParcel(at0.lat, at0.lng);
+    return;
+  }
+  if (measuring) {
+    const rr = mapEl.getBoundingClientRect();
+    const mx2 = e.clientX - rr.left, my2 = e.clientY - rr.top;
+    if (mx2 < 0 || my2 < 0 || mx2 > rr.width || my2 > rr.height) return;
+    const at2 = pixelToLatLng(mx2, my2);
+    measuring.points.push([at2.lng, at2.lat]);
+    measureBox();
+    draw();
     return;
   }
   if (drawing) {

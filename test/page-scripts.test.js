@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { dashboardHtml } from '../dashboard-page.mjs';
+import { reviewHtml } from '../review-page.mjs';
+import { tonightHtml } from '../tonight-page.mjs';
 import { PROVIDERS } from '../providers/index.mjs';
 import { FLEX_M } from '../fixtures/cameras.js';
 
@@ -62,4 +64,31 @@ test('embedded data cannot break out of its JSON block', () => {
   const html = dashboardHtml([nasty], [], '2026-08-27T12:00:00.000Z', null, [], true, []);
   assert.doesNotThrow(() => new vm.Script(inlineScript(html)));
   assert.ok(!html.includes('<img src=x onerror'), 'the tag is escaped, not emitted');
+});
+
+// Every page this program serves goes through the same template-literal
+// hazard, so every page is compiled here rather than only the one that has
+// been bitten. A new page added without a line in this file is a page that can
+// ship broken.
+test('the review page script parses', () => {
+  const html = reviewHtml({
+    species: ['deer', 'turkey'],
+    bucks: [{ id: 1, name: "Kicker \\ 'the' one" }],
+    remaining: 12,
+  });
+  assert.doesNotThrow(() => new vm.Script(inlineScript(html)));
+});
+
+test('the tonight page script parses', () => {
+  assert.doesNotThrow(() => new vm.Script(inlineScript(tonightHtml())));
+});
+
+test('the tonight page ships one script and no stray markup', () => {
+  const html = tonightHtml();
+  const script = inlineScript(html);
+  assert.ok(script.includes('replaceChildren'), 'the browser half is actually emitted');
+  // A backtick surviving into the emitted script would mean the String.raw
+  // literal had closed early and the rest of the page followed it out.
+  assert.ok(!script.includes('`'), 'no backtick escaped into the page');
+  assert.doesNotThrow(() => new vm.Script(script));
 });

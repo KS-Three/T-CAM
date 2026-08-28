@@ -301,6 +301,16 @@ async function main() {
           camera: cam.name, lat: cam.lat, lng: cam.lng,
           date: daily.time[d], window: w.name,
           start: new Date(start).toISOString(), end: new Date(end).toISOString(),
+          // Sunrise and sunset verbatim, as the naive local strings the API
+          // returned, plus the property's own UTC offset. Everything above
+          // parses those strings with new Date(), which silently uses the
+          // MACHINE's timezone — fine on a laptop in Wisconsin, six hours out
+          // in a cloud container. Scoring never noticed because it compares
+          // two times parsed the same wrong way. Shooting light does notice,
+          // so it gets the offset and does the conversion properly.
+          sunrise: daily.sunrise[d], sunset: daily.sunset[d],
+          utcOffsetSeconds: wx.utc_offset_seconds ?? null,
+          timezone: wx.timezone ?? null,
           rut: rut.phase, moon: moon.name,
           ...s,
           // Resolve the bearing here: the dashboard shows this verbatim and

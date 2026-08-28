@@ -116,6 +116,7 @@ export function reviewHtml({ species = [], bucks = [], remaining = 0 } = {}) {
   <h1>Review photos</h1>
   <span class="count" id="count"></span>
   <a href="/">&larr; back to the map</a>
+  <a href="/tonight">Tonight &rarr;</a>
 </header>
 
 <main id="main"></main>

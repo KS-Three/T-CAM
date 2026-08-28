@@ -41,8 +41,11 @@ import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
+import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
+import { WISCONSIN_DEER } from './legal-light.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { reviewHtml } from './review-page.mjs';
+import { tonightHtml } from './tonight-page.mjs';
 import {
   fetchArchive, climatology, standCoverage, SEASON_MONTHS,
 } from './wind-history.mjs';
@@ -362,6 +365,57 @@ function standTerrainLookup(db) {
 }
 
 
+/**
+ * Rank every stand for a list of sits, with the best walk in to each.
+ *
+ * Shared by /api/stand-plan (the next several sits, on the dashboard) and
+ * /api/tonight (the one sit you are about to hunt). Two copies of this would
+ * drift, and the two screens disagreeing about which stand to sit is exactly
+ * the failure that would destroy trust in both of them.
+ */
+function rankSits(db, sits) {
+  // Confirmed detections per camera, attached to the stands each camera
+  // covers. This is the number the ranking has been scoring as zero because no
+  // photos existed; it starts counting the moment they do.
+  const recent = recentDetectionCounts(db);
+  const stands = allStands(db).map(st => ({
+    ...st,
+    nearbyCameras: (st.nearbyCameras ?? []).map(c => ({
+      ...c, recentDetections: recent[c.id] ?? 0,
+    })),
+  }));
+  const terrainAt = standTerrainLookup(db);
+  const hasTerrain = stands.some(st => terrainAt(st) !== null);
+
+  const ranked = sits.map(sit => {
+    const withWalk = rankStands({ stands, sit, terrainAt }).map(r => {
+      const routes = routesForStand(db, r.id);
+      if (!routes.length) return r;
+      const stand = stands.find(s => s.id === r.id);
+      // The best of the available walks: having one clean route is what
+      // matters, not whether every route is clean.
+      const verdicts = routes.map(rt => ({
+        id: rt.id, name: rt.name,
+        ...assessRoute(rt, {
+          stand,
+          others: stands.filter(s => s.id !== r.id),
+          windFromDeg: sit.windDir,
+        }),
+      }));
+      const best = verdicts.find(v => v.ok === true) ?? verdicts[0];
+      return { ...r, routes: verdicts, walk: best };
+    });
+    return {
+      sit,
+      stands: withWalk,
+      summary: summarise(withWalk, { hasTerrain }),
+    };
+  });
+
+  return { ranked, stands, hasTerrain };
+}
+
+
 // In-flight climatology fetches, shared the same way terrain's are: seven years
 // of hourly archive is a slow pull and two tabs must not both make it.
 const windInFlight = new Map();
@@ -437,6 +491,11 @@ export function createServer({ out = OPT.out } = {}) {
           bucks: allBucks(db),
           remaining: allVisits(db, { unreviewed: true, limit: 100000 }).length,
         }));
+      }
+
+      // Tonight. One screen, one question, read on a phone in the kitchen.
+      if (req.method === 'GET' && (url.pathname === '/tonight' || url.pathname === '/tonight/')) {
+        return send(res, 200, 'text/html; charset=utf-8', tonightHtml());
       }
 
       // The API boundary a phone app would later speak to.
@@ -797,47 +856,14 @@ export function createServer({ out = OPT.out } = {}) {
       // Which stand, for a given sit. The planner says WHEN; this says WHERE.
       if (req.method === 'GET' && url.pathname === '/api/stand-plan') {
         const plan = await readPlan(out);
-        // Confirmed detections per camera, attached to the stands each camera
-        // covers. This is the number the ranking has been scoring as zero
-        // because no photos existed; it starts counting the moment they do.
-        const recent = recentDetectionCounts(db);
-        const stands = allStands(db).map(st => ({
-          ...st,
-          nearbyCameras: (st.nearbyCameras ?? []).map(c => ({
-            ...c, recentDetections: recent[c.id] ?? 0,
-          })),
-        }));
-        const terrainAt = standTerrainLookup(db);
-        const hasTerrain = stands.some(st => terrainAt(st) !== null);
         const howMany = Math.min(10, Math.max(1, Number(url.searchParams.get('sits')) || 3));
-        const allStandRows = stands;
-        const sits = (plan?.sits ?? []).slice(0, howMany).map(sit => {
-          const ranked = rankStands({ stands, sit, terrainAt }).map(r => {
-            const routes = routesForStand(db, r.id);
-            if (!routes.length) return r;
-            const stand = allStandRows.find(s => s.id === r.id);
-            // The best of the available walks: having one clean route is what
-            // matters, not whether every route is clean.
-            const verdicts = routes.map(rt => ({
-              id: rt.id, name: rt.name,
-              ...assessRoute(rt, {
-                stand,
-                others: allStandRows.filter(s => s.id !== r.id),
-                windFromDeg: sit.windDir,
-              }),
-            }));
-            const best = verdicts.find(v => v.ok === true) ?? verdicts[0];
-            return { ...r, routes: verdicts, walk: best };
-          });
-          return {
+        const { ranked, stands, hasTerrain } = rankSits(db, (plan?.sits ?? []).slice(0, howMany));
+        return sendJson(res, 200, {
+          sits: ranked.map(({ sit, stands: rows, summary }) => ({
             date: sit.date, window: sit.window, rating: sit.rating,
             score: sit.total, windFrom: sit.windFrom, rut: sit.rut,
-            stands: ranked,
-            summary: summarise(ranked, { hasTerrain }),
-          };
-        });
-        return sendJson(res, 200, {
-          sits,
+            stands: rows, summary,
+          })),
           hasTerrain,
           // Said out loud so an empty or flat ranking is explicable rather than
           // just disappointing.
@@ -847,6 +873,69 @@ export function createServer({ out = OPT.out } = {}) {
             : 'Thermals are not included: press Terrain on the map to load elevation first.',
         });
       }
+
+      // Tonight. The one screen you read with your boots in your hand.
+      //
+      // Everything here already existed and was spread across three places:
+      // the planner knew when, the stand ranking knew where, the routes knew
+      // which way in. What was missing was the assembly, and the clock — the
+      // dashboard shows the BEST sits, and the best sit is regularly not the
+      // next one.
+      if (req.method === 'GET' && url.pathname === '/api/tonight') {
+        const plan = await readPlan(out);
+        const now = Number(url.searchParams.get('now')) || Date.now();
+        const { sits: upcoming, stale, lastEnded } = nextSits(plan?.sits ?? [], { now, count: 2 });
+        const { ranked, stands, hasTerrain } = rankSits(db, upcoming);
+
+        const sits = ranked.map(({ sit, stands: rows, summary }) => {
+          const pick = rows.find(r => r.huntable === true) ?? rows[0] ?? null;
+          const walk = pick?.walk ?? null;
+          return {
+            date: sit.date, window: sit.window, rating: sit.rating, score: sit.total,
+            windFrom: sit.windFrom, windDir: sit.windDir, windSpeed: sit.wind,
+            temp: sit.temp, rain: sit.rain, rut: sit.rut, moon: sit.moon,
+            when: whenLabel(sit, now),
+            hours: sit.hours, light: sit.light,
+            timezone: sit.timezone ?? null,
+            depart: departure(sit, walk),
+            pick, walk, stands: rows, summary,
+          };
+        });
+
+        // The best sit still ahead, which is regularly not the next one. Kent
+        // deciding to skip a fair evening and save the stand for Saturday is a
+        // better outcome than being sent out on it, so the comparison is on
+        // the page rather than left to him to go and look up.
+        const ahead = (plan?.sits ?? [])
+          .map(s => resolveSit(s, { now }))
+          .filter(s => s && s.endsAt > now);
+        const best = ahead.length
+          ? ahead.reduce((a, b) => (b.total > a.total ? b : a))
+          : null;
+
+        return sendJson(res, 200, {
+          now, sits, hasTerrain,
+          best: best && sits[0] && best.date + best.window !== sits[0].date + sits[0].window
+            ? {
+                date: best.date, window: best.window, rating: best.rating,
+                score: best.total, windFrom: best.windFrom,
+                when: whenLabel(best, now),
+                // The margin, so the page can stay quiet about a point or two.
+                betterBy: Math.round(best.total - (sits[0].score ?? 0)),
+              }
+            : null,
+          shootingHours: WISCONSIN_DEER,
+          // Every reason there might be nothing to show, told apart. "No plan"
+          // and "a plan from last week" need different actions from Kent.
+          note: !plan ? 'No forecast yet — run the planner to fetch one.'
+            : stale ? `Every sit in the plan has already passed${
+                lastEnded ? ` (the last ended ${new Date(lastEnded).toISOString().slice(0, 10)})` : ''
+              } — run the planner again.`
+            : !stands.length ? 'No stands yet — drop a pin on the map to add one.'
+            : null,
+        });
+      }
+
       // The shape of the ground, from free USGS LiDAR.
       //
       // Fetching is slow — about 25 seconds for a 600 m square, across five

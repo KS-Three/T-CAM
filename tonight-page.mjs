@@ -31,7 +31,7 @@
  * generated script to catch it; keep escapes out of here anyway.
  */
 
-import { queueSource, registerSnippet } from './offline.mjs';
+import { queueSource, trackerSource, registerSnippet } from './offline.mjs';
 
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -115,6 +115,9 @@ async function load() {
   render();
   // Anything logged in the woods goes home the next time the server answers.
   // A load that succeeded from the network is exactly that moment.
+  if (!CACHED_AT && typeof TRACKER !== 'undefined' && TRACKER.pending()) {
+    TRACKER.flush().catch(() => { /* it stays queued */ });
+  }
   if (!CACHED_AT && typeof SITQ !== 'undefined' && SITQ.pending()) {
     SITQ.flush().then(r => {
       if (r.sent || r.rejected) {
@@ -164,6 +167,7 @@ function render() {
   parts.push(conditionsCard(sit));
   const others = othersCard(sit);
   if (others) parts.push(others);
+  parts.push(trackCard(sit));
   parts.push(logCard(sit));
   const better = betterDayCard();
   if (better) parts.push(better);
@@ -449,6 +453,86 @@ function betterDayCard() {
 // stand are all on the page already, so they are frozen into the record
 // exactly as they were said — and re-running the planner tomorrow cannot
 // quietly rewrite what was predicted today.
+// Recording the walk in.
+//
+// Sits on the tonight screen rather than the map because that is where you
+// already are when you put your boots on, and because the stand and route it
+// should be attached to are on this page and nowhere else.
+function trackCard(sit) {
+  const c = card('The walk in, recorded');
+  if (!TRACKER.supported()) {
+    c.appendChild(el('div', 'note', 'This browser has no GPS, so a walk cannot be recorded here.'));
+    return c;
+  }
+
+  const status = el('div', 'note');
+  const row = el('div', 'rec');
+  const btn = document.createElement('button');
+  row.appendChild(btn);
+
+  const paint = (rec) => {
+    row.querySelectorAll('.recdot').forEach(d => d.remove());
+    if (rec) {
+      btn.className = 'stop';
+      btn.textContent = 'Stop and save';
+      row.prepend(el('div', 'recdot'));
+      const mins = Math.round((Date.now() - rec.startedAt) / 60000);
+      status.textContent = rec.fixes.length + ' fix'
+        + (rec.fixes.length === 1 ? '' : 'es') + ' over ' + mins + ' min. '
+        + 'Lock the screen if you like — it keeps recording, and nothing is lost '
+        + 'if the phone closes the page. GPS costs battery, so stop it when you sit.';
+    } else {
+      btn.className = 'go';
+      btn.textContent = 'Record the walk in';
+      status.textContent = 'Records where you actually walk, which is the thing the '
+        + 'route you drew cannot tell you. Saved when you stop; it waits for signal.';
+    }
+  };
+
+  btn.onclick = async () => {
+    if (TRACKER.recording()) {
+      btn.disabled = true;
+      const done = TRACKER.finish({
+        standId: sit.pick ? sit.pick.id : null,
+        routeId: sit.walk ? sit.walk.id : null,
+        name: (sit.pick ? sit.pick.name : 'Walk') + ' \u2014 ' + sit.date,
+      });
+      btn.disabled = false;
+      if (!done) { paint(null); status.textContent = 'Too few fixes to keep. Nothing saved.'; return; }
+      const r = await TRACKER.flush();
+      paint(null);
+      if (r.sent && r.saved.length) {
+        const t = r.saved[r.saved.length - 1];
+        status.textContent = 'Saved: ' + t.length_m + ' m'
+          + (t.seconds ? ' in ' + Math.round(t.seconds / 60) + ' min' : '')
+          + '. ' + t.quality.why;
+        if (t.vsRoute && t.vsRoute.comparable) {
+          const v = el('div', 'note');
+          v.style.marginTop = '6px';
+          v.textContent = t.vsRoute.why;
+          if (!t.vsRoute.followed) v.style.color = 'var(--warn)';
+          c.appendChild(v);
+        }
+      } else if (r.rejected) {
+        status.textContent = 'The server would not accept that track.';
+      } else {
+        status.textContent = 'Saved on this phone (' + TRACKER.pending()
+          + ' waiting). It uploads when you are back in signal.';
+      }
+      return;
+    }
+    const started = TRACKER.start({}, rec => paint(rec));
+    if (!started.ok) { status.textContent = started.why; return; }
+    paint(TRACKER.current());
+  };
+
+  c.append(row, status);
+  // A recording already in progress — the page was reopened mid-walk.
+  if (TRACKER.recording()) { TRACKER.start({}, rec => paint(rec)); paint(TRACKER.current()); }
+  else paint(null);
+  return c;
+}
+
 function logCard(sit) {
   const c = card('How did it go?');
   const intro = el('div', 'note',
@@ -685,6 +769,16 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
   .other .rs { color: var(--muted); font-size: 13.5px; }
   .other .sc { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+  .rec { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  .rec button { flex: 1; padding: 10px; border-radius: 8px; cursor: pointer;
+                font: 600 14px/1 ui-sans-serif, system-ui, sans-serif;
+                border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .rec button.go { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .rec button.stop { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .recdot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad);
+            flex: 0 0 auto; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .recdot { animation: none; } }
   .logform { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
              gap: 10px 12px; margin-top: 10px; }
   .logform label { display: block; color: var(--muted); font-size: 12px;
@@ -720,6 +814,7 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
 
 <script>
 ${queueSource('SITQ')}
+${trackerSource('TRACKER')}
 ${registerSnippet()}
 ${BROWSER}
 </script>

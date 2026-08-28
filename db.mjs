@@ -433,6 +433,45 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX sits_stand ON sits(stand_id);');
     },
   },
+  {
+    version: 9,
+    name: 'recorded tracks',
+    up: db => {
+      // Where you actually walked, off the phone's GPS.
+      //
+      // Deliberately a different table from routes, not a flag on one. A route
+      // is a plan you drew and can edit; a track is a measurement you took and
+      // must not. Letting them share a table would invite exactly the edit
+      // that turns the record of a walk into a story about it.
+      //
+      // The filtering counts are stored with the geometry because they decide
+      // how much the geometry is worth. A track assembled from a fifth of its
+      // fixes is not a track, and a reader who has only the line cannot know.
+      db.exec(`
+        CREATE TABLE tracks (
+          id            INTEGER PRIMARY KEY,
+          stand_id      INTEGER REFERENCES stands(id) ON DELETE SET NULL,
+          route_id      INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+          name          TEXT,
+          points        TEXT NOT NULL,
+          started_at    TEXT,
+          ended_at      TEXT,
+          length_m      INTEGER,
+          seconds       INTEGER,
+          fixes         INTEGER,
+          used          INTEGER,
+          dropped       TEXT,
+          median_acc_m  REAL,
+          quality       TEXT,
+          quality_why   TEXT,
+          notes         TEXT,
+          created_at    TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX tracks_stand ON tracks(stand_id);');
+      db.exec('CREATE INDEX tracks_started ON tracks(started_at);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1402,4 +1441,77 @@ export function updateSit(db, id, patch = {}) {
 export function deleteSit(db, id) {
   const info = db.prepare('DELETE FROM sits WHERE id = ?').run(id);
   return info.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Recorded tracks
+//
+// A track is a MEASUREMENT. Unlike a route, it has no update function on
+// purpose: the only honest edits to a record of where you walked are its name,
+// what it was for, and deleting it outright.
+// ---------------------------------------------------------------------------
+
+export function saveTrack(db, {
+  standId = null, routeId = null, name = null, notes = null, track,
+} = {}) {
+  if (!track || !Array.isArray(track.points) || track.points.length < 2) {
+    throw new Error('a track needs at least two points');
+  }
+  for (const p of track.points) {
+    if (!Array.isArray(p) || p.length < 2
+        || !Number.isFinite(p[0]) || !Number.isFinite(p[1])
+        || Math.abs(p[1]) > 90 || Math.abs(p[0]) > 180) {
+      throw new Error('a track point must be [longitude, latitude]');
+    }
+  }
+  if (standId !== null && !db.prepare('SELECT id FROM stands WHERE id = ?').get(standId)) {
+    throw new Error(`no stand with id ${standId}`);
+  }
+  if (routeId !== null && !db.prepare('SELECT id FROM routes WHERE id = ?').get(routeId)) {
+    throw new Error(`no route with id ${routeId}`);
+  }
+  const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+  const info = db.prepare(`
+    INSERT INTO tracks (
+      stand_id, route_id, name, points, started_at, ended_at, length_m, seconds,
+      fixes, used, dropped, median_acc_m, quality, quality_why, notes, created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    standId, routeId, name, JSON.stringify(track.points),
+    iso(track.startedAt), iso(track.endedAt),
+    track.lengthM ?? null, track.seconds ?? null,
+    track.fixes ?? null, track.used ?? null,
+    JSON.stringify(track.dropped ?? {}), track.medianAccuracyM ?? null,
+    track.quality?.level ?? null, track.quality?.why ?? null,
+    notes, nowIso(),
+  );
+  return trackById(db, Number(info.lastInsertRowid));
+}
+
+const trackRow = r => r && ({
+  ...r,
+  points: JSON.parse(r.points),
+  dropped: r.dropped ? JSON.parse(r.dropped) : {},
+  quality: { level: r.quality, why: r.quality_why },
+});
+
+export const trackById = (db, id) => trackRow(db.prepare(`
+  SELECT t.*, s.name AS stand_name, r.name AS route_name
+  FROM tracks t
+  LEFT JOIN stands s ON s.id = t.stand_id
+  LEFT JOIN routes r ON r.id = t.route_id
+  WHERE t.id = ?
+`).get(id)) ?? null;
+
+export const allTracks = (db, { limit = 200 } = {}) => db.prepare(`
+  SELECT t.*, s.name AS stand_name, r.name AS route_name
+  FROM tracks t
+  LEFT JOIN stands s ON s.id = t.stand_id
+  LEFT JOIN routes r ON r.id = t.route_id
+  ORDER BY COALESCE(t.started_at, t.created_at) DESC, t.id DESC
+  LIMIT ?
+`).all(limit).map(trackRow);
+
+export function deleteTrack(db, id) {
+  return db.prepare('DELETE FROM tracks WHERE id = ?').run(id).changes > 0;
 }

@@ -41,7 +41,7 @@ Rules for anything added from here:
 | | Verified how |
 | --- | --- |
 | **SpyPoint sync** — cameras, status, photos | Live, against a real 4-camera FLEX-M account |
-| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits | 393 tests; sync verified end-to-end against a stand-in API |
+| **SQLite store** — cameras, photos, detections, bucks, properties, stands, weather, sits | 443 tests; sync verified end-to-end against a stand-in API |
 | **Local server** — dashboard served from the database, LAN-reachable | Tests including raw-socket path-traversal checks |
 | **Map** — satellite / hybrid / street / terrain, pan, zoom, offline-tolerant | Driven in a real browser |
 | **Stands** — drop, name, type, move, delete, good-winds | Browser-verified end to end with a real mouse: arm, click, type, save, reopen |
@@ -64,6 +64,7 @@ Rules for anything added from here:
 | **Sit journal** (`/journal`) — what actually happened, and what it may claim | 29 tests, most of them about refusing to answer; the whole loop driven in a browser |
 | **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Tested against stub owners; `?parcels=off` for outside Wisconsin |
 | **Offline** — /tonight, the map and sit logging with no server reachable | Driven end to end: server killed, page served by the worker, sit queued, server restarted, sit arrived |
+| **Track recording** — record the walk in off the phone's GPS, judged against the route you drew | Driven in a browser with real geolocation and with a scripted 3-minute walk: 180 fixes, teleport and bad fix both rejected, 275 m, compared to the route on save |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -140,6 +141,9 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 | "Where do I sit tonight" in one screen | Neither does this in one place | **Yes — `/tonight`: stand, walk in, and when to leave** |
 | Where to hang the NEXT stand | Neither, directly | **Yes — terrain plus the winds no stand of yours covers, with the reasoning shown** |
 | A record of what you actually saw | onX has waypoints, not sits | **Yes — and it is used to check this tool's own predictions, including refusing to** |
+| Track recording | onX, core | **Yes — and compared against the route you planned, which onX does not do** |
+| Line of sight / viewshed | onX | No — the elevation grid is already here, so this is buildable |
+| 3D terrain, weather layers, party sharing | onX | No |
 
 The honest line on prediction: without collar data, anything fancier here would
 be the same inputs in a better costume.
@@ -163,22 +167,60 @@ Consequences, all of them deliberate in the code:
   payoff on ground like this: flow accumulation is scale-free, and there are 14
   of them, the longest a 390 m draw with 7 ft of fall.
 
+## What a recorded track is, and is not
+
+Worth reading before trusting one. A phone under November canopy is a bad GPS:
+ten to thirty metres of scatter is normal, and every so often it returns a fix
+a couple of hundred metres away for one sample. Stored raw that gives a track
+whose length is wrong by a factor and a scent analysis naming ground you never
+went near — and it looks entirely plausible on a map.
+
+So `track.mjs` filters in four stages, and every stage's discards are counted
+and shown: accuracy (the phone's own error estimate; **unknown accuracy counts
+as bad, not good**), speed (measured against the last fix KEPT, or one outlier
+drags the gate along with it), resolution, then Douglas–Peucker.
+
+The resolution gate is the one that is easy to leave out. Simplification alone
+does not fix a stationary cloud, because Douglas–Peucker preserves SHAPE and
+noise has plenty of shape — it keeps the outermost fixes and the distance
+survives. Measured: ten minutes standing still with ten-metre fixes gave 633 m
+of phantom walking with simplification alone, 148 m gated at one sigma, and
+under 20 m at two. **Two sigma is the right factor** because browsers report
+accuracy as a 68% radius, so two fixes at one true position routinely differ by
+twice it. The cost is honest: under heavy canopy you cannot resolve a bend
+tighter than your error, so those bends are not drawn.
+
+Consequences that are deliberate:
+
+- **The phone posts raw fixes; the server filters.** The filtering is the part
+  most likely to improve, and a track recorded today should get the benefit —
+  impossible if the phone already discarded the evidence.
+- **A track has no PATCH.** A route is a plan you can edit; a track is a
+  measurement. The API returns 405.
+- **An "unusable" track is refused, not saved.** Two surviving points still
+  draw a confident line and still get compared to the planned route. Caught in
+  a browser run where compressed timing tripped the speed gate and the page
+  announced having strayed 140 m from a route it had never really measured.
+
 ## Next, in order
 
-1. **Log sits.** The journal is built and empty. Everything it can eventually
+1. **Record a walk in, on the real phone.** The recorder is driven and tested
+   but only against scripted geolocation. Real canopy, a real lock screen and
+   iOS's own service-worker quirks are what it has not met.
+2. **Log sits.** The journal is built and empty. Everything it can eventually
    say needs about a dozen sits with a spread of ratings — including some
    mediocre evenings, or there is no comparison group and it will keep
    refusing (correctly).
-2. **Run the collar calibration** once `collar-data/RateofMovementData.csv` is
+3. **Run the collar calibration** once `collar-data/RateofMovementData.csv` is
    downloaded — `node calibrate-planner.mjs --inspect` first, to confirm the
    detected columns before trusting any number it prints.
-3. **Photos land** → verify the download path against real images, then fit the
+4. **Photos land** → verify the download path against real images, then fit the
    review screen to their actual shape. It is built and driven, but against
    generated frames, so expect adjustment around real timestamps and any
    species tags SpyPoint's own AI attaches.
-4. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
-5. Moultrie, if a capture arrives.
-6. Historical imagery, if a working NAIP endpoint can be found.
+5. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
+6. Moultrie, if a capture arrives.
+7. Historical imagery, if a working NAIP endpoint can be found.
 
 ## The structural debt worth naming
 

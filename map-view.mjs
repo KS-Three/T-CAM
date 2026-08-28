@@ -182,6 +182,13 @@ export const mapStyles = `
   /* A walk-in route. Drawn heavier than a contour and in a colour used for
      nothing else on the map, because it is the only line you put there
      yourself. */
+  /* A walked track, drawn solid and cooler than the route it was meant to
+     follow. The pair being visibly different is the entire value: seeing the
+     drawn line and the walked line diverge is what tells you the plan was not
+     what happened. */
+  #contours path.track { stroke: rgba(120,205,255,.95); stroke-width: 2.6; fill: none;
+                         stroke-linecap: round; stroke-linejoin: round; }
+  #contours path.track.rough { stroke-dasharray: 7 4; }
   #contours path.route { stroke: rgba(190,140,255,.95); stroke-width: 3; fill: none;
                          stroke-linecap: round; stroke-linejoin: round; }
   /* The measuring readout. Sits under the tip rather than beside it, because
@@ -935,6 +942,28 @@ addEventListener('keydown', e => {
     draw();
   }
 });
+// ---- recorded tracks ---------------------------------------------------
+// Where you actually walked, drawn beside the route you drew. A track whose
+// fixes were poor is dashed rather than hidden: it still says roughly where
+// you went, and pretending otherwise either way would be worse.
+let TRACKS = [];
+
+async function refreshTracks() {
+  const res = await fetch('/api/tracks?limit=50');
+  if (!res.ok) return;
+  TRACKS = (await res.json()).tracks || [];
+  draw();
+}
+
+function trackPaths(left, top) {
+  return TRACKS
+    .filter(t => t.points && t.points.length >= 2)
+    .map(t => '<path class="track'
+      + (t.quality && (t.quality.level === 'poor' || t.quality.level === 'rough') ? ' rough' : '')
+      + '" d="' + svgPath(t.points, left, top, false) + '"></path>');
+}
+if (D.live) refreshTracks().catch(() => {});
+
 // ---- suggest a stand ---------------------------------------------------
 // Everything this needs was already on the map and never put together: the
 // landforms from the terrain layer, the winds no stand covers from the wind
@@ -1282,6 +1311,7 @@ function parcelPaths(left, top) {
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
   return out.concat(routePaths(left, top))
+    .concat(trackPaths(left, top))
     .concat(measurePaths(left, top))
     .concat(suggestPaths(left, top));
 }

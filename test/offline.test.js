@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { swSource, queueSource, registerSnippet, manifest, iconSvg, CACHE_VERSION } from '../offline.mjs';
+import { swSource, queueSource, trackerSource, registerSnippet, manifest, iconSvg, CACHE_VERSION } from '../offline.mjs';
 
 // ---------------------------------------------------------------------------
 // The service worker
@@ -172,4 +172,125 @@ test('the manifest is valid JSON pointing at real routes', () => {
   assert.equal(m.display, 'standalone');
   assert.equal(m.icons[0].src, '/icon.svg');
   assert.match(iconSvg(), /^<svg /);
+});
+
+// ---------------------------------------------------------------------------
+// The GPS recorder
+// ---------------------------------------------------------------------------
+
+function trackerContext({ supported = true } = {}) {
+  const store = new Map();
+  const watchers = [];
+  const ctx = {
+    localStorage: {
+      getItem: k => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: k => store.delete(k),
+    },
+    navigator: supported ? {
+      geolocation: {
+        watchPosition: (ok, err) => { watchers.push({ ok, err }); return watchers.length; },
+        clearWatch: id => { watchers[id - 1] = null; },
+      },
+    } : {},
+    Date, JSON, Object, Array,
+  };
+  vm.createContext(ctx);
+  new vm.Script(trackerSource('TRACKER') + '\nthis.TRACKER = TRACKER;').runInContext(ctx);
+  return { T: ctx.TRACKER, watchers, store };
+}
+
+const fix = (i) => ({
+  coords: { latitude: 44.12 + i * 0.00001, longitude: -90.65, accuracy: 6 },
+  timestamp: 1762000000000 + i * 1000,
+});
+
+test('every fix is written to storage as it arrives, so a locked screen loses nothing', async () => {
+  // The phone freezes or discards the page the moment you pocket it — which is
+  // exactly when you are walking. Holding fixes in memory loses the walk.
+  const { T, watchers, store } = trackerContext();
+  T.start({ standId: 3 });
+  for (let i = 0; i < 5; i++) watchers[0].ok(fix(i));
+  const stored = JSON.parse(store.get('trailcam.track'));
+  assert.equal(stored.fixes.length, 5, 'in storage, not in a variable');
+  assert.equal(stored.meta.standId, 3);
+  assert.equal(T.recording(), true);
+});
+
+test('reopening the page mid-walk resumes the same recording', async () => {
+  const { T, watchers } = trackerContext();
+  T.start({});
+  watchers[0].ok(fix(0));
+  // A second start() — the page was reloaded — must not begin a new track.
+  const again = T.start({});
+  assert.equal(again.resumed, true);
+  watchers[0].ok(fix(1));
+  assert.equal(T.current().fixes.length, 2, 'the earlier fix survived the reload');
+});
+
+test('finishing queues the RAW fixes, untouched, for the server to filter', async () => {
+  const { T, watchers } = trackerContext();
+  T.start({ standId: 7, routeId: 9 });
+  for (let i = 0; i < 4; i++) watchers[0].ok(fix(i));
+  const done = T.finish({ name: 'Walk' });
+  assert.equal(done.fixes, 4);
+  assert.equal(T.recording(), false, 'the live recording is cleared');
+  assert.equal(T.pending(), 1);
+
+  const posted = [];
+  const r = await T.flush(async (url, opts) => {
+    posted.push({ url, body: JSON.parse(opts.body) });
+    return { ok: true, status: 201, json: async () => ({ id: 1, length_m: 40 }) };
+  });
+  assert.equal(r.sent, 1);
+  assert.equal(posted[0].url, '/api/tracks');
+  assert.equal(posted[0].body.fixes.length, 4, 'raw fixes, not a filtered line');
+  assert.equal(posted[0].body.standId, 7);
+  assert.equal(posted[0].body.routeId, 9);
+  assert.equal(posted[0].body.name, 'Walk');
+  assert.ok(posted[0].body.fixes[0].acc, 'accuracy travels with each fix');
+});
+
+test('a walk too short to be a walk is dropped rather than queued', () => {
+  const { T, watchers } = trackerContext();
+  T.start({});
+  watchers[0].ok(fix(0));
+  assert.equal(T.finish(), null);
+  assert.equal(T.pending(), 0);
+  assert.equal(T.recording(), false);
+});
+
+test('no signal keeps the track queued; a rejection drops it', async () => {
+  const { T, watchers } = trackerContext();
+  T.start({});
+  for (let i = 0; i < 4; i++) watchers[0].ok(fix(i));
+  T.finish();
+
+  const offline = await T.flush(async () => { throw new TypeError('Failed to fetch'); });
+  assert.equal(offline.sent, 0);
+  assert.equal(offline.rejected, 0);
+  assert.equal(offline.left, 1);
+  assert.equal(offline.saved.length, 0);
+  assert.equal(T.pending(), 1, 'a walk is not lost to a dead network');
+
+  const refused = await T.flush(async () => ({ ok: false, status: 400 }));
+  assert.equal(refused.rejected, 1);
+  assert.equal(T.pending(), 0, 'but one bad track cannot wedge the queue');
+});
+
+test('discarding a recording leaves nothing behind', () => {
+  const { T, watchers } = trackerContext();
+  T.start({});
+  watchers[0].ok(fix(0));
+  T.discard();
+  assert.equal(T.recording(), false);
+  assert.equal(T.pending(), 0);
+});
+
+test('a browser with no GPS says so instead of failing at the first fix', () => {
+  const { T } = trackerContext({ supported: false });
+  assert.equal(T.supported(), false);
+  const r = T.start({});
+  assert.equal(r.ok, false);
+  assert.match(r.why, /no GPS/);
 });

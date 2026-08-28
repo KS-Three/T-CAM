@@ -36,6 +36,7 @@ import {
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
+  saveTrack, allTracks, trackById, deleteTrack,
 } from './db.mjs';
 import { dashboardHtml } from './dashboard-page.mjs';
 import { readPlan } from './spypoint-sync.mjs';
@@ -44,6 +45,7 @@ import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise } from './stand-ranking.mjs';
 import { suggestStands, onYourGround } from './stand-suggester.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
+import { buildTrack, compareToRoute } from './track.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
@@ -958,6 +960,79 @@ export function createServer({ out = OPT.out } = {}) {
             : !stands.length ? 'No stands yet — drop a pin on the map to add one.'
             : null,
         });
+      }
+
+      // Recorded tracks: where you actually walked.
+      //
+      // The raw fixes are filtered HERE rather than on the phone, and the
+      // phone posts everything it saw. Two reasons: the filtering is the part
+      // most likely to need improving, and a track recorded today should get
+      // the benefit of that — which is impossible if the phone already threw
+      // the evidence away. And a browser that dies mid-walk has still sent
+      // nothing, so the raw fixes are all there is.
+      if (url.pathname === '/api/tracks') {
+        if (req.method === 'GET') {
+          const tracks = allTracks(db, {
+            limit: Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200)),
+          });
+          return sendJson(res, 200, { tracks });
+        }
+        if (req.method === 'POST') {
+          let body;
+          try { body = await readJson(req); } catch (err) { return sendJson(res, 400, { error: err.message }); }
+          const fixes = body?.fixes ?? body?.points ?? [];
+          if (!Array.isArray(fixes) || fixes.length < 2) {
+            return sendJson(res, 400, { error: 'a track needs at least two fixes' });
+          }
+          const track = buildTrack(fixes);
+          // Refused when the filters say it is not a track — not merely when
+          // fewer than two points survive. Two points from sixty fixes still
+          // draw a confident line and still get compared to the planned route,
+          // and the comparison is then about a wreck: caught in a browser run
+          // where a compressed walk tripped the speed gate, and the page
+          // cheerfully reported having strayed 140 m from a route it had never
+          // really measured. A track the module calls unusable is a refusal.
+          if (track.points.length < 2 || track.quality.level === 'unusable') {
+            return sendJson(res, 400, {
+              error: `nothing usable in ${fixes.length} fixes — ${track.quality.why}`,
+              track,
+            });
+          }
+          try {
+            const saved = saveTrack(db, {
+              standId: body.standId ?? null, routeId: body.routeId ?? null,
+              name: body.name ?? null, notes: body.notes ?? null, track,
+            });
+            // If it was walked against a planned route, say straight away how
+            // far it strayed — that comparison is the whole point of keeping
+            // both, and nobody will come back for it later.
+            const route = saved.route_id ? routeById(db, saved.route_id) : null;
+            return sendJson(res, 201, {
+              ...saved,
+              vsRoute: route ? compareToRoute(saved, route) : null,
+            });
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+        return sendJson(res, 405, { error: 'GET or POST' });
+      }
+      const trackMatch = url.pathname.match(/^\/api\/tracks\/(\d+)$/);
+      if (trackMatch) {
+        const id = Number(trackMatch[1]);
+        if (req.method === 'GET') {
+          const row = trackById(db, id);
+          if (!row) return sendJson(res, 404, { error: 'no such track' });
+          const route = row.route_id ? routeById(db, row.route_id) : null;
+          return sendJson(res, 200, { ...row, vsRoute: route ? compareToRoute(row, route) : null });
+        }
+        if (req.method === 'DELETE') {
+          return deleteTrack(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: 'no such track' });
+        }
+        // No PATCH on purpose: a track is a measurement, not a plan.
+        return sendJson(res, 405, { error: 'GET or DELETE — a recorded track is not editable' });
       }
 
       // The sit journal: what actually happened when you sat there.

@@ -204,3 +204,126 @@ export function iconSvg() {
   <circle cx="32" cy="26" r="7" fill="#375a3f"/>
 </svg>`;
 }
+
+/**
+ * The GPS recorder, emitted into the tonight page as `TRACKER`.
+ *
+ * Three things make this harder than calling watchPosition:
+ *
+ * 1. THE PHONE SLEEPS. Lock the screen on the walk in — which is exactly what
+ *    you do — and the page is frozen or discarded. So every fix is written to
+ *    localStorage as it arrives, not held in memory; reopening the page finds
+ *    the recording still in progress and carries on.
+ * 2. THERE IS NO SIGNAL. GPS works without one, but posting does not. A
+ *    finished track goes into the same queue the sits use, with the same rule:
+ *    a network failure keeps it, a rejection drops it.
+ * 3. THE RAW FIXES ARE THE EVIDENCE. The phone posts everything it saw and the
+ *    server filters. Filtering here would throw away the data that a better
+ *    filter later would need.
+ *
+ * Battery: a continuous high-accuracy watch is expensive — reckon on a few
+ * percent for a walk in, far more if left running through a sit. The page says
+ * so and offers to stop.
+ */
+export function trackerSource(globalName = 'TRACKER') {
+  return String.raw`
+const ${globalName} = (function () {
+  const KEY = 'trailcam.track';
+  const QUEUE = 'trailcam.trackQueue';
+  let watchId = null;
+
+  const read = k => {
+    try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v; }
+    catch (err) { return null; }
+  };
+  const write = (k, v) => {
+    try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+    catch (err) { return false; }
+  };
+
+  return {
+    supported: () => typeof navigator !== 'undefined' && !!navigator.geolocation,
+    current: () => read(KEY),
+    recording: () => !!read(KEY),
+    pending: () => (read(QUEUE) || []).length,
+
+    /**
+     * Start, or pick up a recording the phone was already making. Fixes are
+     * appended to storage as they arrive so a locked screen loses nothing.
+     */
+    start(meta, onFix) {
+      if (!this.supported()) return { ok: false, why: 'This browser has no GPS.' };
+      if (!read(KEY)) write(KEY, { startedAt: Date.now(), meta: meta || {}, fixes: [] });
+      if (watchId !== null) return { ok: true, resumed: true };
+      watchId = navigator.geolocation.watchPosition(
+        pos => {
+          const rec = read(KEY);
+          if (!rec) return;
+          rec.fixes.push({
+            lat: pos.coords.latitude, lng: pos.coords.longitude,
+            acc: pos.coords.accuracy, t: pos.timestamp,
+          });
+          write(KEY, rec);
+          if (onFix) onFix(rec);
+        },
+        err => { if (onFix) onFix(read(KEY), err); },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 },
+      );
+      return { ok: true, resumed: false };
+    },
+
+    /** Stop watching but keep what was recorded, so a reload can resume. */
+    pause() {
+      if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    },
+
+    discard() {
+      this.pause();
+      try { localStorage.removeItem(KEY); } catch (err) { /* nothing to do */ }
+    },
+
+    /**
+     * Finish: move the recording into the send queue and clear it. The raw
+     * fixes go up untouched — the server does the filtering.
+     */
+    finish(extra) {
+      const rec = read(KEY);
+      this.pause();
+      if (!rec || rec.fixes.length < 2) { this.discard(); return null; }
+      const q = read(QUEUE) || [];
+      q.push({ body: Object.assign({ fixes: rec.fixes }, rec.meta, extra || {}),
+               queuedAt: new Date().toISOString() });
+      write(QUEUE, q);
+      try { localStorage.removeItem(KEY); } catch (err) { /* nothing to do */ }
+      return { fixes: rec.fixes.length, queued: q.length };
+    },
+
+    /** Same rules as the sit queue: offline keeps, rejected drops. */
+    async flush(fetchImpl) {
+      const doFetch = fetchImpl || fetch;
+      let q = read(QUEUE) || [];
+      let sent = 0, rejected = 0;
+      const saved = [];
+      while (q.length) {
+        let res;
+        try {
+          res = await doFetch('/api/tracks', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(q[0].body),
+          });
+        } catch (err) { break; }
+        if (res.ok) {
+          sent++;
+          try { saved.push(await res.json()); } catch (err) { /* the save counted */ }
+        } else if (res.status >= 400 && res.status < 500) rejected++;
+        else break;
+        q = q.slice(1);
+        write(QUEUE, q);
+      }
+      return { sent, rejected, left: q.length, saved };
+    },
+  };
+})();
+`;
+}

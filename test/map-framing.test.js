@@ -93,6 +93,18 @@ test('with nothing placed at all it opens wide, over the country', () => {
   assert.ok(f.centre.lng < -60 && f.centre.lng > -130);
 });
 
+test('zoom banks trackpad deltas, aims at the cursor, and pinches', () => {
+  // The complaint this pins: a trackpad flick fires dozens of small wheel
+  // events, and stepping one zoom level per EVENT turned a two-finger nudge
+  // into "suddenly zoomed all the way out over the whole country".
+  assert.match(mapScript, /wheelBank \+= e\.deltaMode/, 'deltas accumulate; an event is not a step');
+  assert.match(mapScript, /Math\.trunc\(wheelBank \/ 100\)/, 'a hundred pixels is one step');
+  assert.match(mapScript, /zoomAt\(zoom - steps, e\.clientX, e\.clientY\)/,
+    'wheel zoom keeps the ground under the cursor');
+  assert.match(mapScript, /touches\.size === 2\) \{ drag = null; dragged = true/,
+    'a second finger ends the pan, and the pinch can never end in a click');
+});
+
 test('the map is never replaced by a message', () => {
   // The specific line that used to do it. A note belongs beside the map, not
   // instead of it.

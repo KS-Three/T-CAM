@@ -24,6 +24,13 @@
  *    and called it invalid, and retrying an invalid sit forever would wedge
  *    the queue on one bad row.
  *
+ * Terrain gets one rule of its own. A terrain answer covers an AREA, but its
+ * URL carries the map centre at full float precision — so exact-URL matching
+ * would replay it only for the identical pan, which never happens twice. The
+ * worker instead falls back to the newest cached answer whose bounds contain
+ * the requested point, the same containment rule the server's own grid store
+ * uses. That is what lets the 3D view build its mesh in the woods.
+ *
  * What this deliberately does not do: background sync (needs permissions and
  * buys little — the queue flushes on the next open), and precaching every
  * tile on the property (the map's own "Save offline" button already does that
@@ -96,11 +103,66 @@ async function networkFirst(req) {
   }
 }
 
+// Terrain cached for ANY view it covers, not only for its exact URL.
+//
+// A terrain request carries the map centre at full float precision, so the
+// URL is different after every pan — exact matching would replay a saved
+// answer only if the phone happened to be aimed at the identical spot, which
+// it never is. But the ANSWER covers an area: the same rule the server's own
+// grid store uses (any stored grid containing the point serves it) applies
+// here, one cache further out. The newest covering answer wins, because a
+// later save of the same ground is a finer or larger fetch of it.
+async function cachedTerrainCovering(url) {
+  const cache = await caches.open(VERSION);
+  const lat = Number(url.searchParams.get('lat'));
+  const lng = Number(url.searchParams.get('lng'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  let best = null, bestAt = '';
+  for (const req of await cache.keys()) {
+    if (new URL(req.url).pathname !== '/api/terrain') continue;
+    const hit = await cache.match(req);
+    if (!hit) continue;
+    let body;
+    try { body = await hit.clone().json(); } catch (err) { continue; }
+    const b = body && body.covered && body.bounds;
+    if (!b) continue;
+    if (lat < b.south || lat > b.north || lng < b.west || lng > b.east) continue;
+    const at = hit.headers.get('x-sw-cached-at') || '';
+    if (!best || at > bestAt) { best = hit; bestAt = at; }
+  }
+  return best;
+}
+
+// Network first like everything else, but two failures fall back to covering
+// ground rather than surfacing: no network at all, and a server that answers
+// 5xx — which for terrain means the SERVER's internet is down (it could not
+// reach USGS), and ground saved last week still beats an error screen. A 4xx
+// passes through untouched: that is the server judging the request, not
+// failing to answer it.
+async function terrainFirst(req, url) {
+  const cache = await caches.open(VERSION);
+  let res = null;
+  try {
+    res = await fetch(req);
+    if (res.ok) { cache.put(req, await stamp(res.clone())); return res; }
+    if (res.status < 500) return res;
+  } catch (err) { /* no network: fall through to the cache */ }
+  const exact = await cache.match(req);
+  if (exact) return exact;
+  const covering = await cachedTerrainCovering(url);
+  if (covering) return covering;
+  return res || new Response('Offline, and no ground saved for this spot yet.', {
+    status: 503, headers: { 'content-type': 'text/plain' },
+  });
+}
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/tiles/') || url.pathname.startsWith('/photos/')) {
     e.respondWith(cacheFirst(e.request));
+  } else if (url.pathname === '/api/terrain') {
+    e.respondWith(terrainFirst(e.request, url));
   } else {
     e.respondWith(networkFirst(e.request));
   }

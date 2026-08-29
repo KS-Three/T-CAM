@@ -807,6 +807,39 @@ function visibleBounds() {
   return { west: nw.lng, north: nw.lat, east: se.lng, south: se.lat };
 }
 
+/**
+ * Save the GROUND for this view, not only its tiles: the elevation the 3D
+ * view and the terrain layer are built from, and the imagery the 3D drapes.
+ *
+ * Fetching /api/terrain here does two jobs with one request. The server
+ * fetches the ground from USGS and stores the grid in its database, so the
+ * cabin with no internet can still answer; and the answer passes through the
+ * service worker on its way here, which caches it on the phone, so the woods
+ * with no server can too. Then the 3D drape tiles are pulled once through the
+ * page for the same reason — each lands in the worker's cache on the way.
+ *
+ * Failures are partial and said out loud: tiles saved with no ground is still
+ * a saved map, and claiming more than that is how you end up in the woods
+ * with a 3D button that does not press.
+ */
+async function saveGroundForView() {
+  const { radius, spacing } = terrainRequestForView();
+  const res = await fetch('/api/terrain?lat=' + centre.lat + '&lng=' + centre.lng
+    + '&radius=' + radius + '&spacing=' + spacing);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'the ground could not be read');
+  if (!body.covered) return { line: 'No LiDAR under this view, so there is no 3D to save.' };
+  // The drape at the same size the 3D view will ask for, so what is warmed is
+  // what will be wanted. The canvas is thrown away; the tiles are the point.
+  await textureFor3d(body.bounds);
+  return {
+    line: '<b>3D saved too</b> \u2014 the ground ('
+      + body.stats.reliefFt + ' ft of relief) and its imagery. The 3D view of '
+      + 'this ground now works with no signal at all.'
+      + (body.note ? '<br><span class="warn">' + body.note + '</span>' : ''),
+  };
+}
+
 offlineBtn.onclick = async ev => {
   ev.stopPropagation();
   if (!D.live) return;
@@ -827,6 +860,16 @@ offlineBtn.onclick = async ev => {
     });
     const r = await res.json();
     if (!res.ok) throw new Error(r.error || 'save failed');
+    // The ground rides along with the tiles. Its failure must not undo the
+    // tile save that already worked — the map without 3D is still a map.
+    let ground;
+    offlineBtn.textContent = 'Saving the ground\u2026';
+    try {
+      ground = await saveGroundForView();
+    } catch (err) {
+      ground = { line: '<span class="warn">Tiles saved, but the ground could not be: '
+        + err.message + '. The 3D view of this ground will still need a connection.</span>' };
+    }
     const stats = await (await fetch('/api/tiles/stats')).json();
     const mb = (stats.bytes / 1048576).toFixed(1);
     terrainNote(
@@ -841,7 +884,8 @@ offlineBtn.onclick = async ev => {
         ? '<br><span class="warn">Stopped at the ' + r.max + '-tile limit \u2014 '
           + r.skipped + ' tiles not saved. Zoom in and save a smaller area.</span>'
         : '')
-      + r.refused.map(x => '<br><span class="warn">' + x.why + '</span>').join(''));
+      + r.refused.map(x => '<br><span class="warn">' + x.why + '</span>').join('')
+      + '<br>' + ground.line);
   } catch (err) {
     terrainNote('Could not save tiles: ' + err.message);
   } finally {
@@ -1798,6 +1842,17 @@ async function loadTerrain() {
       + '&radius=' + radius + '&spacing=' + spacing);
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'terrain lookup failed');
+    // Where this ground actually came from, when it is not a live answer.
+    // Two different fallbacks can be under it: the SERVER fell back to its
+    // saved grid because USGS was unreachable (body.note), or the SERVICE
+    // WORKER replayed a saved answer because the server itself was
+    // unreachable (the stamp it puts on everything it stores). Either way the
+    // ground is real and the date is said, because saved ground shown as live
+    // is how you trust a contour that is not there.
+    const swAt = res.headers.get('x-sw-cached-at');
+    const staleLine = (body.note ? '<br><span class="warn">' + body.note + '</span>' : '')
+      + (swAt ? '<br><span class="warn">The server is unreachable — this is the '
+          + 'ground as saved ' + new Date(swAt).toLocaleString() + '.</span>' : '');
     if (!body.covered) {
       // The server says WHY, and it is not always the same reason — no
       // coverage, or a map that has no location at all because no camera
@@ -1838,6 +1893,7 @@ async function loadTerrain() {
           + 'Draws and ridges still hold \u2014 a two-foot draw still carries a trail.</span>'
         : '')
       + (flat ? '<br><span class="warn">Thermals need real slope; this ground has none.</span>' : '')
+      + staleLine
       + '<br>Loaded for this view \u2014 pan, then press Terrain again for new ground.');
   } catch (err) {
     terrainNote('Terrain unavailable: ' + err.message);

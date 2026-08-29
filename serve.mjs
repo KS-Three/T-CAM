@@ -257,7 +257,7 @@ const terrainInFlight = new Map();
  * about 5 KB for a 61x61 grid, against 40 KB for the same thing as JSON
  * numbers.
  */
-export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 }) {
+export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10, fetchImpl } = {}) {
   // spacingM is reassigned below when the area is too large to sample finely.
   const dLat = radiusM / 110540;
   const dLng = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
@@ -302,17 +302,38 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
 
   let grid = terrainGridCovering(db, bounds, spacingM);
   let cached = !!grid;
+  // Set when USGS could not be reached and the answer below is the saved
+  // ground instead of the requested ground. Carried on the response so the
+  // page can say so, because stale data passed off as live is how you trust a
+  // contour that is not there.
+  let note = null;
   if (!grid) {
     const key = [bounds.west, bounds.south, bounds.east, bounds.north, spacingM]
       .map(n => n.toFixed(6)).join(',');
     if (!terrainInFlight.has(key)) {
       terrainInFlight.set(key, (async () => {
-        const fetched = await fetchElevationGrid(bounds, { spacingM });
+        const fetched = await fetchElevationGrid(bounds, { spacingM, fetchImpl });
         saveTerrainGrid(db, fetched);
         return fetched;
       })().finally(() => terrainInFlight.delete(key)));
     }
-    grid = await terrainInFlight.get(key);
+    try {
+      grid = await terrainInFlight.get(key);
+    } catch (err) {
+      // The cabin case: the server is up but the internet is not, and the
+      // exact ground asked for was never fetched. Any SAVED grid under the
+      // centre beats a 502 — the ground does not move, and the person asking
+      // is very likely looking at the same property they saved last week from
+      // a slightly different pan or zoom. Only when nothing stored covers the
+      // spot does the failure surface, because then there is genuinely
+      // nothing to show.
+      grid = terrainGridAt(db, lat, lng);
+      if (!grid) throw err;
+      cached = true;
+      note = 'USGS is unreachable, so this is the saved ground that covers '
+        + 'this spot — it may not reach every edge of the view. '
+        + `(${err.message})`;
+    }
   }
 
   const stats = gridStats(grid);
@@ -336,6 +357,7 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
   return {
     covered: true,
     cached,
+    note,
     bounds: gridBounds(grid),
     grid: { cols: grid.cols, rows: grid.rows, spacingM: grid.spacingM },
     // The raw elevations, for the 3D view to build its mesh from. Same row

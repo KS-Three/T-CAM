@@ -304,14 +304,26 @@ async function main() {
         if (!id || seen.has(id)) continue;
         const url = provider.photoUrl(p, OPT.size);
         if (!url) { warn(`  ${cam.name}: photo ${id} has no downloadable URL, skipped`); continue; }
-        // Stored with forward slashes and relative to the output dir, because
-        // the dashboard loads it as an <img src> from that same folder.
-        const rel = ['photos', safe(cam.name), d ? safe(d.slice(0, 7)) : 'unknown-date', `${id}.jpg`].join('/');
+        // One photo, two path shapes, and they are NOT the same string:
+        //
+        //   - `rel` is relative to the photos/ directory. It is what the
+        //     DATABASE stores, because everything reading it back — the
+        //     server's /photos/ route, photoForClient, recentPhotos — resolves
+        //     it against out/photos and prepends /photos/ for the browser.
+        //   - `'photos/' + rel` is where the file lands on DISK, and what the
+        //     STATIC dashboard.html uses as a relative <img src>, since that
+        //     file sits beside the photos/ directory rather than inside it.
+        //
+        // The first real photos this program ever met arrived with the disk
+        // shape in the database, and every image URL came out as
+        // /photos/photos/... and 404d — details rendered, pictures did not.
+        // Migration 11 heals rows written that way.
+        const rel = [safe(cam.name), d ? safe(d.slice(0, 7)) : 'unknown-date', `${id}.jpg`].join('/');
         if (OPT.dryRun) {
           log(`  [dry] ${cam.name}  ${id}  ${d ?? 'date?'}`);
         } else {
           try {
-            await download(url, path.join(OPT.out, ...rel.split('/')));
+            await download(url, path.join(OPT.out, 'photos', ...rel.split('/')));
           } catch (err) {
             warn(`  ${cam.name}: download failed for ${id} (${err.message}) — will retry next run`);
             continue;
@@ -341,7 +353,7 @@ async function main() {
         meta.push(JSON.stringify({
           id, camera: cam.id, cameraName: cam.name, date: d,
           tags, url,
-          provider: provider.id, file: rel,
+          provider: provider.id, file: 'photos/' + rel,
         }));
         fetched++; totalNew++;
         if (OPT.max && fetched >= OPT.max) {

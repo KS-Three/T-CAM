@@ -67,6 +67,24 @@ test('embedded data cannot break out of its JSON block', () => {
   assert.ok(!html.includes('<img src=x onerror'), 'the tag is escaped, not emitted');
 });
 
+test('the photo grid never draws a broken icon for an undownloaded photo', () => {
+  // An <img> whose src is null renders as a broken icon wearing a real
+  // caption — which is indistinguishable from a lost photo. Listed-but-not-
+  // downloaded rows are counted in a line instead, the same rule the camera
+  // cards use.
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const html = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z');
+  const script = inlineScript(html);
+  const grid = script.slice(script.indexOf("document.getElementById('photoArea')"));
+  const body = grid.slice(0, grid.indexOf('listedOnly)') + 400);
+  assert.match(body, /const onDisk = D\.photos\.filter\(p => p\.file\)/,
+    'only photos on disk get a picture');
+  assert.match(body, /for \(const p of onDisk\.slice/,
+    'and the grid iterates that filtered list, not D.photos');
+  assert.match(body, /listed at SpyPoint but not downloaded yet/,
+    'the rest are counted and explained, not drawn broken');
+});
+
 test('a camera card carries its own latest photos, from what the page already holds', () => {
   // Clicking a camera pin should answer "any deer here?" without a trip to
   // the drawer. The strip is filtered from D.photos — the page carries the

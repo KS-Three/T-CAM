@@ -154,6 +154,16 @@ test('a full sync lands cameras, photos and detections in the database', async t
   assert.equal(photos[0].camera_id, 'spypoint:cam1', 'photo attached to its camera');
   assert.equal(photos[0].hour_utc, '2026-08-21T07:00:00Z', 'hour key set for the weather join');
   assert.ok(photos[0].file_path, 'a downloaded file is recorded');
+  // The SHAPE of that path is the contract, not just its presence — the first
+  // real photos arrived with a photos/ prefix here, every consumer prepended
+  // photos/ again, and each image URL 404d as /photos/photos/... while this
+  // assertion stayed green. The column is relative to the photos directory.
+  for (const ph of photos) {
+    assert.ok(!ph.file_path.startsWith('photos/'),
+      `file_path "${ph.file_path}" carries the on-disk prefix — the serving route will double it`);
+    assert.ok(fs.existsSync(path.join(out, 'photos', ...ph.file_path.split('/'))),
+      `resolving "${ph.file_path}" against out/photos must land on the downloaded file`);
+  }
   assert.equal(photos[2].camera_id, 'spypoint:cam2');
 
   // The camera's own AI tags become unconfirmed machine claims, one row per tag.

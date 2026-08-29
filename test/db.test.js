@@ -35,6 +35,37 @@ test('migrations are idempotent — reopening does not re-apply them', () => {
   assert.equal(migrate(b), v, 'running migrate again is a no-op');
 });
 
+test('migration 11 heals photo paths written with the on-disk prefix', () => {
+  // The first real photos ever synced landed in the database as
+  // photos/Camera/2026-08/id.jpg — the on-disk shape — while every reader
+  // resolves file_path against out/photos already, so each image URL doubled
+  // to /photos/photos/... and 404d. The migration strips the prefix from rows
+  // written before the sync was fixed; this replays that exact state.
+  const dir = tmp();
+  const a = openDb(dir);
+  upsertCamera(a, norm(FLEX_M), { provider: 'spypoint', accountLabel: 'kent' });
+  upsertPhoto(a, { provider: 'spypoint', cameraId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    nativeId: 'pfx1', takenAt: '2026-08-29T10:14:53.000Z',
+    filePath: 'North_Ridge/2026-08/pfx1.jpg' });
+  // Recreate the broken shape and un-record the migration, as if this database
+  // had been written by the old sync and never opened since.
+  a.prepare("UPDATE photos SET file_path = 'photos/' || file_path").run();
+  a.prepare('DELETE FROM schema_version WHERE version = 11').run();
+  a.close();
+
+  const b = openDb(dir);
+  const row = b.prepare('SELECT file_path FROM photos').get();
+  assert.equal(row.file_path, 'North_Ridge/2026-08/pfx1.jpg',
+    'the prefix is gone and nothing else moved');
+  // And a path that never had the prefix is left alone on yet another reopen —
+  // the WHERE guards it even if the migration record were lost again.
+  b.prepare('DELETE FROM schema_version WHERE version = 11').run();
+  b.close();
+  const c = openDb(dir);
+  assert.equal(c.prepare('SELECT file_path FROM photos').get().file_path,
+    'North_Ridge/2026-08/pfx1.jpg');
+});
+
 test('foreign keys are enforced, not decorative', () => {
   // SQLite disables them by default; if the PRAGMA is ever dropped, orphan rows
   // would be accepted silently and the joins would quietly lose data.

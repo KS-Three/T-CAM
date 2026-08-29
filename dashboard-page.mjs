@@ -307,6 +307,28 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
                background: var(--panel); color: var(--ink); }
   #drawerBtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* The ground switcher: which piece of land the map is looking at. Appears
+     only once there are two grounds to choose between, so a single property
+     never sees it. Capped in width so two long names cannot push the Camp
+     report button off a phone screen. */
+  #groundSel { max-width: 34vw; padding: 6px; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+               border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+               background: var(--panel); color: var(--ink); }
+  #groundName { width: 160px; max-width: 34vw; padding: 6px 8px;
+                font: 12px/1 ui-sans-serif, system-ui, sans-serif;
+                border: 1px solid var(--accent); border-radius: 6px;
+                background: var(--panel); color: var(--ink); }
+  /* On a phone the bar has no room for a fourth control — measured: the
+     switcher pushed Camp report clean off a 390px screen, and a chip under
+     the bar covered the Tools button (also measured; that corner is taken).
+     Bottom-centre is the one clear spot — the layer swatch owns bottom-left,
+     attribution bottom-right — and it is where a thumb already is. */
+  @media (max-width: 560px) {
+    #groundSel, #groundName { position: fixed; top: auto; bottom: 30px;
+                              left: 50%; transform: translateX(-50%); z-index: 6;
+                              max-width: 46vw;
+                              box-shadow: 0 1px 6px rgba(0,0,0,.35); }
+  }
   /* Everything pinned to the map's top edge drops below the bar. */
   .zoom { top: 52px; }
   .maptools { top: 52px; }
@@ -345,6 +367,7 @@ ${mapMarkup}
     <div class="sub" id="plan"></div>
   </div>
   <div class="tb-links">
+    <select id="groundSel" hidden title="Which ground to look at"></select>
     <a class="tonight first" id="tonightLink" href="/tonight" hidden>Tonight &rarr;</a>
     <a class="tonight" id="journalLink" href="/journal" hidden>Journal</a>
     <button id="drawerBtn" type="button">Camp report</button>

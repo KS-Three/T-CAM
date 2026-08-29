@@ -612,6 +612,37 @@ export function upsertProperty(db, name, notes = null) {
   return db.prepare('SELECT * FROM properties WHERE name = ?').get(name);
 }
 
+export const allProperties = db => db.prepare(`
+  SELECT p.*,
+         (SELECT COUNT(*) FROM cameras c WHERE c.property_id = p.id) AS cameras,
+         (SELECT COUNT(*) FROM stands s  WHERE s.property_id = p.id) AS stands,
+         (SELECT COUNT(*) FROM markers m WHERE m.property_id = p.id) AS markers
+  FROM properties p ORDER BY p.name
+`).all();
+
+/**
+ * Put a set of things onto a property in one act — how naming a ground on the
+ * map does its bookkeeping. Assignment is by explicit id list, never by
+ * geography here: the caller names exactly what it showed the person, so what
+ * got assigned is what they looked at when they typed the name.
+ */
+export function assignPropertyMembers(db, propertyId,
+  { cameraIds = [], standIds = [], markerIds = [] } = {}) {
+  const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propertyId);
+  if (!property) throw new Error(`no property with id ${propertyId}`);
+  let assigned = 0;
+  const put = (table, ids) => {
+    const stmt = db.prepare(`UPDATE ${table} SET property_id = ? WHERE id = ?`);
+    for (const id of ids) assigned += stmt.run(propertyId, id).changes;
+  };
+  put('cameras', cameraIds.map(String));
+  // Numeric ids arrive over JSON as numbers or strings; a non-number matches
+  // no row and is counted by the shortfall in `assigned`, not guessed at.
+  put('stands', standIds.map(Number).filter(Number.isFinite));
+  put('markers', markerIds.map(Number).filter(Number.isFinite));
+  return { property, assigned };
+}
+
 /**
  * Find or create the weather location covering a point, matching on actual
  * distance rather than a grid cell so adjacent cameras genuinely share a record.
@@ -1108,7 +1139,11 @@ export const deleteMarker = (db, id) =>
  * without the reader doing date arithmetic in their head.
  */
 export function allMarkers(db, { now = new Date() } = {}) {
-  return db.prepare('SELECT * FROM markers ORDER BY kind, id').all().map(m => ({
+  return db.prepare(`
+    SELECT m.*, p.name AS property_name
+    FROM markers m LEFT JOIN properties p ON p.id = m.property_id
+    ORDER BY m.kind, m.id
+  `).all().map(m => ({
     ...m,
     label: MARKER_LABELS[m.kind] ?? m.kind,
     // null, not 0: sign with no date recorded is of UNKNOWN age, which is a

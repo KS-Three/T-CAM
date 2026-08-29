@@ -160,6 +160,31 @@ valuable thing this dataset could surface — and it is invisible if identity is
 walled off per property. The cost is that Kent's naming judgement is authoritative
 across everyone's cameras.
 
+### Grounds are discovered, named once (settled 2026-08-29)
+
+Two hunting lands made the map's frame-on-everything open at a zoom where each
+parcel is a speck, so the map got a switcher — and the design question was how
+things end up belonging to a property at all.
+
+- **Geography decides membership, not forms.** A "ground" is a cluster of
+  everything placed, at a 2 km walking-distance gap (single-linkage, so a long
+  skinny property chains into one piece). A stand dropped on the far parcel
+  next week is in the right ground because it is THERE. No stand, marker, or
+  camera form grew a property picker; a field filled in by hand on every save
+  is busywork, and a field nobody fills is a lie.
+- **Naming is the one deliberate act.** An unnamed ground is honestly labelled
+  by its contents ("2 stands"); typing a name creates the `properties` row and
+  assigns exactly the members that were on screen. Labels afterwards come from
+  members' own property names, majority-wins, so one stray row cannot relabel
+  a ground and new unassigned pins cannot unlabel one.
+- **The switcher frames; it does not filter.** Pins elsewhere stay drawn, and
+  the planner and /tonight keep ranking across both lands — you can drive to
+  either, and "the best sit tonight is at the other place" is exactly the kind
+  of answer this tool exists to give. If per-property filtering is ever wanted,
+  it is a new decision, not a default.
+- Two properties across the road from each other merge into one ground. That is
+  accepted: ground you can walk between is one hunt, and the frame covers both.
+
 ## 9. The planner answers WHEN; the sightings answer WHERE
 
 This is the decision the discussion improved most, and the reasoning is worth

@@ -79,6 +79,7 @@ Rules for anything added from here:
 | **Photo path fix + healing migration** — real photos 404d as `/photos/photos/…`; sync fixed, migration 11 strips the prefix from rows already written | Replicated Kent's exact broken state (prefixed rows, files on disk, migration unrecorded), opened through the real server: paths healed on startup, photo served 200 image/jpeg, drawer grid and card strips all rendering with loaded thumbnails |
 | **Photo lightbox** — click a photo anywhere and it expands; arrows/keys/swipe walk the list it came from | Driven in a browser against healed real-shape photos: opened from grid and card strip, arrowed to both ends (stops, no wrap), Esc and backdrop close, key handler detached on close |
 | **Species suggestions in review** — the camera's own AI tag renders as "The camera thinks", apart from your tags; Y (or a click) agrees, writing YOUR confirmed tag while the claim stays behind unconfirmed | Driven in a browser with real keys against sync-shape rows: 'buck' offered as deer with the vendor's word shown, 'lynx' listed verbatim and refused a key, Y idempotent, naming refused until a person had tagged, the buck landing on the manual row, machine rows untouched, and the ranking counting exactly the one confirmed deer |
+| **Ground switcher** — two hunting lands, one dropdown in the top bar; grounds discovered by clustering everything placed (2 km walking-distance gap), naming one creates the property row and assigns its members | Driven in a browser at desktop and emulated phone width: two clusters 21 km apart seeded, jumped between, named through real key events ("Dans Place" — its 2 stands assigned, the home ground's rows untouched), reload reopened framed on it; the phone chip measured clear of Tools and Camp report after two placement bugs that only measurement caught |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -461,3 +462,10 @@ Two smaller notes:
   invisible to `element.click()` — which dispatches straight at the element —
   and only appeared under a real mouse press, because pointer capture is what
   broke it. Verify map controls by driving the mouse.
+- **`backdrop-filter` makes a containing block.** `position: fixed` inside the
+  top bar pins to the BAR, not the screen, because the bar's backdrop-filter
+  (like `filter` and `transform`) becomes the containing block for fixed
+  descendants. The ground switcher's phone chip did exactly that — computed
+  `top: -14.5px`, visibly nowhere — so the script moves it to `body` before
+  the fixed styling applies. Anything else made fixed from inside the bar or
+  the drawer will repeat this.

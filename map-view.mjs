@@ -4043,47 +4043,16 @@ let drag = null;
 // the threshold also absorbs the wobble of a finger on glass.
 const DRAG_SLOP_PX = 5;
 let dragged = false;
-// Every pointer currently down on the ground. One is a pan; two are a pinch.
-// Before this existed a second finger was invisible: both fingers fed the
-// same pan state in turn and the map flew about, which on a phone is exactly
-// the moment someone was TRYING to zoom — the likeliest way to end up zoomed
-// all the way out with no idea how you got there.
-const mapPts = new Map();
-let pinch = null;        // { d0, z0 } while two fingers are down
 mapEl.addEventListener('pointerdown', e => {
   // Same test as the click handler, deliberately: pressing a control must not
   // start a drag, and must not capture the pointer away from that control.
   if (!onMapGround(e.target)) return;
-  mapEl.setPointerCapture(e.pointerId);
-  mapPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (mapPts.size === 2) {
-    const two = [...mapPts.values()];
-    pinch = { d0: Math.hypot(two[0].x - two[1].x, two[0].y - two[1].y), z0: zoom };
-    drag = null;             // two fingers zoom; they do not also pan
-    dragged = true;          // and the release must not read as a tap
-    mapEl.classList.remove('drag');
-    return;
-  }
   drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   dragged = false;
   mapEl.classList.add('drag');
+  mapEl.setPointerCapture(e.pointerId);
 });
 mapEl.addEventListener('pointermove', e => {
-  if (pinch && mapPts.has(e.pointerId)) {
-    mapPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const two = [...mapPts.values()];
-    const d = Math.hypot(two[0].x - two[1].x, two[0].y - two[1].y);
-    if (d < 1 || pinch.d0 < 1) return;
-    // Whole levels, because the tiles only exist at whole levels: the spread
-    // between the fingers picks the level, log2 because each level doubles.
-    const want = pinch.z0 + Math.round(Math.log2(d / pinch.d0));
-    if (want !== zoom) {
-      const r = mapEl.getBoundingClientRect();
-      setZoomAt(want, (two[0].x + two[1].x) / 2 - r.left,
-                      (two[0].y + two[1].y) / 2 - r.top);
-    }
-    return;
-  }
   if (!drag) return;
   if (Math.abs(e.clientX - drag.x0) > DRAG_SLOP_PX
       || Math.abs(e.clientY - drag.y0) > DRAG_SLOP_PX) dragged = true;
@@ -4096,90 +4065,23 @@ mapEl.addEventListener('pointermove', e => {
   draw();
 });
 for (const ev of ['pointerup', 'pointercancel'])
-  mapEl.addEventListener(ev, e => {
-    mapPts.delete(e.pointerId);
-    if (mapPts.size < 2) pinch = null;
-    if (!mapPts.size) { drag = null; mapEl.classList.remove('drag'); }
-    else if (mapPts.size === 1) {
-      // The finger that stays after a pinch may keep panning, measured from
-      // where it is NOW — measured from where it began, the map would leap.
-      const p = [...mapPts.values()][0];
-      drag = { x: p.x, y: p.y, x0: p.x, y0: p.y };
-    }
-  });
+  mapEl.addEventListener(ev, () => { drag = null; mapEl.classList.remove('drag'); });
 // Each layer has its own deepest usable zoom — USGS topo stops well short of
 // the imagery — so clamp against the active layer rather than a fixed 19,
 // otherwise zooming in past coverage silently paints blank tiles.
 //
-// Zoom keeps the ground under the given SCREEN POINT still — the cursor, the
-// pinch midpoint, the double-click. Zooming about the centre instead meant
-// the thing you were aiming at slid away with every step, and zooming back
-// in to your ground was a fight of zoom-pan-zoom-pan.
-const setZoomAt = (z, px, py) => {
-  z = Math.max(2, Math.min(LAYERS[layerKey].maxZoom, z));
-  if (z === zoom) return;
-  const at = pixelToLatLng(px, py);
-  zoom = z;
-  const W = mapEl.clientWidth, H = mapEl.clientHeight;
-  const n = TS * 2 ** zoom;
-  const cx = projX(at.lng, zoom) - (px - W / 2);
-  const cy = projY(at.lat, zoom) - (py - H / 2);
-  centre = {
-    lng: cx / n * 360 - 180,
-    lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * cy / n))) * 180 / Math.PI,
-  };
-  draw();
-};
-const setZoom = z => setZoomAt(z, mapEl.clientWidth / 2, mapEl.clientHeight / 2);
-document.getElementById('zin').onclick = () => setZoom(zoom + 1);
-document.getElementById('zout').onclick = () => setZoom(zoom - 1);
-// One press puts the view back on your ground: the chosen ground when there
-// is one, everything placed otherwise. The escape hatch for "suddenly zoomed
-// all the way out" — however the view got lost, this is one tap home.
-document.getElementById('zhome').onclick = () => {
-  const g = GROUND_LIST.find(x => groundKey(x) === groundChoice);
-  if (g) return frameGround(g);
-  const pts = groundPoints().map(p => [p.lng, p.lat]);
-  if (pts.length) { ({ centre, zoom } = frameFor(pts)); draw(); }
-};
-// The wheel accumulates. One wheel EVENT used to be one whole zoom level, and
-// a trackpad fires dozens of events per flick — a light two-finger scroll
-// threw the map from the property to the whole hemisphere, which is exactly
-// the "suddenly zoomed all the way out" this replaces. Notches now buy a
-// level per ~90 px of delta, anchored under the cursor, and the residue dies
-// after a pause so a slow single notch still steps exactly once.
-let wheelAcc = 0, wheelAt = 0;
-mapEl.addEventListener('wheel', e => {
-  e.preventDefault();
-  const now = performance.now();
-  if (now - wheelAt > 250) wheelAcc = 0;
-  wheelAt = now;
-  // deltaMode 1 is lines (Firefox with a real mouse); ~33 px a line.
-  const d = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
-  if (Math.sign(d) !== Math.sign(wheelAcc)) wheelAcc = 0;
-  wheelAcc += d;
-  const STEP = 90;
-  const steps = Math.trunc(wheelAcc / STEP);
-  if (!steps) return;
-  wheelAcc -= steps * STEP;
-  const r = mapEl.getBoundingClientRect();
-  setZoomAt(zoom - steps, e.clientX - r.left, e.clientY - r.top);
-}, { passive: false });
-// Double-click zooms in a level on the spot clicked — but never while a mode
-// is armed, where the two clicks were two placements, not a gesture.
-mapEl.addEventListener('dblclick', e => {
-  if (!onMapGround(e.target)) return;
-  if (placing || marking || drawing || measuring || identifying || laneEdit
-      || fielding || entryPick) return;
-  e.preventDefault();
-  const r = mapEl.getBoundingClientRect();
-  setZoomAt(zoom + 1, e.clientX - r.left, e.clientY - r.top);
-});
 // Zoom happens ABOUT A POINT: the ground under the cursor stays under the
 // cursor. Without the anchor, zooming back in from a wide view kept the
 // viewport centre — usually empty air between the properties — so getting
 // home was zoom, pan, zoom, pan. The buttons anchor the middle of the
 // screen, which is what they always did.
+//
+// (2026-08-29: two sessions answered the same zoom complaint and the merge of
+// main kept BOTH handler sets — two declarations of setZoom, which is a
+// page-breaking SyntaxError only the compile test catches. This is the
+// reconciliation: main's shapes and names, plus the parts only this branch
+// had — the bank's pause reset, double-click, the home button, and the pan
+// hand-off when a pinch ends with one finger still down.)
 function zoomAt(z, atX, atY) {
   z = Math.max(2, Math.min(LAYERS[layerKey].maxZoom, z));
   if (z === zoom) return;
@@ -4199,14 +4101,28 @@ function zoomAt(z, atX, atY) {
 const setZoom = z => zoomAt(z);
 document.getElementById('zin').onclick = () => setZoom(zoom + 1);
 document.getElementById('zout').onclick = () => setZoom(zoom - 1);
+// One press puts the view back on your ground: the chosen ground when there
+// is one, everything placed otherwise. The escape hatch for "suddenly zoomed
+// all the way out" — however the view got lost, this is one tap home.
+document.getElementById('zhome').onclick = () => {
+  const g = GROUND_LIST.find(x => groundKey(x) === groundChoice);
+  if (g) return frameGround(g);
+  const pts = groundPoints().map(p => [p.lng, p.lat]);
+  if (pts.length) { ({ centre, zoom } = frameFor(pts)); draw(); }
+};
 // A clicky wheel notch is ±100-ish pixels of delta and means one step. A
 // trackpad flick is DOZENS of small deltas — and stepping once per EVENT was
 // how the map ended up "suddenly zoomed all the way out": a two-finger nudge
 // became fifteen steps. Deltas bank up instead; every hundred pixels spends
-// one step, at the cursor.
-let wheelBank = 0;
+// one step, at the cursor. A flick's residue must not carry into the next
+// gesture: after a pause, or a change of direction, the bank starts empty, so
+// one slow clicky notch is always exactly one step and never two.
+let wheelBank = 0, wheelAt = 0;
 mapEl.addEventListener('wheel', e => {
   e.preventDefault();
+  const now = performance.now();
+  if (now - wheelAt > 250 || Math.sign(e.deltaY) !== Math.sign(wheelBank)) wheelBank = 0;
+  wheelAt = now;
   wheelBank += e.deltaMode === 1 ? e.deltaY * 33
     : e.deltaMode === 2 ? e.deltaY * mapEl.clientHeight : e.deltaY;
   const steps = Math.trunc(wheelBank / 100);
@@ -4214,6 +4130,15 @@ mapEl.addEventListener('wheel', e => {
   wheelBank -= steps * 100;
   zoomAt(zoom - steps, e.clientX, e.clientY);
 }, { passive: false });
+// Double-click zooms in a level on the spot clicked — but never while a mode
+// is armed, where the two clicks were two placements, not a gesture.
+mapEl.addEventListener('dblclick', e => {
+  if (!onMapGround(e.target)) return;
+  if (placing || marking || drawing || measuring || identifying || laneEdit
+      || fielding || entryPick) return;
+  e.preventDefault();
+  zoomAt(zoom + 1, e.clientX, e.clientY);
+});
 // Two fingers is zoom. Tiles only exist at whole levels, so a pinch steps:
 // every third-or-so change of the finger gap is one level, about the
 // midpoint. The pan is cancelled the moment the second finger lands — half a
@@ -4242,6 +4167,14 @@ for (const ev of ['pointerup', 'pointercancel']) {
   mapEl.addEventListener(ev, e => {
     touches.delete(e.pointerId);
     if (touches.size < 2) pinch = null;
+    // The finger that stays after a pinch may keep panning, measured from
+    // where it is NOW — the pan's own pointerup already nulled the drag for
+    // the lifted pointer, so this restart cannot fight it. Without it the
+    // map went dead under the remaining finger until it was lifted too.
+    if (touches.size === 1 && !drag) {
+      const p = [...touches.values()][0];
+      drag = { x: p.x, y: p.y, x0: p.x, y0: p.y };
+    }
   });
 }
 addEventListener('resize', draw);

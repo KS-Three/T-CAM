@@ -13,44 +13,49 @@ import { mapScript, mapMarkup, mapStyles } from '../map-view.mjs';
 import { dashboardHtml } from '../dashboard-page.mjs';
 import { CROP_KINDS } from '../db.mjs';
 
-test('the wheel accumulates instead of stepping a level per event', () => {
-  // One wheel EVENT used to be one whole zoom level, and a trackpad fires
-  // dozens per flick — the "suddenly zoomed all the way out" report. The
-  // accumulator, its reset on pause, and the lines-mode conversion are the
-  // three parts that fix it; losing any one brings the fling back.
-  assert.match(mapScript, /wheelAcc \+= d;/, 'deltas accumulate');
-  assert.match(mapScript, /if \(now - wheelAt > 250\) wheelAcc = 0;/,
-    'the residue dies after a pause, so one slow notch is one step');
-  assert.match(mapScript, /e\.deltaMode === 1 \? 33 : 1/, 'line-mode wheels are converted');
+test('the wheel bank forgets between gestures, and the old handler is gone', () => {
+  // Two sessions fixed the same "suddenly zoomed all the way out" bug and the
+  // merge briefly kept BOTH handler sets — two `const setZoom`s, a page that
+  // did not parse. main's own test (map-framing) pins the bank, the 100-px
+  // step and the cursor anchor; what THIS branch adds on top is pinned here:
+  // the bank's residue dies on a pause or a direction change, so a slow
+  // clicky notch after a flick is exactly one step, never two.
+  assert.match(mapScript,
+    /if \(now - wheelAt > 250 \|\| Math\.sign\(e\.deltaY\) !== Math\.sign\(wheelBank\)\) wheelBank = 0;/,
+    'the bank starts empty after a pause or a direction change');
   assert.doesNotMatch(mapScript, /setZoom\(zoom \+ \(e\.deltaY < 0 \? 1 : -1\)\)/,
     'the old level-per-event handler is gone');
+  assert.equal((mapScript.match(/const setZoom = /g) || []).length, 1,
+    'exactly one setZoom — the duplicated pair was a SyntaxError only compiling caught');
+  assert.equal((mapScript.match(/addEventListener\('wheel'/g) || []).length, 2,
+    'one wheel handler on the map, one in the 3D view — never two on the map');
 });
 
 test('zoom anchors on the pointer, and the buttons on the centre', () => {
-  assert.match(mapScript, /const setZoomAt = \(z, px, py\) =>/,
+  assert.match(mapScript, /function zoomAt\(z, atX, atY\)/,
     'one function knows how to zoom about a screen point');
-  assert.match(mapScript, /const at = pixelToLatLng\(px, py\);/,
-    'the ground under the anchor is held still');
-  assert.match(mapScript, /setZoomAt\(zoom - steps, e\.clientX - r\.left, e\.clientY - r\.top\)/,
-    'the wheel zooms about the cursor');
-  assert.match(mapScript, /const setZoom = z => setZoomAt\(z, mapEl\.clientWidth \/ 2/,
-    'the +/− buttons stay centre-anchored');
+  assert.match(mapScript, /const px = atX === undefined \? W \/ 2 : atX - rect\.left;/,
+    'no point given means the centre — which is what the +/− buttons pass');
+  assert.match(mapScript, /const setZoom = z => zoomAt\(z\);/,
+    'the buttons stay centre-anchored');
 });
 
-test('two fingers pinch — they must never feed the pan', () => {
-  // Before this, both fingers of an attempted pinch fed the same pan state in
-  // turn and the map flew about. The pinch state, the pan cut-off when the
-  // second finger lands, and whole-level steps are each asserted.
-  assert.match(mapScript, /if \(mapPts\.size === 2\) \{/, 'a second finger is recognised');
-  assert.match(mapScript, /drag = null;\s*\/\/ two fingers zoom; they do not also pan/,
-    'the pan stops the moment a pinch starts');
-  assert.match(mapScript, /Math\.round\(Math\.log2\(d \/ pinch\.d0\)\)/,
-    'finger spread picks whole tile levels');
+test('a pinch hands the pan back to the finger that stays', () => {
+  // main's test pins that the second finger ends the pan; this branch adds
+  // the other half of that gesture: when the pinch ends with one finger
+  // still down, that finger pans again from where it is NOW — without the
+  // hand-off the map went dead under it until it was lifted too.
+  assert.match(mapScript, /if \(touches\.size === 1 && !drag\) \{/,
+    'the remaining finger is noticed');
+  assert.match(mapScript, /drag = \{ x: p\.x, y: p\.y, x0: p\.x, y0: p\.y \};/,
+    'and the pan restarts from its current position');
 });
 
 test('double-click zooms in, except while a placing mode is armed', () => {
   const dbl = mapScript.slice(mapScript.indexOf("addEventListener('dblclick'"));
   assert.ok(dbl.length > 100, 'the handler exists');
+  assert.match(dbl.slice(0, 500), /zoomAt\(zoom \+ 1, e\.clientX, e\.clientY\)/,
+    'one level in, anchored on the spot clicked');
   for (const mode of ['placing', 'marking', 'drawing', 'measuring', 'fielding', 'entryPick']) {
     assert.ok(dbl.slice(0, 400).includes(mode),
       `${mode} suppresses the double-click zoom — those clicks were placements`);

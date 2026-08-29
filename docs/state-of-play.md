@@ -76,16 +76,24 @@ Rules for anything added from here:
 | **3D view** — imagery draped over the 3DEP grid, orbit/zoom/slide, relief slider 1–4×, pins riding the ground | Driven headless over real USGS LiDAR (222 ft of relief) and real Esri tiles: orbit moved the pins, report opened off the terrain, exit clean; mesh/matrix maths unit-tested in Node and compared against the browser copy |
 | **3D offline** — Save offline keeps the ground and the drape; the server answers terrain from its database when USGS is down, and the service worker replays covering ground when the server is down | Driven end to end: saved with a real mouse (306 Esri tiles + the grid), server killed, page reloaded from the worker, map panned so no URL matched, 3D built and rendered with pins riding the ground; the cabin case separately, USGS pointed at a dead port and the note naming the fallback |
 | **Camera photos on the card** — a camera's latest photos as a thumbnail strip on its card, map panel and drawer alike | Driven in a browser against seeded photos (real JPEG files on disk): three thumbs loaded, the buck tag in the tooltip, the photo-less camera showing its honest empty line, drawer and panel identical |
+| **Photo path fix + healing migration** — real photos 404d as `/photos/photos/…`; sync fixed, migration 11 strips the prefix from rows already written | Replicated Kent's exact broken state (prefixed rows, files on disk, migration unrecorded), opened through the real server: paths healed on startup, photo served 200 image/jpeg, drawer grid and card strips all rendering with loaded thumbnails |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
 
 ## Not working / not built
 
-- **No photos exist yet.** The account's cameras have been silent since
-  November 2025. Photo download and paging are written and unit-tested but have
-  **never run against a real photo**. Everything downstream — tagging, buck
-  identity, movement analysis — is therefore unexercised.
+- **Real photos arrived 2026-08-29** — the cameras came back to life after
+  nine silent months: 4 cameras transmitting, 30 photos the first day. The
+  first real run found exactly the class of bug this section predicted: the
+  sync stored `file_path` with a `photos/` prefix (the on-disk shape) while
+  every reader resolves the column against `out/photos` already, so each image
+  URL doubled to `/photos/photos/…` and 404d — captions rendered over broken
+  pictures. Fixed in the sync, healed for already-written rows by migration
+  11, and the integration test now pins the path SHAPE rather than just its
+  presence. Downstream — tagging, buck identity, movement analysis — is now
+  exercisable for the first time; the review loop has still only been driven
+  against stand-in frames.
 - **Moultrie is not implemented** and refuses with an explanation. Blocked on
   one session capture: [`moultrie-capture.md`](moultrie-capture.md).
 - **Phone app** — deliberately last, gated on the rest proving out. The server's

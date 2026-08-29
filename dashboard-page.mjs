@@ -807,16 +807,30 @@ if (!D.photos.length) {
     : 'No photos have been synced yet. Run the script without --dry-run to download them.';
   area.appendChild(el('div', 'empty', why));
 } else {
-  const g = el('div', 'photos');
-  for (const p of D.photos.slice(0, 60)) {
-    const f = document.createElement('figure');
-    const i = new Image(); i.src = p.file; i.alt = p.cameraName + ' ' + fmtDate(p.date);
-    i.loading = 'lazy';
-    const cap = el('figcaption', null,
-      p.cameraName + ' \u00b7 ' + fmtDate(p.date) + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : ''));
-    f.append(i, cap); g.appendChild(f);
+  // Only photos ON DISK get a picture. A photo the sync has listed but not
+  // downloaded has no file, and an <img> with a null src renders as a broken
+  // icon wearing a real caption — which reads as "the app lost my photo"
+  // when the truth is "the sync has not fetched this one yet". So those are
+  // counted in a line instead of drawn, the same rule the camera cards use.
+  const onDisk = D.photos.filter(p => p.file);
+  if (onDisk.length) {
+    const g = el('div', 'photos');
+    for (const p of onDisk.slice(0, 60)) {
+      const f = document.createElement('figure');
+      const i = new Image(); i.src = p.file; i.alt = p.cameraName + ' ' + fmtDate(p.date);
+      i.loading = 'lazy';
+      const cap = el('figcaption', null,
+        p.cameraName + ' \u00b7 ' + fmtDate(p.date) + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : ''));
+      f.append(i, cap); g.appendChild(f);
+    }
+    area.appendChild(g);
   }
-  area.appendChild(g);
+  const listedOnly = D.photos.length - onDisk.length;
+  if (listedOnly) {
+    area.appendChild(el('div', onDisk.length ? 'stale-note' : 'empty',
+      plural(listedOnly, 'photo') + ' listed at SpyPoint but not downloaded yet \u2014 '
+      + 'the sync fetches them on its next run.'));
+  }
 }
 </script>
 </body>

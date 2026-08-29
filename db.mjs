@@ -494,6 +494,26 @@ const MIGRATIONS = [
       db.exec('ALTER TABLE stands ADD COLUMN lanes TEXT;');
     },
   },
+  {
+    version: 11,
+    name: 'photo paths relative to the photos directory',
+    up: db => {
+      // The first real photos ever synced were stored with a photos/ prefix
+      // on file_path — the ON-DISK shape — while everything reading the
+      // column back (the /photos/ route, photoForClient, recentPhotos)
+      // resolves it against out/photos already. Every image URL doubled up
+      // as /photos/photos/... and 404d, so the dashboard showed captions
+      // over broken pictures. The sync now stores the relative shape; this
+      // heals what was written before it did.
+      //
+      // substr(_, 8) drops exactly the seven characters of 'photos/' plus
+      // nothing else, and the WHERE keeps it from ever running twice even if
+      // the migration record were lost.
+      db.exec(`UPDATE photos
+                 SET file_path = substr(file_path, 8)
+               WHERE file_path LIKE 'photos/%';`);
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];

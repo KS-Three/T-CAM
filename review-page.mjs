@@ -23,6 +23,13 @@
  *    thousands of frames; a mouse round trip per frame is the difference
  *    between an evening's work and never finishing.
  *
+ * 4. The camera's own AI tag is a SUGGESTION, never a tag. It renders apart
+ *    from your tags, in the vendor's own words; agreeing (Y, or a click)
+ *    writes YOUR tag, and the unconfirmed claim stays behind as the record of
+ *    what the machine said. The first real photos arrived looking already
+ *    tagged, which made Enter feel natural and left every guess unconfirmed —
+ *    and unconfirmed means invisible to the stand ranking.
+ *
  * A separate page from the dashboard on purpose: this is a task you sit down to
  * do, not something to glance at beside a map.
  */
@@ -101,6 +108,18 @@ export function reviewHtml({ species = [], bucks = [], remaining = 0 } = {}) {
   .tags button { background: none; border: 0; color: var(--bad); cursor: pointer;
                  font-size: 15px; padding: 0 4px; }
   .empty { color: var(--muted); font-size: 13px; font-style: italic; }
+
+  .suggest { margin-top: 10px; padding: 9px 10px 10px; border: 1px dashed var(--line);
+             border-radius: 7px; }
+  .suggest .who { font-size: 10px; color: var(--muted); text-transform: uppercase;
+                  letter-spacing: .08em; }
+  .suggest button { display: block; width: 100%; margin-top: 6px; padding: 8px 9px;
+                    cursor: pointer; font: 600 13px/1.3 inherit; text-align: left;
+                    background: var(--bg); color: var(--ink);
+                    border: 1px solid var(--line); border-radius: 6px; }
+  .suggest button:hover { border-color: var(--accent); }
+  .suggest .word { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .suggest .note { margin-top: 7px; font-size: 11px; color: var(--muted); font-style: italic; }
 
   label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
   select, input { width: 100%; padding: 7px 9px; font: inherit; font-size: 13px;
@@ -249,11 +268,18 @@ function render() {
 
   const tagCard = el('div', 'card');
   tagCard.appendChild(el('h2', null, 'What was there?'));
+
+  // A person's tags and the camera's own guesses are different facts, and the
+  // first real photos proved the screen has to say so: SpyPoint's AI tag
+  // rendered exactly like a human tag, so a visit arrived looking already
+  // tagged, Enter felt natural, and the guess stayed unconfirmed for ever —
+  // invisible to the ranking, which counts only confirmed sightings.
+  const human = visit.detections.filter(d => d.source !== 'camera-ai');
   const list = el('ul', 'tags');
-  if (!visit.detections.length) {
+  if (!human.length) {
     list.appendChild(el('li', 'empty', 'Nothing tagged yet.'));
   } else {
-    for (const d of visit.detections) {
+    for (const d of human) {
       const li = document.createElement('li');
       const what = el('span', 'what');
       what.textContent = (d.count > 1 ? d.count + ' ' : '') + (d.species || 'unidentified');
@@ -270,6 +296,42 @@ function render() {
     }
   }
   tagCard.appendChild(list);
+
+  // The camera's guesses, kept apart from the tags and never deletable: they
+  // are the machine's claim, not yours, and agreeing writes YOUR tag rather
+  // than promoting the guess. The claim rows stay behind untouched — they are
+  // the record of what the vendor's AI said, right or wrong.
+  const sug = suggestions();
+  if (sug.mapped.length || sug.unmapped.length) {
+    const box = el('div', 'suggest');
+    box.appendChild(el('div', 'who', 'The camera thinks'));
+    const have = new Set(human.map(d => d.species));
+    for (const g of sug.mapped) {
+      const said = g.words.filter(w => w !== g.species);
+      const saidTxt = said.length
+        ? ' (it said \\u201c' + said.join('\\u201d, \\u201c') + '\\u201d)' : '';
+      // Already tagged: the claim is settled, so it must stop being a button —
+      // a second click would turn one deer into two.
+      if (have.has(g.species)) {
+        box.appendChild(el('div', 'word', g.species + saidTxt + ' \\u2014 agreed'));
+        continue;
+      }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = g.species + saidTxt + ' \\u2014 agree?';
+      b.onclick = () => tag(g.species);
+      box.appendChild(b);
+    }
+    for (const w of sug.unmapped) {
+      box.appendChild(el('div', 'word',
+        'It says \\u201c' + w + '\\u201d \\u2014 not a species this tool tracks; tag what you see.'));
+    }
+    if (sug.mapped.length) {
+      box.appendChild(el('div', 'note',
+        'A guess is not evidence until you agree. Y agrees with all of it.'));
+    }
+    tagCard.appendChild(box);
+  }
 
   const keys = el('div', 'keys');
   const addBtn = (label, key, fn, cls) => {
@@ -323,6 +385,57 @@ function render() {
 
 // ---- actions ----------------------------------------------------------
 
+/**
+ * The camera's claims on this visit, grouped for the suggestion box.
+ *
+ * Grouped by the species each claim maps onto, not by the vendor's word: these
+ * cameras tag every frame, so a six-frame deer arrives as six claims (and
+ * 'buck' and 'deer' both mean deer here) — one button per species is one
+ * animal to agree about, which is the visit grain everything else uses. Words
+ * that map to nothing are listed verbatim instead of guessed at.
+ */
+function suggestions() {
+  const mapped = new Map();
+  const unmapped = [];
+  for (const d of (visit ? visit.detections : [])) {
+    if (d.source !== 'camera-ai') continue;
+    const word = d.species || 'something';
+    if (d.suggestion) {
+      if (!mapped.has(d.suggestion)) mapped.set(d.suggestion, new Set());
+      mapped.get(d.suggestion).add(word);
+    } else if (!unmapped.includes(word)) unmapped.push(word);
+  }
+  return {
+    mapped: Array.from(mapped, ([species, words]) => ({ species, words: [...words] })),
+    unmapped,
+  };
+}
+
+/**
+ * Y: agree with everything the camera claims that you have not already tagged.
+ * Skipping species you tagged keeps the key idempotent — pressing it twice, or
+ * after a D, must not turn one deer into two.
+ */
+async function agreeAll() {
+  if (busy || !visit) return;
+  const photo = visit.photos[frame];
+  if (!photo) return toast('No frame to tag', true);
+  const sug = suggestions();
+  if (!sug.mapped.length) return toast('The camera made no claim to agree with', true);
+  const have = new Set(visit.detections
+    .filter(d => d.source !== 'camera-ai').map(d => d.species));
+  const want = sug.mapped.map(g => g.species).filter(s => !have.has(s));
+  if (!want.length) return toast('Already tagged everything the camera claims');
+  busy = true;
+  try {
+    for (const s of want) {
+      await api('POST', '/api/detections', { photoId: photo.id, species: s, count: 1 });
+    }
+    visit = await api('GET', '/api/visits/' + visit.id);
+    render();
+  } catch (err) { toast(err.message, true); } finally { busy = false; }
+}
+
 async function tag(species) {
   if (busy || !visit) return;
   const photo = visit.photos[frame];
@@ -348,7 +461,10 @@ async function removeDetection(id) {
 }
 
 async function assignBuck(value) {
-  const deer = visit.detections.filter(d => d.species === 'deer');
+  // A name attaches to YOUR tag, never to a machine claim: before this filter
+  // the camera's own unconfirmed 'deer' guess satisfied the deer check, and a
+  // buck could be named on a visit no person had tagged at all.
+  const deer = visit.detections.filter(d => d.species === 'deer' && d.source !== 'camera-ai');
   if (!deer.length) { toast('Tag a deer first, then name it', true); return render(); }
   const target = deer[deer.length - 1];
   try {
@@ -431,6 +547,7 @@ addEventListener('keydown', e => {
   if (k === 'd') { e.preventDefault(); tag('deer'); }
   else if (k === 't') { e.preventDefault(); tag('turkey'); }
   else if (k === 'o') { e.preventDefault(); tag('other'); }
+  else if (k === 'y') { e.preventDefault(); agreeAll(); }
   else if (k === 'n') { e.preventDefault(); nothingHere(); }
   else if (e.key === 'Enter') { e.preventDefault(); finish(true); }
   else if (e.key === 'ArrowRight' && visit) {

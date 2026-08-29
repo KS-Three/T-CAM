@@ -311,11 +311,31 @@ test('a detection with no weather row is kept, not silently dropped', () => {
     provider: 'spypoint', cameraId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
     nativeId: 'p1', takenAt: '2025-11-05T07:42:19.000Z',
   });
-  addDetection(db, { photoId: photo.id, species: 'buck', source: 'manual' });
+  // Confirmed, because this shape serves the analysis and the analysis reads
+  // evidence — an unconfirmed row is excluded by design, tested below.
+  addDetection(db, { photoId: photo.id, species: 'buck', source: 'manual', confirmed: true });
 
   const rows = detectionsWithWeather(db);
   assert.equal(rows.length, 1, 'the sighting survives');
   assert.equal(rows[0].temp_f, null, 'conditions read as unknown');
+});
+
+test('an unconfirmed machine claim never reaches the analysis shape', () => {
+  // The schema promises that an unreviewed machine guess is never mistaken for
+  // evidence. detectionsWithWeather is the shape the analysis will be built
+  // on, so the promise has to hold HERE, not in every future caller's memory.
+  const db = fresh();
+  upsertCamera(db, norm(FLEX_M), { provider: 'spypoint' });
+  const photo = upsertPhoto(db, {
+    provider: 'spypoint', cameraId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    nativeId: 'p1', takenAt: '2025-11-05T07:42:19.000Z',
+  });
+  addDetection(db, { photoId: photo.id, species: 'deer', source: 'camera-ai' });
+
+  assert.equal(detectionsWithWeather(db).length, 0, 'a guess is not evidence');
+  assert.equal(detectionsWithWeather(db, { unconfirmed: true }).length, 1,
+    'but asking for the claims themselves still works — that is how the '
+    + 'machine\'s accuracy gets measured');
 });
 
 test('deleting a camera takes its photos and detections with it', () => {

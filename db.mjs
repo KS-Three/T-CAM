@@ -753,8 +753,13 @@ export const photosForCamera = (db, cameraId, limit = 500) =>
  * WHERE half of the analysis is built on. Rows with no matching weather hour are
  * kept (LEFT JOIN) rather than silently dropped, so a gap in the weather backfill
  * shows up as missing conditions instead of missing sightings.
+ *
+ * Confirmed rows only, by default: an unreviewed machine guess is not evidence,
+ * and an analysis built on this shape must not treat it as such. Pass
+ * unconfirmed: true only to study the machine's claims themselves — for
+ * instance, how often the camera's AI turns out to be right.
  */
-export const detectionsWithWeather = (db, { species = null } = {}) => db.prepare(`
+export const detectionsWithWeather = (db, { species = null, unconfirmed = false } = {}) => db.prepare(`
   SELECT d.*, ph.taken_at, ph.camera_id, c.name AS camera_name, c.property_id,
          w.temp_f, w.pressure_inhg, w.wind_mph, w.wind_dir, w.precip_in, w.cloud_pct
   FROM detections d
@@ -762,9 +767,9 @@ export const detectionsWithWeather = (db, { species = null } = {}) => db.prepare
   JOIN cameras c ON c.id = ph.camera_id
   LEFT JOIN weather_hours w
     ON w.location_id = c.weather_location_id AND w.hour_utc = ph.hour_utc
-  WHERE (? IS NULL OR d.species = ?)
+  WHERE (? IS NULL OR d.species = ?) AND (? = 1 OR d.confirmed = 1)
   ORDER BY ph.taken_at DESC
-`).all(species, species);
+`).all(species, species, unconfirmed ? 1 : 0);
 
 export const counts = db => ({
   properties: db.prepare('SELECT COUNT(*) n FROM properties').get().n,
@@ -1249,6 +1254,29 @@ export const SPECIES = ['deer', 'turkey', 'bear', 'coyote', 'raccoon', 'other'];
 /** Antlered or not — recorded separately from species, because it is a judgement. */
 export const DEER_CLASS = ['buck', 'doe', 'fawn', 'unknown'];
 
+/**
+ * The camera vendor's own AI words, mapped onto the species list — or null.
+ *
+ * SpyPoint tags photos with words that are not species here: 'buck' is a deer
+ * (antlered-or-not is a judgement, recorded by naming the buck), and its
+ * vocabulary is undocumented, so the first real season will bring words this
+ * table has never seen. Only mappings that cannot be wrong are in it; an
+ * unknown word maps to null, and the review screen shows it verbatim with no
+ * one-key agreement, because guessing a species from a word the vendor never
+ * documented would put a claim in the machine's mouth. Extend the table when a
+ * real tag arrives whose meaning is beyond doubt.
+ */
+export const VENDOR_SPECIES = Object.freeze({
+  deer: 'deer', buck: 'deer', doe: 'deer', fawn: 'deer',
+  turkey: 'turkey',
+  bear: 'bear',
+  coyote: 'coyote',
+  raccoon: 'raccoon',
+});
+
+export const speciesFromVendorWord = word =>
+  VENDOR_SPECIES[String(word ?? '').trim().toLowerCase()] ?? null;
+
 export const detectionsForVisit = (db, visitId) => db.prepare(`
   SELECT d.*, b.name AS buck_name
   FROM detections d
@@ -1264,6 +1292,24 @@ export const detectionsForPhoto = (db, photoId) => db.prepare(`
   WHERE d.photo_id = ? ORDER BY d.id
 `).all(photoId);
 
+/**
+ * The rules a person's detection must obey, shared by creating and editing one
+ * so they cannot drift apart. Machine claims are exempt on purpose: the sync
+ * stores the vendor's word verbatim ('buck' is not a species here), and
+ * rewriting it at ingest would erase what the camera actually said.
+ */
+export function checkDetection({ species = null, count = 1, buckId = null } = {}) {
+  if (!(count >= 1)) throw new Error('a detection counts at least one animal');
+  if (species !== null && !SPECIES.includes(species)) {
+    throw new Error(`unknown species "${species}" — one of ${SPECIES.join(', ')}`);
+  }
+  // A named buck is a deer by definition; letting the two disagree would make
+  // "how many deer" and "how many times I saw this buck" answer differently.
+  if (buckId && species && species !== 'deer') {
+    throw new Error('a detection assigned to a named buck must be a deer');
+  }
+}
+
 export function updateDetection(db, id, patch = {}) {
   const row = db.prepare('SELECT * FROM detections WHERE id = ?').get(id);
   if (!row) throw new Error(`no detection with id ${id}`);
@@ -1274,15 +1320,7 @@ export function updateDetection(db, id, patch = {}) {
     confirmed: patch.confirmed !== undefined ? (patch.confirmed ? 1 : 0) : row.confirmed,
     notes: patch.notes !== undefined ? patch.notes : row.notes,
   };
-  if (!(next.count >= 1)) throw new Error('a detection counts at least one animal');
-  if (next.species !== null && !SPECIES.includes(next.species)) {
-    throw new Error(`unknown species "${next.species}" — one of ${SPECIES.join(', ')}`);
-  }
-  // A named buck is a deer by definition; letting the two disagree would make
-  // "how many deer" and "how many times I saw this buck" answer differently.
-  if (next.buckId && next.species && next.species !== 'deer') {
-    throw new Error('a detection assigned to a named buck must be a deer');
-  }
+  checkDetection(next);
   db.prepare(`
     UPDATE detections SET species = ?, count = ?, buck_id = ?, confirmed = ?, notes = ?
     WHERE id = ?

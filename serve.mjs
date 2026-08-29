@@ -31,8 +31,8 @@ import {
   STAND_TYPES, COMPASS, saveTerrainGrid, terrainGridCovering, terrainGridAt,
   allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
-  detectionsForVisit, addDetection, updateDetection, deleteDetection,
-  allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS,
+  detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
+  allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
@@ -148,6 +148,18 @@ export function photoForClient(p) {
     url: p.url ?? null,
     downloaded: !!p.downloaded_at,
   };
+}
+
+/**
+ * A detection as the review screen needs it. A machine claim carries the house
+ * species it maps onto (or null when the vendor's word maps to nothing), so the
+ * page never needs its own copy of the vocabulary — the mapping is decided
+ * here, once, and the raw word still rides along in `species`.
+ */
+export function detectionForClient(d) {
+  return d.source === 'camera-ai'
+    ? { ...d, suggestion: speciesFromVendorWord(d.species) }
+    : d;
 }
 
 export function recentPhotos(db, limit = 200) {
@@ -683,7 +695,7 @@ export function createServer({ out = OPT.out } = {}) {
         const visits = allVisits(db, { unreviewed, limit, cameraId }).map(v => ({
           ...v,
           photos: photosForVisit(db, v.id).map(photoForClient),
-          detections: detectionsForVisit(db, v.id),
+          detections: detectionsForVisit(db, v.id).map(detectionForClient),
         }));
         return sendJson(res, 200, {
           visits,
@@ -701,7 +713,7 @@ export function createServer({ out = OPT.out } = {}) {
         return sendJson(res, 200, {
           ...v,
           photos: photosForVisit(db, v.id).map(photoForClient),
-          detections: detectionsForVisit(db, v.id),
+          detections: detectionsForVisit(db, v.id).map(detectionForClient),
         });
       }
 
@@ -729,15 +741,18 @@ export function createServer({ out = OPT.out } = {}) {
           const b = await readJson(req);
           try {
             if (!b.photoId) throw new Error('a detection needs a photo');
-            const made = addDetection(db, {
+            const spec = {
               photoId: b.photoId, species: b.species ?? null,
               count: Number(b.count) || 1, buckId: b.buckId ?? null,
               // Anything created here came from a person looking at the frame.
               source: 'manual', confirmed: b.confirmed !== false, notes: b.notes ?? null,
-            });
-            // Validated through the same path an edit takes, so the rules
-            // cannot differ between creating and changing a detection.
-            return sendJson(res, 201, updateDetection(db, made.id, {}));
+            };
+            // The same rules an edit obeys, checked BEFORE the insert: the
+            // first version validated by round-tripping the freshly inserted
+            // row through updateDetection, so a rejected tag answered 400 and
+            // quietly left the invalid row in the database anyway.
+            checkDetection(spec);
+            return sendJson(res, 201, addDetection(db, spec));
           } catch (err) {
             return sendJson(res, 400, { error: err.message });
           }

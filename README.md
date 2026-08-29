@@ -86,7 +86,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `/` | The map, full screen: every stand wearing tonight's verdict, with the camp report in a drawer |
 | `/tonight` | One screen: which stand, the walk in, when to leave, log the sit |
 | `/journal` | The season, and what it is entitled to claim from it |
-| `/review` | Tagging photos — keyboard-driven, built for volume |
+| `/review` | Tagging photos — keyboard-driven, built for volume. The camera's own AI guess shows up as a suggestion to agree with (Y), never as a tag you didn't make |
 
 `/tonight` is the one to put on a phone's home screen: it installs as an app
 and keeps working with no signal.
@@ -649,9 +649,9 @@ is gated on sighting data.
 | Camera locations, status, health | **Working** |
 | Offline map dashboard | **Working** |
 | Hunt planner — weather, rut, moon | **Working**, no sighting data required |
-| Photo download and paging | Written, **never run against real photos** |
-| Sighting log — deer per camera per hour | Blocked: needs photos |
-| Individual buck identification | Blocked: needs photos. Realistically manual tagging with assisted matching — automated re-identification from trail-camera images is not a solved problem |
+| Photo download and paging | **Working** — first real run 2026-08-29 found and fixed the one path bug |
+| Sighting log — deer per camera per hour | **Working** — the review screen, with the camera's own AI guess offered as a suggestion; only what a person confirms counts |
+| Individual buck identification | **Working, by hand** — name a buck in review and every later tag is one click. Assisted matching stays future work; automated re-identification from trail-camera images is not a solved problem |
 | Movement vs. weather, learned from your ground | Blocked: needs a season of sightings |
 | Stand recommendations from observed patterns | Blocked: needs all of the above |
 

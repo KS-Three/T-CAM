@@ -78,6 +78,7 @@ Rules for anything added from here:
 | **Camera photos on the card** — a camera's latest photos as a thumbnail strip on its card, map panel and drawer alike | Driven in a browser against seeded photos (real JPEG files on disk): three thumbs loaded, the buck tag in the tooltip, the photo-less camera showing its honest empty line, drawer and panel identical |
 | **Photo path fix + healing migration** — real photos 404d as `/photos/photos/…`; sync fixed, migration 11 strips the prefix from rows already written | Replicated Kent's exact broken state (prefixed rows, files on disk, migration unrecorded), opened through the real server: paths healed on startup, photo served 200 image/jpeg, drawer grid and card strips all rendering with loaded thumbnails |
 | **Photo lightbox** — click a photo anywhere and it expands; arrows/keys/swipe walk the list it came from | Driven in a browser against healed real-shape photos: opened from grid and card strip, arrowed to both ends (stops, no wrap), Esc and backdrop close, key handler detached on close |
+| **Species suggestions in review** — the camera's own AI tag renders as "The camera thinks", apart from your tags; Y (or a click) agrees, writing YOUR confirmed tag while the claim stays behind unconfirmed | Driven in a browser with real keys against sync-shape rows: 'buck' offered as deer with the vendor's word shown, 'lynx' listed verbatim and refused a key, Y idempotent, naming refused until a person had tagged, the buck landing on the manual row, machine rows untouched, and the ranking counting exactly the one confirmed deer |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -92,9 +93,15 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
   URL doubled to `/photos/photos/…` and 404d — captions rendered over broken
   pictures. Fixed in the sync, healed for already-written rows by migration
   11, and the integration test now pins the path SHAPE rather than just its
-  presence. Downstream — tagging, buck identity, movement analysis — is now
-  exercisable for the first time; the review loop has still only been driven
-  against stand-in frames.
+  presence. The second real-shape adjustment followed on 2026-08-29: SpyPoint's
+  own AI tags (stored as unconfirmed `camera-ai` claims) rendered in review
+  exactly like human tags, so a visit arrived looking already tagged and Enter
+  left the guess unconfirmed for ever — invisible to the ranking. The review
+  screen now keeps the two apart (see the suggestions row above). What remains
+  untested is the review loop under Kent's hands on the actual photos — and
+  the vendor's tag VOCABULARY: the mapping table knows the words that cannot
+  be wrong and shows everything else verbatim, so expect real tags to earn
+  the table new entries.
 - **Moultrie is not implemented** and refuses with an explanation. Blocked on
   one session capture: [`moultrie-capture.md`](moultrie-capture.md).
 - **Phone app** — deliberately last, gated on the rest proving out. The server's
@@ -289,11 +296,13 @@ against nonsense arriving over the API, not enforcing a judgement.
 3. **Run the collar calibration** once `collar-data/RateofMovementData.csv` is
    downloaded — `node calibrate-planner.mjs --inspect` first, to confirm the
    detected columns before trusting any number it prints.
-4. **Photos land** → verify the download path against real images, then fit the
-   review screen to their actual shape. It is built and driven, but against
-   generated frames, so expect adjustment around real timestamps and any
-   species tags SpyPoint's own AI attaches.
-5. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts.
+4. **Review the real photos.** The path is verified, the machine tags arrive
+   as suggestions — what is left is the actual evening's work: tag the first
+   real visits, name the first bucks, and note any vendor AI word the mapping
+   table showed verbatim (`db.mjs` `VENDOR_SPECIES`) so it can be taught the
+   ones that are beyond doubt.
+5. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts, on
+   `detectionsWithWeather()`, which now refuses unconfirmed rows by default.
 6. Moultrie, if a capture arrives.
 7. Historical imagery, if a working NAIP endpoint can be found.
 

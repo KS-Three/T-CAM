@@ -566,6 +566,41 @@ else overlays it or slides in over it.
   arguing with a wind that looks fine. Unknown is deliberately not green. The
   colours refresh with the stands, so a lane you just saved can flip tonight's
   answer in front of you.
+- **The weather strip** (bottom-centre) shows the wind and temperature right
+  now — an arrow pointing the way the air is moving, the compass word hunters
+  actually use for where it is from, and the sky in one word. Tap it and it
+  opens into the hourly forecast with a scrubber across the coming week: drag
+  forward and watch the wind swing and the front arrive, because the wind
+  three days out is what decides which stand gets hunted Saturday. The
+  forecast comes through the server and is cached, so in the truck the strip
+  shows the last fetch **and says how old it is** rather than passing Tuesday
+  off as live. Everything stays in the property's own clock — the times are
+  never re-read in whatever timezone your phone happens to be in.
+- **Crop fields** (Scouting → + Crop field): click around a field edge, say
+  what grows in it, and it draws as a very faint wash of that crop's colour
+  with a name chip at its centre — faint on purpose, because the imagery
+  underneath is the actual information. When a new outline closes, the form
+  asks USDA's Cropland Data Layer what the satellite says grows there and
+  pre-selects it; you correct it if the satellite is wrong, and a category the
+  mapping does not recognise is shown verbatim rather than guessed into a
+  crop — the same rule the camera's AI words follow. **Record the cut** when
+  it happens: it is a date, not a tick-box, because a cornfield cut yesterday
+  and one cut a month ago are different hunting facts. A cut field goes
+  dashed and its chip says when.
+- **Walk-in routes can finally be edited.** Every route wears a small chip at
+  its midpoint; tap it for rename, a different stand, **Redraw the line** (the
+  shape is redrawn, the name and verdict-keeping survive) and Delete. The
+  server could always do all four — the map just never offered them.
+- **"Plan the walk in"**, on any stand's report, proposes the entry path for
+  the coming sit's wind: from your nearest **Access** marker (or one click
+  saying where the truck is), swinging wide of every wedge of ground your
+  scent would blow across — the stand itself, the other stands, your marked
+  beds and food plots — and arriving from the stand's downwind side. The
+  proposal is dashed teal until you press **Save as route**, whereupon it is
+  judged like any hand-drawn route. The card reasons in sentences and owns
+  the model's limits: scent is a 200 m cone either side of downwind, thermals
+  are not in it, and the line stops twenty metres short because the last
+  steps to the tree cannot be clean on any wind.
 
 ### 3D
 
@@ -633,7 +668,17 @@ remembered per browser.
 | **Terrain** | USGS Topo | 17 |
 
 Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
-staring at blank tiles past its coverage. Scroll wheel zooms; drag pans.
+staring at blank tiles past its coverage.
+
+Zooming is built to stay under control (2026-08-29, after the map kept ending
+up on the whole hemisphere). The wheel **accumulates** — a light trackpad
+flick used to be one whole level per event, dozens per flick — and every zoom
+holds the ground under your cursor still, so zooming in walks toward what you
+are pointing at instead of sliding away from it. On a phone, **pinch** zooms
+(two fingers used to fight the pan and throw the map around, which was
+usually how it got lost in the first place), and **double-tap** steps in one.
+When the view is lost anyway, the **⌂ button** under the zoom controls is one
+press back to your ground.
 
 Google's own tiles are deliberately **not** used — serving them outside the
 Google Maps API breaches their terms. Esri's imagery is free for this with

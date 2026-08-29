@@ -79,7 +79,7 @@ const embed = data => JSON.stringify(data)
 // sync run picks up the last plan instead of wiping it off the page, and a
 // planner run rebuilds this same page. Either tool can be run first.
 function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live = false,
-                       markers = [], tileSources = null) {
+                       markers = [], tileSources = null, fields = []) {
   const payload = embed({
     generatedAt,
     staleDays: STALE_DAYS,
@@ -93,6 +93,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
     // the static dashboard the sync writes.
     live,
     markers,
+    fields,
     // Where imagery comes from. The served page is handed templates pointing at
     // its own server, so every tile is cached on the way past and the page
     // needs no knowledge of upstream URLs; the static file gets the upstream
@@ -323,11 +324,19 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
      the bar covered the Tools button (also measured; that corner is taken).
      Bottom-centre is the one clear spot — the layer swatch owns bottom-left,
      attribution bottom-right — and it is where a thumb already is. */
+  /* 78px up, not 30: the bottom-centre is now a stack — the wrapped
+     attribution pill along the very edge, the weather chip above it at 40px
+     (both measured at 390px, where each lower offset collided), and the
+     switcher on top. All three stay readable and tappable. */
   @media (max-width: 560px) {
-    #groundSel, #groundName { position: fixed; top: auto; bottom: 30px;
+    #groundSel, #groundName { position: fixed; top: auto; bottom: 78px;
                               left: 50%; transform: translateX(-50%); z-index: 6;
                               max-width: 46vw;
                               box-shadow: 0 1px 6px rgba(0,0,0,.35); }
+    /* The open weather bar needs the bottom-centre the switcher floats in;
+       the switcher steps aside for exactly as long as the bar is up. Phone
+       width only — in the top bar the two never meet. */
+    #groundSel.under-wxbar { visibility: hidden; }
   }
   /* Everything pinned to the map's top edge drops below the bar. */
   .zoom { top: 52px; }

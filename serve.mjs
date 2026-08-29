@@ -38,7 +38,12 @@ import {
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
   saveTrack, allTracks, trackById, deleteTrack,
+  allFields, createField, updateField, deleteField, CROP_KINDS, CROP_LABELS,
+  saveForecast, cachedForecast,
 } from './db.mjs';
+import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
+import { cropAt } from './cropscan.mjs';
+import { suggestEntryPath } from './entry-path.mjs';
 import { dashboardHtml } from './dashboard-page.mjs';
 import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
@@ -205,8 +210,37 @@ export async function buildState(db, out) {
   const plan = await readPlan(out);
   const stands = standsForClient(db);
   const markers = allMarkers(db);
+  const fields = allFields(db);
   return { generatedAt: new Date().toISOString(), cameras, photos, stands, markers,
-           plan, counts: counts(db) };
+           fields, plan, counts: counts(db) };
+}
+
+/**
+ * The hourly forecast for a spot, from the cache when it is fresh, refetched
+ * when it is not, and stale-but-said-so when the internet is down. The same
+ * three-way honesty terrain answers with, for the same reason: a forecast
+ * from Tuesday shown as live is how you sit the wrong wind believing the map.
+ */
+export async function forecastFor(db, { lat, lng, fetchImpl, now = Date.now() } = {}) {
+  const hit = cachedForecast(db, lat, lng);
+  const ageMs = hit ? now - Date.parse(hit.fetchedAt) : Infinity;
+  if (hit && ageMs < FORECAST_TTL_MINUTES * 60000) {
+    return { ...hit.data, fetchedAt: hit.fetchedAt, cached: true, stale: false, note: null };
+  }
+  try {
+    const shaped = shapeForecast(await fetchForecast(lat, lng, { fetchImpl }));
+    const saved = saveForecast(db, lat, lng, shaped);
+    return { ...shaped, fetchedAt: saved.fetchedAt, cached: false, stale: false, note: null };
+  } catch (err) {
+    if (hit) {
+      return {
+        ...hit.data, fetchedAt: hit.fetchedAt, cached: true, stale: true,
+        note: 'The weather service is unreachable, so this is the forecast as '
+          + `fetched ${new Date(hit.fetchedAt).toLocaleString()}. (${err.message})`,
+      };
+    }
+    throw err;
+  }
 }
 
 const send = (res, code, type, body) => {
@@ -561,7 +595,7 @@ export function createServer({ out = OPT.out } = {}) {
         const s = await buildState(db, out);
         return send(res, 200, 'text/html; charset=utf-8',
           dashboardHtml(s.cameras, s.photos, s.generatedAt, s.plan, s.stands, true, s.markers,
-                        sourceDescriptors({ proxied: true })));
+                        sourceDescriptors({ proxied: true }), s.fields));
       }
       // The review screen. A separate page from the dashboard on purpose: this
       // is a task you sit down to do, not something to glance at beside a map.
@@ -682,6 +716,28 @@ export function createServer({ out = OPT.out } = {}) {
         } catch (err) {
           console.error(`\n  Wind history failed at ${lat},${lng}: ${err.message}\n`);
           return sendJson(res, 502, { error: err.message });
+        }
+      }
+      // The hourly forecast the map's weather strip scrubs. Same location
+      // default as the wind history: the middle of your own ground.
+      if (req.method === 'GET' && url.pathname === '/api/forecast') {
+        const spots = [...allCameras(db), ...allStands(db)]
+          .filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng));
+        const lat = Number(url.searchParams.get('lat'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lat, 0) / spots.length : NaN);
+        const lng = Number(url.searchParams.get('lng'))
+          || (spots.length ? spots.reduce((a, c) => a + c.lng, 0) / spots.length : NaN);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return sendJson(res, 400, {
+            error: 'no location yet — none of your cameras or stands has coordinates',
+          });
+        }
+        try {
+          return sendJson(res, 200, await forecastFor(db, { lat, lng }));
+        } catch (err) {
+          return sendJson(res, 502, {
+            error: `no forecast: ${err.message} — and none cached for this spot yet`,
+          });
         }
       }
       // --- review: visits, detections, bucks ------------------------------
@@ -922,6 +978,73 @@ export function createServer({ out = OPT.out } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/stand-types') {
         return sendJson(res, 200, { types: STAND_TYPES, winds: COMPASS });
+      }
+      // --- crop fields ---------------------------------------------------
+      // A field outlined on the map, with what grows in it and whether it has
+      // been cut. Same CRUD shape as markers and stands: one pattern for
+      // everything the map lets you place.
+      if (url.pathname === '/api/fields') {
+        if (req.method === 'GET') return sendJson(res, 200, allFields(db));
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          try {
+            return sendJson(res, 201, createField(db, {
+              name: b.name ?? null, crop: b.crop, points: b.points,
+              cutAt: b.cutAt ?? null, notes: b.notes ?? null,
+              propertyId: b.propertyId ?? null,
+            }));
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
+        }
+      }
+      const fieldMatch = url.pathname.match(/^\/api\/fields\/(\d+)$/);
+      if (fieldMatch) {
+        const id = Number(fieldMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            const patch = {};
+            for (const k of ['name', 'crop', 'points', 'cutAt', 'notes']) {
+              if (b[k] !== undefined) patch[k] = b[k];
+            }
+            return sendJson(res, 200, updateField(db, id, patch));
+          } catch (err) {
+            return sendJson(res, /no field with id/.test(err.message) ? 404 : 400,
+              { error: err.message });
+          }
+        }
+        if (req.method === 'DELETE') {
+          return deleteField(db, id)
+            ? sendJson(res, 200, { deleted: id })
+            : sendJson(res, 404, { error: `no field with id ${id}` });
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/crop-kinds') {
+        return sendJson(res, 200, { kinds: CROP_KINDS, labels: CROP_LABELS });
+      }
+      // What USDA's satellite crop map calls a point, to pre-select the crop
+      // when a field is outlined. Failure is an answer here, not an error:
+      // the form works identically without it, so the page gets a 200 with
+      // found:false and the reason, and shows the reason instead of a guess.
+      if (req.method === 'GET' && url.pathname === '/api/cropscan') {
+        const rawLat = url.searchParams.get('lat'), rawLng = url.searchParams.get('lng');
+        // Rejected BEFORE conversion — Number(null) is 0, and 0,0 is real water.
+        if (rawLat === null || rawLng === null || rawLat === '' || rawLng === '') {
+          return sendJson(res, 400, { error: 'cropscan needs lat and lng' });
+        }
+        const lat = Number(rawLat), lng = Number(rawLng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return sendJson(res, 400, { error: 'cropscan needs numeric lat and lng' });
+        }
+        try {
+          return sendJson(res, 200, await cropAt(lat, lng));
+        } catch (err) {
+          return sendJson(res, 200, {
+            found: false,
+            why: `USDA CropScape could not answer: ${err.message}`,
+          });
+        }
       }
 
 
@@ -1287,6 +1410,78 @@ export function createServer({ out = OPT.out } = {}) {
           at: { lat, lng, radiusM },
           windHistoryLoaded: !!clim,
         });
+      }
+      // The suggested walk in: from an entry point to a stand, shaped by the
+      // wind. Pure geometry over what is already stored — see entry-path.mjs
+      // for the model and its honesty about the last few steps.
+      if (req.method === 'GET' && url.pathname === '/api/suggest-route') {
+        const standId = Number(url.searchParams.get('standId'));
+        const stand = allStands(db).find(s => s.id === standId);
+        if (!stand) {
+          return sendJson(res, 404, { error: `no stand with id ${url.searchParams.get('standId')}` });
+        }
+        const rawLat = url.searchParams.get('fromLat'), rawLng = url.searchParams.get('fromLng');
+        // Rejected BEFORE conversion — Number(null) is 0, and a walk planned
+        // from 0,0 would be three thousand miles of ocean.
+        if (rawLat === null || rawLng === null || rawLat === '' || rawLng === '') {
+          return sendJson(res, 400, {
+            error: 'the walk needs a starting point — fromLat and fromLng, where '
+              + 'you leave the truck or the road',
+          });
+        }
+        const fromLat = Number(rawLat), fromLng = Number(rawLng);
+        if (!Number.isFinite(fromLat) || !Number.isFinite(fromLng)) {
+          return sendJson(res, 400, { error: 'fromLat and fromLng must be coordinates' });
+        }
+
+        // The wind: asked for explicitly, or the coming sit's forecast. Never
+        // a default — a walk planned on an invented wind is worse than none.
+        let windDeg = url.searchParams.get('wind') !== null
+          ? Number(url.searchParams.get('wind')) : NaN;
+        let windSource = Number.isFinite(windDeg) ? 'as asked' : null;
+        if (!Number.isFinite(windDeg)) {
+          const plan = await readPlan(out);
+          const { sits } = nextSits(plan?.sits ?? [], { now: Date.now(), count: 1 });
+          const sit = sits[0];
+          if (sit && Number.isFinite(sit.windDir)) {
+            windDeg = sit.windDir;
+            windSource = `the coming sit (${sit.date} ${sit.window})`;
+          }
+        }
+        if (!Number.isFinite(windDeg)) {
+          return sendJson(res, 400, {
+            error: 'no wind to plan against — the plan has no coming sit. Run the '
+              + 'planner (node hunt-planner.mjs), or pass ?wind=<degrees from>.',
+          });
+        }
+
+        // Everything the walk must not blow scent over: the other stands, and
+        // the beds and food plots you have marked. Water and rubs are not on
+        // the list — deer are not sitting on a rub at 4 pm.
+        const avoid = [
+          ...allStands(db)
+            .filter(s => s.id !== stand.id && Number.isFinite(s.lat) && Number.isFinite(s.lng))
+            .map(s => ({ lat: s.lat, lng: s.lng, name: s.name })),
+          ...allMarkers(db)
+            .filter(m => (m.kind === 'bed' || m.kind === 'food-plot')
+              && Number.isFinite(m.lat) && Number.isFinite(m.lng))
+            .map(m => ({ lat: m.lat, lng: m.lng, name: m.name || m.label })),
+        ];
+
+        try {
+          const suggestion = suggestEntryPath({
+            from: { lat: fromLat, lng: fromLng },
+            stand, windFromDeg: windDeg, avoid,
+          });
+          return sendJson(res, 200, {
+            ...suggestion,
+            standId: stand.id,
+            standName: stand.name,
+            windSource,
+          });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
       }
       // The shape of the ground, from free USGS LiDAR.
       //

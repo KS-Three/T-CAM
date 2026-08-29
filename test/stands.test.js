@@ -323,12 +323,13 @@ test('arming one map mode disarms every other one', async () => {
 
   // Every mode is disarmed there, so a new one is added here or nowhere.
   const body = html.match(/function clearMapModes\([\s\S]*?\n\}/)?.[0] ?? '';
-  for (const mode of ['placing', 'marking', 'identifying', 'drawing', 'measuring']) {
+  for (const mode of ['placing', 'marking', 'identifying', 'drawing', 'measuring',
+    'fielding', 'entryPick']) {
     assert.match(body, new RegExp('\\b' + mode + '\\b'), `${mode} is disarmed there`);
   }
 
   // And every button that arms a mode goes through it.
-  assert.ok((html.match(/clearMapModes\('(stand|mark|parcel|route|measure)'\)/g) || []).length >= 5,
+  assert.ok((html.match(/clearMapModes\('(stand|mark|parcel|route|measure|field|entry)'\)/g) || []).length >= 7,
     'each mode arms itself through the shared disarm');
 
   // The old shape: one button reaching in to click another.

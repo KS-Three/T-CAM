@@ -25,7 +25,7 @@ coordinate, and never point a fixture at one.
 ## Commands
 
 ```bash
-node --test                          # the whole suite (~550 tests, ~30s). No install step — there are NO dependencies, ever (Node 22+, node:sqlite).
+node --test                          # the whole suite (~600 tests, ~2min). No install step — there are NO dependencies, ever (Node 22+, node:sqlite).
 node --test test/coverage.test.js    # one file
 node serve.mjs --out DIR --port 8787 # serve a dashboard from DIR's trailcam.db
 node spypoint-sync.mjs               # sync (needs SPYPOINT_EMAIL / SPYPOINT_PASSWORD env; --dry-run, --inspect for schema dumps)

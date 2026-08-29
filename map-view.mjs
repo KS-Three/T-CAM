@@ -44,6 +44,10 @@ import { browserSource as measureSource } from './measure.mjs';
 import { browserSource as coverSource } from './coverage.mjs';
 import { browserSource as t3dSource } from './terrain3d.mjs';
 import { browserSource as groundsSource } from './grounds.mjs';
+// The crop vocabulary is db.mjs's, interpolated into the page as VALUES the
+// same way the measure geometry is — one definition, emitted, so the form's
+// dropdown and the database's CHECK constraint cannot drift apart.
+import { CROP_KINDS, CROP_LABELS, COMPASS } from './db.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -551,11 +555,77 @@ export const mapStyles = `
           transform: translate(-50%, -50%); border-radius: 4px; border: 2px solid #fff;
           font: 700 10px/14px ui-sans-serif, system-ui, sans-serif; text-align: center;
           color: #10240f; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  /* Crop fields. Fill colours are inline per path (they vary by crop, and the
+     blanket "#contours path { fill: none }" would eat a class fill — same
+     lesson the lane gradient learnt); what lives here is the shared weight.
+     Faint on purpose: the field must read as ground you look THROUGH at the
+     imagery, not a sticker over it. A cut field goes dashed — the boundary is
+     still real, the crop standing in it is not. */
+  #contours path.field { stroke-width: 1.8; }
+  #contours path.field.cut { stroke-dasharray: 7 5; }
+  /* The field's name chip is the click target, not the polygon: a shape that
+     took clicks would also take the pan that starts on it and the stand you
+     try to drop inside it. Same trick as marker labels, made pressable. */
+  .fieldlabel { position: absolute; transform: translate(-50%, -50%); font-size: 10px;
+                font-weight: 700; white-space: nowrap; padding: 2px 7px; border-radius: 5px;
+                background: rgba(0,0,0,.55); color: #fff; cursor: pointer; z-index: 2;
+                border: 0; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .fieldlabel .cutnote { font-weight: 400; opacity: .85; }
+  /* A walk-in route's own chip, for the same reason: the line is drawn in an
+     SVG that must not take clicks, so the chip is how a route is reopened. */
+  .routelabel { position: absolute; transform: translate(-50%, -50%); font-size: 10px;
+                font-weight: 700; white-space: nowrap; padding: 2px 7px; border-radius: 5px;
+                background: rgba(112,63,178,.78); color: #fff; cursor: pointer; z-index: 2;
+                border: 0; font-family: ui-sans-serif, system-ui, sans-serif; }
+  /* While a placing mode is armed the chips get out of the way, or a field
+     would swallow the stand you are trying to drop inside it. */
+  #map.placing .fieldlabel, #map.placing .routelabel { pointer-events: none; }
+  /* The suggested walk in: dashed, and a colour used for nothing else, so a
+     proposal is never mistaken for a route you have committed to. */
+  #contours path.sugwalk { stroke: rgba(64,205,193,.95); stroke-width: 3; fill: none;
+                           stroke-dasharray: 8 6; stroke-linecap: round; stroke-linejoin: round; }
+  #contours circle.sugwalk { fill: rgba(64,205,193,.95); stroke: rgba(0,60,54,.75);
+                             stroke-width: 1.2; }
+  /* The weather strip: a chip at the bottom-centre that opens into the
+     timeline. Bottom-centre is the one clear edge — the layer swatch owns the
+     left corner, attribution the right — and it is where a thumb already is. */
+  .wxchip { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+            z-index: 4; display: flex; align-items: center; gap: 7px; padding: 7px 12px;
+            border-radius: 999px; background: var(--panel); border: 1px solid var(--line);
+            color: var(--ink); font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+            cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.3); white-space: nowrap; }
+  .wxchip .muted { color: var(--muted); font-weight: 500; }
+  .wxarrow { display: inline-block; font-size: 13px; line-height: 1; }
+  .wxbar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+           z-index: 6; width: min(560px, calc(100% - 20px)); background: var(--panel);
+           border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 8px;
+           box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  .wxbar .now { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+                font-size: 13px; color: var(--ink); }
+  .wxbar .now b { font-size: 15px; }
+  .wxbar .when { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .wxbar input[type=range] { width: 100%; margin: 9px 0 2px; }
+  .wxbar .scale { display: flex; font-size: 10px; color: var(--muted); }
+  .wxbar .scale span { flex: 1; text-align: center; border-left: 1px solid var(--line);
+                       overflow: hidden; }
+  .wxbar .scale span:first-child { border-left: 0; }
+  .wxbar .foot { display: flex; gap: 8px; margin-top: 7px; align-items: center; }
+  .wxbar .foot button { border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+                        border-radius: 6px; padding: 4px 10px; cursor: pointer;
+                        font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; }
+  .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 5px; }
+  /* On a phone the attribution wraps to a full-width pill along the very
+     bottom edge and sat straight on the chip (measured at 390px). The strip
+     steps above it; the ground switcher steps above the strip in the
+     dashboard's own stylesheet. */
+  @media (max-width: 560px) {
+    .wxchip, .wxbar { bottom: 40px; }
+  }
 `;
 
 export const mapMarkup = String.raw`
   <div id="map"><div id="tiles"></div><canvas id="terrain"></canvas><svg id="contours"></svg><div id="pins"></div>
-    <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">&minus;</button></div>
+    <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">&minus;</button><button id="zhome" title="Back to your ground">&#8962;</button></div>
     <div class="maptools" id="tooltree">
       <button class="tt-root" id="ttRoot" type="button">Tools</button>
       <div class="tt-body">
@@ -571,6 +641,7 @@ export const mapMarkup = String.raw`
           <div class="tt-kids">
             <button id="markBtn" type="button">+ Mark sign</button>
             <button id="routeBtn" type="button">+ Walk-in route</button>
+            <button id="fieldBtn" type="button">+ Crop field</button>
           </div>
         </div>
         <div class="tt-group">
@@ -598,6 +669,8 @@ export const mapMarkup = String.raw`
       </div>
     </div>
     <div class="selpanel" id="selpanel" hidden></div>
+    <button class="wxchip" id="wxchip" type="button" title="Weather and the coming days" hidden></button>
+    <div class="wxbar" id="wxbar" hidden></div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
         <span id="layerLabel"></span>
@@ -800,6 +873,8 @@ function draw() {
   }
 
   drawMarkers(left, top, W, H);
+  drawFieldLabels(left, top, W, H);
+  drawRouteLabels(left, top, W, H);
   drawSuggestions(left, top, W, H);
 }
 // ---- offline ----------------------------------------------------------
@@ -1050,6 +1125,282 @@ function openMarkerForm(marker) {
   mapEl.appendChild(form);
   name.focus();
 }
+// ---- crop fields --------------------------------------------------------
+// The fields are what the deer are actually organised around on ground like
+// this: a standing cornfield is food and bedding at once, and the day it is
+// cut the evening pattern reorganises. Outline one, say what grows in it, and
+// record the cut when it happens — the map then reads like the ground does.
+//
+// The polygon itself is paint, never a click target: a shape that took the
+// pointer would also take the pan that starts over it and the stand you drop
+// inside it. The name chip at its centre is the way in, like a marker's.
+let FIELDS = D.fields || [];
+let fielding = null;     // { points: [], editingId } while outlining
+const fieldBtn = document.getElementById('fieldBtn');
+
+// One definition: the kinds and words come from db.mjs, baked in at build.
+const CROP_KINDS = ${JSON.stringify(CROP_KINDS)};
+const CROP_LABELS = ${JSON.stringify(CROP_LABELS)};
+
+// Fixed colours, like the pins: fields sit on satellite imagery, which does
+// not change with the theme. Faint fill, firmer edge — "very faint" is the
+// point, the imagery underneath is the actual information.
+const CROP_STYLE = {
+  corn:           ['rgba(240,201,79,.16)',  'rgba(240,201,79,.65)'],
+  soybeans:       ['rgba(125,192,107,.16)', 'rgba(125,192,107,.65)'],
+  alfalfa:        ['rgba(103,184,143,.16)', 'rgba(103,184,143,.65)'],
+  'winter-wheat': ['rgba(216,163,90,.16)',  'rgba(216,163,90,.65)'],
+  oats:           ['rgba(203,191,106,.16)', 'rgba(203,191,106,.65)'],
+  clover:         ['rgba(143,208,110,.16)', 'rgba(143,208,110,.65)'],
+  brassicas:      ['rgba(154,127,208,.16)', 'rgba(154,127,208,.65)'],
+  pasture:        ['rgba(185,201,138,.13)', 'rgba(185,201,138,.55)'],
+  other:          ['rgba(204,204,204,.13)', 'rgba(204,204,204,.55)'],
+};
+
+const fieldWord = f => CROP_LABELS[f.crop] || f.crop;
+
+async function refreshFields() {
+  FIELDS = await (await fetch('/api/fields')).json();
+  draw();
+}
+
+function fieldPaths(left, top) {
+  const out = [];
+  for (const f of FIELDS) {
+    if (!f.points || f.points.length < 3) continue;
+    const st = CROP_STYLE[f.crop] || CROP_STYLE.other;
+    out.push('<path class="field' + (f.cut_at ? ' cut' : '') + '" style="fill:' + st[0]
+      + ';stroke:' + st[1] + '" d="' + svgPath(f.points, left, top, true) + '"></path>');
+  }
+  if (fielding && fielding.points.length) {
+    if (fielding.points.length >= 2) {
+      out.push('<path class="field" style="fill:rgba(255,235,120,.10);'
+        + 'stroke:rgba(255,235,120,.85);stroke-dasharray:5 4" d="'
+        + svgPath(fielding.points, left, top, fielding.points.length >= 3) + '"></path>');
+    }
+    for (const p of fielding.points) {
+      const px = projX(p[0], zoom) - left, py = projY(p[1], zoom) - top;
+      out.push('<circle class="measure" cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1)
+        + '" r="4"></circle>');
+    }
+  }
+  return out;
+}
+
+// The chip sits at the vertex average — inside any field shape a person
+// actually outlines, and cheap enough to run per draw.
+const fieldMid = pts => {
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p[0]; sy += p[1]; }
+  return [sx / pts.length, sy / pts.length];
+};
+
+function drawFieldLabels(left, top, W, H) {
+  for (const f of FIELDS) {
+    if (!f.points || f.points.length < 3) continue;
+    const mid = fieldMid(f.points);
+    const x = projX(mid[0], zoom) - left, y = projY(mid[1], zoom) - top;
+    if (x < -70 || y < -30 || x > W + 70 || y > H + 30) continue;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'fieldlabel';
+    chip.textContent = f.name || fieldWord(f);
+    if (f.cut_at) {
+      chip.appendChild(el('span', 'cutnote',
+        ' · cut ' + f.cut_at.slice(5).replace('-', '/')));
+    }
+    chip.style.left = x + 'px'; chip.style.top = y + 'px';
+    chip.title = fieldWord(f) + (f.cut_at ? ' — cut ' + f.cut_at : ' — standing')
+      + (f.notes ? '\n' + f.notes : '');
+    chip.onclick = ev => { ev.stopPropagation(); openFieldForm(f); };
+    pinsEl.appendChild(chip);
+  }
+}
+
+fieldBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (!D.live) return;
+  if (fielding) return finishField();
+  clearMapModes('field');
+  fielding = { points: [], editingId: null };
+  fieldBtn.classList.add('on');
+  fieldBtn.textContent = 'Finish field';
+  mapEl.classList.add('placing');
+  routeTip('Click around the field edge — three corners or more. '
+    + '<b>Enter</b> or <b>Finish field</b> closes it, <b>Backspace</b> undoes a corner, '
+    + '<b>Esc</b> cancels.');
+};
+if (!D.live) {
+  fieldBtn.disabled = true;
+  fieldBtn.title = 'Fields need the server';
+  fieldBtn.style.opacity = '0.6';
+  fieldBtn.style.cursor = 'not-allowed';
+}
+
+function cancelFielding() {
+  fielding = null;
+  fieldBtn.classList.remove('on');
+  fieldBtn.textContent = '+ Crop field';
+  mapEl.classList.remove('placing');
+  routeTip(null);
+  draw();
+}
+
+function finishField() {
+  if (!fielding) return;
+  const pts = fielding.points.slice();
+  const editingId = fielding.editingId;
+  if (pts.length < 3) {
+    if (pts.length) {
+      terrainNote('A field needs at least three corners — that outline had '
+        + pts.length + ', so nothing was saved.');
+    }
+    return cancelFielding();
+  }
+  cancelFielding();
+  if (editingId) {
+    // A redraw keeps the field's name, crop and cut date; only the shape moves.
+    apiWrite('PATCH', '/api/fields/' + editingId, { points: pts })
+      .then(refreshFields)
+      .catch(err => terrainNote('Could not save the new outline: ' + err.message));
+    return;
+  }
+  openFieldForm({ points: pts });
+}
+
+addEventListener('keydown', e => {
+  if (!fielding) return;
+  if (isTyping(e.target)) return;
+  if (e.key === 'Enter') { e.preventDefault(); finishField(); }
+  else if (e.key === 'Escape') { e.preventDefault(); cancelFielding(); }
+  else if (e.key === 'Backspace') { e.preventDefault(); fielding.points.pop(); draw(); }
+});
+
+function openFieldForm(field) {
+  closeStandForm();
+  const isNew = !field.id;
+  const form = el('div', 'standform');
+  form.appendChild(el('h3', null, isNew ? 'Crop field' : 'Edit field'));
+
+  const crop = document.createElement('select');
+  for (const k of CROP_KINDS) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = CROP_LABELS[k] || k;
+    if ((field.crop || 'corn') === k) o.selected = true;
+    crop.appendChild(o);
+  }
+  // The USDA pre-selection below must never overwrite a choice the person has
+  // already made — the satellite is the assistant here, not the authority.
+  let cropTouched = false;
+  crop.onchange = () => { cropTouched = true; };
+  form.append(el('label', null, 'Crop'), crop);
+  const guess = el('div', 'hint', '');
+  form.appendChild(guess);
+
+  const name = document.createElement('input');
+  name.value = field.name || '';
+  name.placeholder = 'North forty';
+  form.append(el('label', null, 'Name (optional)'), name);
+
+  // Cut is a DATE, not a tick: cut-yesterday and cut-a-month-ago are
+  // different hunting facts. Empty means standing.
+  const cut = document.createElement('input');
+  cut.type = 'date';
+  cut.value = field.cut_at || '';
+  form.append(el('label', null, 'Cut on — empty while standing'), cut);
+  const cutRow = el('div', 'formrow');
+  const cutToday = el('button', null, 'Cut today');
+  cutToday.type = 'button';
+  cutToday.onclick = () => { cut.value = new Date().toISOString().slice(0, 10); };
+  const standing = el('button', null, 'Still standing');
+  standing.type = 'button';
+  standing.onclick = () => { cut.value = ''; };
+  cutRow.append(cutToday, standing);
+  form.appendChild(cutRow);
+
+  const notes = document.createElement('textarea');
+  notes.rows = 2;
+  notes.value = field.notes || '';
+  form.append(el('label', null, 'Notes'), notes);
+
+  const row = el('div', 'formrow');
+  const save = el('button', 'primary', isNew ? 'Save field' : 'Save');
+  const cancel = el('button', null, 'Cancel');
+  row.append(save, cancel);
+  form.appendChild(row);
+
+  if (!isNew) {
+    const redraw = el('button', null, 'Redraw the outline');
+    redraw.type = 'button';
+    redraw.style.marginTop = '8px';
+    redraw.onclick = () => {
+      form.remove();
+      clearMapModes('field');
+      fielding = { points: [], editingId: field.id };
+      fieldBtn.classList.add('on');
+      fieldBtn.textContent = 'Finish field';
+      mapEl.classList.add('placing');
+      routeTip('Click the new outline for <b>' + (field.name || fieldWord(field))
+        + '</b>. <b>Enter</b> saves it, <b>Esc</b> keeps the old one.');
+    };
+    form.appendChild(redraw);
+    const del = el('button', 'danger', 'Delete');
+    del.style.marginTop = '8px';
+    del.onclick = async () => {
+      if (!confirm('Delete ' + (field.name || 'this field') + '?')) return;
+      await apiWrite('DELETE', '/api/fields/' + field.id);
+      form.remove();
+      refreshFields();
+    };
+    form.appendChild(del);
+  }
+
+  cancel.onclick = () => { form.remove(); draw(); };
+  save.onclick = async () => {
+    const body = {
+      crop: crop.value, name: name.value.trim() || null,
+      cutAt: cut.value || null, notes: notes.value.trim() || null,
+    };
+    if (isNew) body.points = field.points;
+    try {
+      if (isNew) await apiWrite('POST', '/api/fields', body);
+      else await apiWrite('PATCH', '/api/fields/' + field.id, body);
+      form.remove();
+      refreshFields();
+    } catch (err) {
+      form.appendChild(el('div', 'hint', 'Could not save: ' + err.message));
+    }
+  };
+  mapEl.appendChild(form);
+  name.focus();
+  draw();
+
+  // A new outline asks USDA's satellite crop map what grows here and
+  // pre-selects it. Purely an assist: offline or outside coverage the form
+  // works identically, and an unrecognised answer is shown verbatim rather
+  // than guessed into a crop — the same rule the camera's AI words follow.
+  if (isNew && D.live) {
+    const mid = fieldMid(field.points);
+    guess.textContent = 'Asking USDA’s crop map what grows here…';
+    fetch('/api/cropscan?lat=' + mid[1] + '&lng=' + mid[0])
+      .then(r => r.json())
+      .then(r => {
+        if (!r.found) { guess.textContent = r.why || ''; return; }
+        if (r.crop && !cropTouched) {
+          crop.value = r.crop;
+          guess.textContent = 'USDA’s satellite map (' + r.year + ') calls this '
+            + r.category + ' — pre-selected. Correct it if the satellite is wrong.';
+        } else if (r.crop) {
+          guess.textContent = 'USDA’s satellite map (' + r.year + ') calls this '
+            + r.category + '.';
+        } else {
+          guess.textContent = 'USDA’s satellite map (' + r.year + ') calls this "'
+            + r.category + '", which is not a crop this list knows — pick one yourself.';
+        }
+      })
+      .catch(() => { guess.textContent = ''; });
+  }
+}
 // ---- walk-in routes ---------------------------------------------------
 // The classic way a good stand is wasted: not sitting it on the wrong wind, but
 // walking to it across the ground you were about to hunt. A route is judged the
@@ -1067,12 +1418,46 @@ function routePaths(left, top) {
   const out = [];
   for (const r of ROUTES) {
     if (!r.points || r.points.length < 2) continue;
+    // While a route's line is being redrawn the old line stays off the map:
+    // two lines for one walk would leave it ambiguous which one is real.
+    if (drawing && drawing.editingId === r.id) continue;
     out.push('<path class="route" d="' + svgPath(r.points, left, top, false) + '"></path>');
   }
   if (drawing && drawing.points.length >= 2) {
     out.push('<path class="route draft" d="' + svgPath(drawing.points, left, top, false) + '"></path>');
   }
   return out;
+}
+
+/** Where a route's chip sits: the middle vertex, or the average of two. */
+const routeMid = pts => (pts.length === 2
+  ? [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2]
+  : pts[Math.floor(pts.length / 2)]);
+
+// The chip is how a route is reopened — the line itself lives in an SVG that
+// must not take clicks (see the lane handles for why). Before this existed a
+// route could be drawn once and then never renamed, repointed or deleted; the
+// server had PATCH and DELETE all along, and nothing on the map could reach
+// either.
+function drawRouteLabels(left, top, W, H) {
+  for (const r of ROUTES) {
+    if (!r.points || r.points.length < 2) continue;
+    if (drawing && drawing.editingId === r.id) continue;
+    const mid = routeMid(r.points);
+    const x = projX(mid[0], zoom) - left, y = projY(mid[1], zoom) - top;
+    if (x < -70 || y < -30 || x > W + 70 || y > H + 30) continue;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'routelabel';
+    chip.textContent = r.name || 'Walk-in';
+    chip.title = 'Walk-in route' + (r.stand_name ? ' to ' + r.stand_name : '')
+      + (r.winds && r.winds.clean.length
+        ? ' — clean on ' + r.winds.clean.join(', ') : '')
+      + ' — tap to edit';
+    chip.style.left = x + 'px'; chip.style.top = y + 'px';
+    chip.onclick = ev => { ev.stopPropagation(); openRouteForm(r.points, r); };
+    pinsEl.appendChild(chip);
+  }
 }
 
 function routeTip(text) {
@@ -1118,21 +1503,35 @@ function cancelRoute() {
 async function finishRoute() {
   if (!drawing) return;
   const points = drawing.points;
+  const editingId = drawing.editingId;
   if (points.length < 2) return cancelRoute();
   const pts = points.slice();
   cancelRoute();
+  // A redraw replaces only the line; the name and the stand it leads to stay,
+  // and the verdict refreshes with the points.
+  if (editingId) {
+    try {
+      await apiWrite('PATCH', '/api/routes/' + editingId, { points: pts });
+      await refreshRoutes();
+    } catch (err) {
+      terrainNote('Could not save the new line: ' + err.message);
+    }
+    return;
+  }
   openRouteForm(pts);
 }
 
-function openRouteForm(points) {
+function openRouteForm(points, existing) {
   // Shares the stand form's class and its place on the map, so opening one
   // has to put the other away properly rather than just deleting the node.
   closeStandForm();
+  const isNew = !existing;
   const form = el('div', 'standform');
-  form.appendChild(el('h3', null, 'Walk-in route'));
+  form.appendChild(el('h3', null, isNew ? 'Walk-in route' : 'Edit route'));
 
   const name = document.createElement('input');
   name.placeholder = 'From the gate';
+  if (existing) name.value = existing.name || '';
   form.append(el('label', null, 'Name'), name);
 
   // Which stand this is the way IN to. A route without one cannot be judged,
@@ -1145,30 +1544,83 @@ function openRouteForm(points) {
   }
   form.append(el('label', null, 'The way in to'), sel);
 
-  // The end of the walk is the last point, so the nearest stand to it is very
-  // likely the one meant — offered as a default rather than assumed silently.
-  const last = points[points.length - 1];
-  let best = null, bestM = Infinity;
-  for (const st of STANDS) {
-    const m = Math.hypot((st.lng - last[0]) * 80000, (st.lat - last[1]) * 111000);
-    if (m < bestM) { bestM = m; best = st; }
+  if (existing && existing.stand_id && STANDS.some(st => st.id === existing.stand_id)) {
+    sel.value = String(existing.stand_id);
+  } else {
+    // The end of the walk is the last point, so the nearest stand to it is very
+    // likely the one meant — offered as a default rather than assumed silently.
+    const last = points[points.length - 1];
+    let best = null, bestM = Infinity;
+    for (const st of STANDS) {
+      const m = Math.hypot((st.lng - last[0]) * 80000, (st.lat - last[1]) * 111000);
+      if (m < bestM) { bestM = m; best = st; }
+    }
+    if (best) sel.value = String(best.id);
   }
-  if (best) sel.value = String(best.id);
+
+  // An existing route shows the verdict it was saved with, so deciding
+  // whether to move the line does not start from a blank form.
+  if (existing && existing.winds) {
+    const w = el('div', 'lanewinds');
+    w.appendChild(document.createTextNode((existing.lengthM || '?') + ' m. Clean on '));
+    w.appendChild(el('b', null, existing.winds.clean.join(', ') || 'no wind at all'));
+    w.appendChild(document.createTextNode('.'));
+    if (existing.winds.dirty.length) {
+      const no = el('div', 'no',
+        'Blows your scent over the stand on ' + existing.winds.dirty.join(', ') + '.');
+      w.appendChild(no);
+    }
+    form.appendChild(w);
+  }
 
   const row = el('div', 'formrow');
-  const save = el('button', 'primary', 'Save route');
-  const cancel = el('button', null, 'Discard');
+  const save = el('button', 'primary', isNew ? 'Save route' : 'Save');
+  const cancel = el('button', null, isNew ? 'Discard' : 'Cancel');
   row.append(save, cancel);
   form.appendChild(row);
+
+  if (!isNew) {
+    const redraw = el('button', null, 'Redraw the line');
+    redraw.type = 'button';
+    redraw.style.marginTop = '8px';
+    redraw.onclick = () => {
+      form.remove();
+      clearMapModes('route');
+      drawing = { standId: existing.stand_id, points: [], editingId: existing.id };
+      routeBtn.classList.add('on');
+      routeBtn.textContent = 'Finish route';
+      mapEl.classList.add('placing');
+      routeTip('Click the new line for <b>' + (existing.name || 'this route')
+        + '</b>. <b>Enter</b> saves it, <b>Esc</b> keeps the old one.');
+      draw();
+    };
+    form.appendChild(redraw);
+    const del = el('button', 'danger', 'Delete');
+    del.style.marginTop = '8px';
+    del.onclick = async () => {
+      if (!confirm('Delete ' + (existing.name || 'this route') + '?')) return;
+      await apiWrite('DELETE', '/api/routes/' + existing.id);
+      form.remove();
+      await refreshRoutes();
+    };
+    form.appendChild(del);
+  }
+
   cancel.onclick = () => { form.remove(); draw(); };
   save.onclick = async () => {
     try {
-      await apiWrite('POST', '/api/routes', {
-        standId: Number(sel.value), name: name.value.trim() || null, points,
-      });
+      if (isNew) {
+        await apiWrite('POST', '/api/routes', {
+          standId: Number(sel.value), name: name.value.trim() || null, points,
+        });
+      } else {
+        await apiWrite('PATCH', '/api/routes/' + existing.id, {
+          standId: Number(sel.value), name: name.value.trim() || null,
+        });
+      }
       form.remove();
       await refreshRoutes();
-      const saved = ROUTES[ROUTES.length - 1];
+      const saved = isNew ? ROUTES[ROUTES.length - 1] : null;
       if (saved?.winds) {
         terrainNote('<b>' + (saved.name || 'Route') + '</b> \u2014 ' + saved.lengthM + ' m.<br>'
           + 'Clean on <b>' + saved.winds.clean.join(' ') + '</b>.<br>'
@@ -1236,6 +1688,8 @@ function clearMapModes(keep) {
   if (keep !== 'route' && drawing) cancelRoute();
   if (keep !== 'lane' && laneEdit) { laneEdit = null; }
   if (keep !== 'measure' && measuring) stopMeasuring();
+  if (keep !== 'field' && fielding) cancelFielding();
+  if (keep !== 'entry' && entryPick) cancelEntryPick();
   // The caller puts it back if it is arming something. Leaving it on is how
   // the map ends up stuck showing a crosshair with no mode behind it.
   mapEl.classList.remove('placing');
@@ -1748,6 +2202,150 @@ if (!D.live) {
   suggestBtn.style.cursor = 'not-allowed';
 }
 
+// ---- the suggested walk in ----------------------------------------------
+// "Plan the walk in" on a stand's report: from where you enter the property
+// to that stand, bent around the wind by the server (entry-path.mjs). The
+// entry point is your nearest Access marker when one exists; otherwise one
+// click says where the truck is. The proposal is dashed and a colour used
+// for nothing else, and it becomes a real route only when saved.
+let SUGWALK = null;      // the proposal on the map, or null
+let entryPick = null;    // { standId } while waiting for the entry click
+
+function walkPaths(left, top) {
+  if (!SUGWALK || !SUGWALK.points || SUGWALK.points.length < 2) return [];
+  const out = ['<path class="sugwalk" d="' + svgPath(SUGWALK.points, left, top, false) + '"></path>'];
+  const s = SUGWALK.points[0];
+  const px = projX(s[0], zoom) - left, py = projY(s[1], zoom) - top;
+  out.push('<circle class="sugwalk" cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1)
+    + '" r="5"></circle>');
+  return out;
+}
+
+function clearWalk() {
+  SUGWALK = null;
+  document.querySelector('.walkcard')?.remove();
+  draw();
+}
+
+function cancelEntryPick() {
+  entryPick = null;
+  mapEl.classList.remove('placing');
+  routeTip(null);
+}
+
+addEventListener('keydown', e => {
+  if (!entryPick) return;
+  if (isTyping(e.target)) return;
+  if (e.key === 'Escape') { e.preventDefault(); cancelEntryPick(); }
+});
+
+function suggestWalk(stand) {
+  closeSelPanel();
+  clearWalk();
+  const access = MARKERS.filter(m => m.kind === 'access'
+    && Number.isFinite(m.lat) && Number.isFinite(m.lng));
+  if (!access.length) {
+    clearMapModes('entry');
+    entryPick = { standId: stand.id };
+    mapEl.classList.add('placing');
+    routeTip('Click where you come in from — the truck, the gate, the road. '
+      + '<b>Esc</b> cancels. Drop an <b>Access</b> marker there once and this '
+      + 'step disappears.');
+    return;
+  }
+  // Several access points: the one nearest the stand is the default, and the
+  // card says which was used — parking on the far side is a choice you make
+  // by clicking instead (Mark sign → Access), not one this guesses at.
+  let best = access[0], bm = Infinity;
+  for (const a of access) {
+    const m = Math.hypot((a.lng - stand.lng) * 80000, (a.lat - stand.lat) * 111000);
+    if (m < bm) { bm = m; best = a; }
+  }
+  fetchWalkIn(stand.id, best.lat, best.lng, best.name || 'your access marker');
+}
+
+async function fetchWalkIn(standId, lat, lng, fromLabel) {
+  terrainNote('Planning the walk in…');
+  try {
+    const res = await fetch('/api/suggest-route?standId=' + standId
+      + '&fromLat=' + lat + '&fromLng=' + lng);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+    terrainNote(null);
+    SUGWALK = body;
+    showWalkCard(body, fromLabel);
+    draw();
+  } catch (err) {
+    terrainNote('Could not plan the walk: ' + err.message);
+  }
+}
+
+function showWalkCard(s, fromLabel) {
+  document.querySelector('.walkcard')?.remove();
+  closeSuggestCard();
+  const card = el('div', 'suggcard walkcard');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '×'; x.title = 'Close';
+  x.onclick = ev => { ev.stopPropagation(); clearWalk(); };
+  card.appendChild(x);
+
+  card.appendChild(el('h4', null, 'Walk in — ' + (s.standName || 'the stand')));
+  card.appendChild(el('div', 'meta', 'From ' + fromLabel + ' · planned for a '
+    + s.windFrom + ' wind' + (s.windSource ? ' — ' + s.windSource : '')));
+
+  const v = el('div', 'meta');
+  v.style.marginTop = '6px';
+  if (s.verdict && s.verdict.ok === true) {
+    v.innerHTML = '<b>Clean on this wind.</b>';
+  } else {
+    v.innerHTML = '<span style="color:var(--warn)"><b>Not clean:</b> '
+      + (s.verdict && s.verdict.why ? s.verdict.why : 'no verdict') + '</span>';
+  }
+  card.appendChild(v);
+
+  const ul = el('ul');
+  for (const line of s.why || []) ul.appendChild(el('li', null, line));
+  card.appendChild(ul);
+
+  if (s.winds && s.winds.clean && s.winds.clean.length) {
+    const w = el('div', 'meta');
+    w.style.marginTop = '8px';
+    w.textContent = 'This line stays clean on ' + s.winds.clean.length + ' of 16 winds: '
+      + s.winds.clean.join(', ');
+    card.appendChild(w);
+  }
+
+  const pick = el('div', 'pick');
+  const keep = document.createElement('button');
+  keep.className = 'primary';
+  keep.textContent = 'Save as route';
+  keep.onclick = async ev => {
+    ev.stopPropagation();
+    try {
+      await apiWrite('POST', '/api/routes', {
+        standId: s.standId,
+        name: 'Walk in from ' + fromLabel,
+        points: s.points,
+      });
+      clearWalk();
+      await refreshRoutes();
+    } catch (err) {
+      card.appendChild(el('div', 'caveat', 'Could not save: ' + err.message));
+    }
+  };
+  const drop = document.createElement('button');
+  drop.textContent = 'Not this one';
+  drop.onclick = ev => { ev.stopPropagation(); clearWalk(); };
+  pick.append(keep, drop);
+  card.appendChild(pick);
+
+  card.appendChild(el('div', 'caveat', 'A model, not a promise: scent is taken as '
+    + 'a 200 m cone 30° either side of downwind. Thermals, terrain and a '
+    + 'swirling evening can beat it. The line stops short of the stand because '
+    + 'the last steps cannot be clean on any wind.'));
+  mapEl.appendChild(card);
+}
+
 // ---- terrain ----------------------------------------------------------
 // The ground itself, from free USGS LiDAR. This is the layer the paid apps
 // charge for, and on subtle ground it is the one that actually tells you where
@@ -1950,7 +2548,12 @@ function parcelPaths(left, top) {
   const out = PARCEL_RINGS
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
-  return out.concat(routePaths(left, top))
+  // Fields go under everything: they are ground, and a filled shape drawn
+  // over a route or a lane would tint the line that matters.
+  return fieldPaths(left, top)
+    .concat(out)
+    .concat(routePaths(left, top))
+    .concat(walkPaths(left, top))
     .concat(lanePaths(left, top))
     .concat(trackPaths(left, top))
     .concat(measurePaths(left, top))
@@ -2204,6 +2807,10 @@ function showStandReport(s) {
     edit.type = 'button'; edit.className = 'primary'; edit.textContent = 'Edit stand';
     edit.onclick = () => { closeSelPanel(); openStandForm(s); };
     btns.appendChild(edit);
+    const walk = document.createElement('button');
+    walk.type = 'button'; walk.textContent = 'Plan the walk in';
+    walk.onclick = () => suggestWalk(s);
+    btns.appendChild(walk);
   }
   const done = document.createElement('button');
   done.type = 'button'; done.textContent = 'Close';
@@ -3297,6 +3904,27 @@ mapEl.addEventListener('click', e => {
     draw();
     return;
   }
+  if (fielding) {
+    const rf = mapEl.getBoundingClientRect();
+    const fx = e.clientX - rf.left, fy = e.clientY - rf.top;
+    if (fx < 0 || fy < 0 || fx > rf.width || fy > rf.height) return;
+    const at = pixelToLatLng(fx, fy);
+    fielding.points.push([at.lng, at.lat]);
+    routeTip(fielding.points.length + ' corner' + (fielding.points.length === 1 ? '' : 's')
+      + ' — <b>Enter</b> closes the field, <b>Esc</b> cancels.');
+    draw();
+    return;
+  }
+  if (entryPick) {
+    const re = mapEl.getBoundingClientRect();
+    const ex = e.clientX - re.left, ey = e.clientY - re.top;
+    if (ex < 0 || ey < 0 || ex > re.width || ey > re.height) return;
+    const at = pixelToLatLng(ex, ey);
+    const pick = entryPick;
+    cancelEntryPick();
+    fetchWalkIn(pick.standId, at.lat, at.lng, 'where you clicked');
+    return;
+  }
   if (drawing) {
     const rd = mapEl.getBoundingClientRect();
     const dx = e.clientX - rd.left, dy = e.clientY - rd.top;
@@ -3415,16 +4043,47 @@ let drag = null;
 // the threshold also absorbs the wobble of a finger on glass.
 const DRAG_SLOP_PX = 5;
 let dragged = false;
+// Every pointer currently down on the ground. One is a pan; two are a pinch.
+// Before this existed a second finger was invisible: both fingers fed the
+// same pan state in turn and the map flew about, which on a phone is exactly
+// the moment someone was TRYING to zoom — the likeliest way to end up zoomed
+// all the way out with no idea how you got there.
+const mapPts = new Map();
+let pinch = null;        // { d0, z0 } while two fingers are down
 mapEl.addEventListener('pointerdown', e => {
   // Same test as the click handler, deliberately: pressing a control must not
   // start a drag, and must not capture the pointer away from that control.
   if (!onMapGround(e.target)) return;
+  mapEl.setPointerCapture(e.pointerId);
+  mapPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (mapPts.size === 2) {
+    const two = [...mapPts.values()];
+    pinch = { d0: Math.hypot(two[0].x - two[1].x, two[0].y - two[1].y), z0: zoom };
+    drag = null;             // two fingers zoom; they do not also pan
+    dragged = true;          // and the release must not read as a tap
+    mapEl.classList.remove('drag');
+    return;
+  }
   drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   dragged = false;
   mapEl.classList.add('drag');
-  mapEl.setPointerCapture(e.pointerId);
 });
 mapEl.addEventListener('pointermove', e => {
+  if (pinch && mapPts.has(e.pointerId)) {
+    mapPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const two = [...mapPts.values()];
+    const d = Math.hypot(two[0].x - two[1].x, two[0].y - two[1].y);
+    if (d < 1 || pinch.d0 < 1) return;
+    // Whole levels, because the tiles only exist at whole levels: the spread
+    // between the fingers picks the level, log2 because each level doubles.
+    const want = pinch.z0 + Math.round(Math.log2(d / pinch.d0));
+    if (want !== zoom) {
+      const r = mapEl.getBoundingClientRect();
+      setZoomAt(want, (two[0].x + two[1].x) / 2 - r.left,
+                      (two[0].y + two[1].y) / 2 - r.top);
+    }
+    return;
+  }
   if (!drag) return;
   if (Math.abs(e.clientX - drag.x0) > DRAG_SLOP_PX
       || Math.abs(e.clientY - drag.y0) > DRAG_SLOP_PX) dragged = true;
@@ -3437,20 +4096,85 @@ mapEl.addEventListener('pointermove', e => {
   draw();
 });
 for (const ev of ['pointerup', 'pointercancel'])
-  mapEl.addEventListener(ev, () => { drag = null; mapEl.classList.remove('drag'); });
+  mapEl.addEventListener(ev, e => {
+    mapPts.delete(e.pointerId);
+    if (mapPts.size < 2) pinch = null;
+    if (!mapPts.size) { drag = null; mapEl.classList.remove('drag'); }
+    else if (mapPts.size === 1) {
+      // The finger that stays after a pinch may keep panning, measured from
+      // where it is NOW — measured from where it began, the map would leap.
+      const p = [...mapPts.values()][0];
+      drag = { x: p.x, y: p.y, x0: p.x, y0: p.y };
+    }
+  });
 // Each layer has its own deepest usable zoom — USGS topo stops well short of
 // the imagery — so clamp against the active layer rather than a fixed 19,
 // otherwise zooming in past coverage silently paints blank tiles.
-const setZoom = z => {
-  zoom = Math.max(2, Math.min(LAYERS[layerKey].maxZoom, z));
+//
+// Zoom keeps the ground under the given SCREEN POINT still — the cursor, the
+// pinch midpoint, the double-click. Zooming about the centre instead meant
+// the thing you were aiming at slid away with every step, and zooming back
+// in to your ground was a fight of zoom-pan-zoom-pan.
+const setZoomAt = (z, px, py) => {
+  z = Math.max(2, Math.min(LAYERS[layerKey].maxZoom, z));
+  if (z === zoom) return;
+  const at = pixelToLatLng(px, py);
+  zoom = z;
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const n = TS * 2 ** zoom;
+  const cx = projX(at.lng, zoom) - (px - W / 2);
+  const cy = projY(at.lat, zoom) - (py - H / 2);
+  centre = {
+    lng: cx / n * 360 - 180,
+    lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * cy / n))) * 180 / Math.PI,
+  };
   draw();
 };
+const setZoom = z => setZoomAt(z, mapEl.clientWidth / 2, mapEl.clientHeight / 2);
 document.getElementById('zin').onclick = () => setZoom(zoom + 1);
 document.getElementById('zout').onclick = () => setZoom(zoom - 1);
+// One press puts the view back on your ground: the chosen ground when there
+// is one, everything placed otherwise. The escape hatch for "suddenly zoomed
+// all the way out" — however the view got lost, this is one tap home.
+document.getElementById('zhome').onclick = () => {
+  const g = GROUND_LIST.find(x => groundKey(x) === groundChoice);
+  if (g) return frameGround(g);
+  const pts = groundPoints().map(p => [p.lng, p.lat]);
+  if (pts.length) { ({ centre, zoom } = frameFor(pts)); draw(); }
+};
+// The wheel accumulates. One wheel EVENT used to be one whole zoom level, and
+// a trackpad fires dozens of events per flick — a light two-finger scroll
+// threw the map from the property to the whole hemisphere, which is exactly
+// the "suddenly zoomed all the way out" this replaces. Notches now buy a
+// level per ~90 px of delta, anchored under the cursor, and the residue dies
+// after a pause so a slow single notch still steps exactly once.
+let wheelAcc = 0, wheelAt = 0;
 mapEl.addEventListener('wheel', e => {
   e.preventDefault();
-  setZoom(zoom + (e.deltaY < 0 ? 1 : -1));
+  const now = performance.now();
+  if (now - wheelAt > 250) wheelAcc = 0;
+  wheelAt = now;
+  // deltaMode 1 is lines (Firefox with a real mouse); ~33 px a line.
+  const d = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
+  if (Math.sign(d) !== Math.sign(wheelAcc)) wheelAcc = 0;
+  wheelAcc += d;
+  const STEP = 90;
+  const steps = Math.trunc(wheelAcc / STEP);
+  if (!steps) return;
+  wheelAcc -= steps * STEP;
+  const r = mapEl.getBoundingClientRect();
+  setZoomAt(zoom - steps, e.clientX - r.left, e.clientY - r.top);
 }, { passive: false });
+// Double-click zooms in a level on the spot clicked — but never while a mode
+// is armed, where the two clicks were two placements, not a gesture.
+mapEl.addEventListener('dblclick', e => {
+  if (!onMapGround(e.target)) return;
+  if (placing || marking || drawing || measuring || identifying || laneEdit
+      || fielding || entryPick) return;
+  e.preventDefault();
+  const r = mapEl.getBoundingClientRect();
+  setZoomAt(zoom + 1, e.clientX - r.left, e.clientY - r.top);
+});
 addEventListener('resize', draw);
 // ---- the ground switcher -------------------------------------------------
 // Two hunting properties means a map framed on both opens at a zoom where
@@ -3616,5 +4340,204 @@ if (!framePoints.length) {
 } else if (!located.length) {
   terrainNote('No camera has reported GPS, so the map is framed on your stands '
     + 'and markers instead.');
+}
+// ---- the weather strip ---------------------------------------------------
+// Wind and temperature at the bottom of the map, and a scrubber over the
+// hourly forecast: drag it forward to watch the wind swing and the front
+// arrive, because the wind three days out is what decides which stand gets
+// hunted Saturday. The forecast comes through the server (/api/forecast),
+// which caches it — the page contacts no external host, and in the truck the
+// strip shows the last fetch and says how old it is.
+const wxChip = document.getElementById('wxchip');
+const wxBar = document.getElementById('wxbar');
+const WX_COMPASS = ${JSON.stringify(COMPASS)};
+let WX = null;           // the shaped forecast, as served
+let wxAt = null;         // where it was fetched for
+let wxIdx = 0;           // the hour under the scrubber
+let wxNowIdx = 0;
+
+const wxCompass = deg =>
+  WX_COMPASS[Math.round((((deg || 0) % 360) + 360) % 360 / 22.5) % 16];
+
+// The chip's arrow points where the air is GOING — the thing you feel on
+// your neck — while the words name where it is FROM, hunter's convention.
+function wxArrow(dirDeg) {
+  const s = document.createElement('span');
+  s.className = 'wxarrow';
+  s.textContent = '↑';
+  s.style.transform = 'rotate(' + Math.round(((dirDeg || 0) + 180) % 360) + 'deg)';
+  return s;
+}
+
+async function wxLoad() {
+  // Rounded to a couple of decimals so the URL is stable across pans and the
+  // service worker can replay the same answer offline — full floats made
+  // every pan a fresh URL, the exact trap the terrain cache documents.
+  const lat = Math.round(centre.lat * 100) / 100;
+  const lng = Math.round(centre.lng * 100) / 100;
+  const res = await fetch('/api/forecast?lat=' + lat + '&lng=' + lng);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  WX = body;
+  wxAt = { lat: lat, lng: lng };
+  wxNowIdx = wxFindNow();
+  wxIdx = wxNowIdx;
+}
+
+// Refetch when the view has moved to different ground (the other property)
+// or the data has gone stale; the server's own cache absorbs everything else.
+async function wxEnsure() {
+  if (WX && wxAt) {
+    const moved = MEASURE.distanceM(wxAt.lat, wxAt.lng, centre.lat, centre.lng);
+    const age = Date.now() - (Date.parse(WX.fetchedAt || 0) || 0);
+    if (moved < 5000 && age < 45 * 60000) return;
+  }
+  await wxLoad();
+}
+
+// Which hour is NOW, matched on the property's own clock via the forecast's
+// UTC offset — parsing the naive local strings through Date would re-read
+// them in the phone's timezone, the trap legal-light.mjs documents.
+function wxFindNow() {
+  if (!WX || !WX.time || !WX.time.length) return 0;
+  let probe;
+  if (Number.isFinite(WX.utcOffsetSeconds)) {
+    probe = new Date(Date.now() + WX.utcOffsetSeconds * 1000).toISOString().slice(0, 13);
+  } else {
+    const d = new Date();
+    probe = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+      + '-' + String(d.getDate()).padStart(2, '0')
+      + 'T' + String(d.getHours()).padStart(2, '0');
+  }
+  const i = WX.time.findIndex(t => t.slice(0, 13) === probe);
+  return i >= 0 ? i : 0;
+}
+
+// 'Sat 5 pm', from the naive local string by slicing rather than parsing —
+// the string already IS the property's wall clock.
+function wxWhen(i) {
+  const t = WX.time[i] || '';
+  const day = t.slice(0, 10), hh = Number(t.slice(11, 13));
+  const d = new Date(day + 'T12:00');
+  const wd = isNaN(d) ? day : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  const ap = hh >= 12 ? 'pm' : 'am';
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return (i === wxNowIdx ? 'now — ' : '') + wd + ' ' + h12 + ' ' + ap;
+}
+
+function wxPaintChip() {
+  if (!WX || !WX.time || !WX.time.length) return;
+  const i = wxNowIdx;
+  wxChip.textContent = '';
+  wxChip.appendChild(wxArrow(WX.dir[i]));
+  const wind = Number.isFinite(WX.wind[i]) ? Math.round(WX.wind[i]) : null;
+  wxChip.appendChild(el('span', null,
+    wxCompass(WX.dir[i]) + (wind === null ? '' : ' ' + wind)));
+  wxChip.appendChild(el('span', null,
+    (Number.isFinite(WX.temp[i]) ? Math.round(WX.temp[i]) : '?') + '°F'));
+  if (WX.sky && WX.sky[i]) wxChip.appendChild(el('span', 'muted', WX.sky[i]));
+  if (WX.stale) wxChip.appendChild(el('span', 'muted', '(old)'));
+  wxChip.hidden = false;
+}
+
+function wxPaintBar() {
+  if (!WX) return;
+  const i = wxIdx;
+  const line = wxBar.querySelector('.now');
+  if (!line) return;
+  line.textContent = '';
+  line.appendChild(wxArrow(WX.dir[i]));
+  const wind = Number.isFinite(WX.wind[i]) ? Math.round(WX.wind[i]) : null;
+  const gust = Number.isFinite(WX.gust[i]) ? Math.round(WX.gust[i]) : null;
+  line.appendChild(el('b', null, 'wind ' + wxCompass(WX.dir[i])
+    + (wind === null ? '' : ' at ' + wind + ' mph')));
+  if (wind !== null && gust !== null && gust >= wind + 6) {
+    line.appendChild(el('span', 'muted', 'gusting ' + gust));
+  }
+  line.appendChild(el('b', null,
+    (Number.isFinite(WX.temp[i]) ? Math.round(WX.temp[i]) : '?') + '°F'));
+  const bits = [];
+  if (WX.sky && WX.sky[i]) bits.push(WX.sky[i]);
+  if (Number.isFinite(WX.precip[i]) && WX.precip[i] > 0) {
+    bits.push(WX.precip[i] + ' in'
+      + (Number.isFinite(WX.prob[i]) ? ' (' + WX.prob[i] + '%)' : ''));
+  } else if (Number.isFinite(WX.prob[i]) && WX.prob[i] >= 30) {
+    bits.push(WX.prob[i] + '% chance of rain');
+  }
+  if (bits.length) line.appendChild(el('span', 'muted', bits.join(' · ')));
+  line.appendChild(el('span', 'when', wxWhen(i)));
+}
+
+function wxOpenBar() {
+  wxBar.textContent = '';
+  wxBar.appendChild(el('div', 'now'));
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.id = 'wxslider';
+  slider.min = '0';
+  slider.max = String(WX.time.length - 1);
+  slider.step = '1';
+  slider.value = String(wxIdx);
+  slider.oninput = () => { wxIdx = Number(slider.value); wxPaintBar(); };
+  wxBar.appendChild(slider);
+
+  // Day names under the slider, each as wide as the hours it owns, so the
+  // thumb's position reads as a day without arithmetic.
+  const scale = el('div', 'scale');
+  const days = [];
+  for (const t of WX.time) {
+    const day = t.slice(0, 10);
+    if (!days.length || days[days.length - 1].day !== day) days.push({ day: day, n: 0 });
+    days[days.length - 1].n++;
+  }
+  for (const dd of days) {
+    const d = new Date(dd.day + 'T12:00');
+    const s = el('span', null,
+      isNaN(d) ? dd.day : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]);
+    s.style.flexGrow = String(dd.n);
+    scale.appendChild(s);
+  }
+  wxBar.appendChild(scale);
+
+  const foot = el('div', 'foot');
+  const nowBtn = document.createElement('button');
+  nowBtn.type = 'button'; nowBtn.textContent = 'Now';
+  nowBtn.onclick = () => { wxIdx = wxNowIdx; slider.value = String(wxIdx); wxPaintBar(); };
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button'; closeBtn.textContent = 'Close';
+  closeBtn.onclick = () => {
+    wxBar.hidden = true;
+    document.getElementById('groundSel')?.classList.remove('under-wxbar');
+    wxPaintChip();
+  };
+  foot.append(nowBtn, closeBtn);
+  foot.appendChild(el('span', 'when', 'Drag to look ahead.'));
+  wxBar.appendChild(foot);
+
+  if (WX.note) wxBar.appendChild(el('div', 'stale', WX.note));
+  wxPaintBar();
+  wxChip.hidden = true;
+  wxBar.hidden = false;
+  // On a phone the ground switcher floats where the bar now is (measured:
+  // "Everything" sat square on the day scale). It steps aside while the bar
+  // is open — the rule that hides it lives in the dashboard's stylesheet and
+  // only bites at phone width, so the top-bar switcher never blinks.
+  document.getElementById('groundSel')?.classList.add('under-wxbar');
+}
+
+wxChip.onclick = async ev => {
+  ev.stopPropagation();
+  try { await wxEnsure(); } catch (err) { /* keep what is already shown */ }
+  if (!WX || !WX.time || !WX.time.length) return;
+  wxNowIdx = wxFindNow();
+  wxIdx = wxNowIdx;
+  wxOpenBar();
+};
+
+// The strip needs the server (the forecast proxy and its cache live there);
+// on the static file the chip simply never appears.
+if (D.live) {
+  wxEnsure().then(wxPaintChip).catch(() => { /* no forecast, no strip */ });
 }
 `;

@@ -75,6 +75,37 @@ The decision, in three parts:
   animals for one. One button per species is one animal to agree about — the
   same grain everything else tags at.
 
+### Wind is recognized locally, against your own empties (settled 2026-08-29)
+
+Kent asked for auto-recognition — people, animals, wind — with confidence,
+shown on the photo previews. The split that settles it:
+
+- **People and animals come from SpyPoint's AI**, which already tags them and
+  is ingested as claims. Their API carries **no confidence number**, so the
+  previews say "camera thinks: buck" in words — an invented percentage would
+  be a lie wearing precision. If a real score ever shows up in the raw photo
+  JSON (`--inspect` would reveal it), surfacing it is easy.
+- **Wind — the empty frame — is the one class recognized here**, because it
+  is the class the vendor stays silent on and the majority of what a camera
+  sends. No model: a frame is fingerprinted (dHash, 256-bit) and matched
+  against frames YOU reviewed as empty on that camera. The confidence shown
+  is that measured match. The baseline grows with every "nothing here" press,
+  it is per camera, and night frames simply match other night frames.
+- **The browser does the hashing.** Pixels need a JPEG decoder; Node has none
+  and zero-dependencies is not dying for one, while every browser ships one.
+  The review screen hashes each frame on a canvas as it loads and posts the
+  hash; the server only stores and compares.
+- **Hash size was measured, not copied.** The classic 9×8 dHash let an
+  animal-sized blob covering 15% of the frame move TWO bits of 64 — inside
+  any usable gate, so a deer frame matched the empty baseline in the browser
+  drive. At 17×16 (256 bits) the same blob rewrites dozens of bits while
+  exposure drift still moves none. The gate is 12 bits — under 5% — because
+  the cost of a miss is one more frame reviewed by hand, and the cost of a
+  false match is a deer suggested away.
+- **A person's call always wins.** A confirmed detection anywhere in a visit
+  removes it from the baseline; the wind line reads "N agrees — your eyes
+  overrule"; and nothing is ever auto-marked.
+
 ## 4. Buck identity: named by hand, assisted by grouping
 
 Kent creates a buck ("Split G2") and assigns it. The tool makes that fast:

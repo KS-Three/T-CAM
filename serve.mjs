@@ -33,7 +33,7 @@ import {
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
-  upsertProperty, allProperties, assignPropertyMembers,
+  upsertProperty, allProperties, assignPropertyMembers, setPhotoPhash, emptyBaseline,
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
@@ -50,6 +50,7 @@ import { calibration, windAccuracy, standPerformance, summary as sitSummary } fr
 import { buildTrack, compareToRoute } from './track.mjs';
 import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
+import { isHash, windMatch } from './phash.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { reviewHtml } from './review-page.mjs';
 import { tonightHtml } from './tonight-page.mjs';
@@ -148,7 +149,30 @@ export function photoForClient(p) {
       ? `/photos/${encodeURI(p.file_path.split(path.sep).join('/'))}` : null,
     url: p.url ?? null,
     downloaded: !!p.downloaded_at,
+    // Whether a fingerprint exists — so the review page hashes each frame
+    // exactly once, instead of re-posting every time it is looked at.
+    hashed: isHash(p.phash),
   };
+}
+
+/**
+ * Does this visit look like wind? Every frame must speak — a visit is judged
+ * whole, and one unhashed frame means the answer is "not yet" rather than a
+ * verdict from half the evidence. Null says nothing, on purpose: too few
+ * reviewed empties, a frame beyond the gate, or hashes not computed yet all
+ * look the same to the caller, which is the point — the suggestion appears
+ * only when it is earned.
+ */
+export function visitWind(db, cameraId, photoRows) {
+  if (!photoRows.length || !photoRows.every(p => isHash(p.phash))) return null;
+  const baseline = emptyBaseline(db, cameraId);
+  let worst = null;
+  for (const p of photoRows) {
+    const m = windMatch(p.phash, baseline);
+    if (!m) return null;
+    if (worst === null || m.bits > worst.bits) worst = m;
+  }
+  return worst;
 }
 
 /**
@@ -164,19 +188,37 @@ export function detectionForClient(d) {
 }
 
 export function recentPhotos(db, limit = 200) {
+  // One baseline lookup per camera per call, not per photo.
+  const empties = new Map();
+  const baseFor = cid => {
+    if (!empties.has(cid)) empties.set(cid, emptyBaseline(db, cid));
+    return empties.get(cid);
+  };
   return db.prepare(`
-    SELECT p.id, p.taken_at AS date, p.file_path AS file, p.url,
+    SELECT p.id, p.taken_at AS date, p.file_path AS file, p.url, p.phash,
            c.name AS cameraName, c.id AS cameraId,
-           (SELECT group_concat(DISTINCT d.species)
-              FROM detections d WHERE d.photo_id = p.id) AS tagList
+           (SELECT group_concat(d.species ||
+                     CASE WHEN b.name IS NOT NULL THEN ' (' || b.name || ')' ELSE '' END, ', ')
+              FROM detections d LEFT JOIN bucks b ON b.id = d.buck_id
+              WHERE d.photo_id = p.id AND d.confirmed = 1) AS confirmedList,
+           (SELECT group_concat(DISTINCT d.species) FROM detections d
+              WHERE d.photo_id = p.id AND d.source = 'camera-ai' AND d.confirmed = 0) AS claimList
     FROM photos p
     JOIN cameras c ON c.id = p.camera_id
     WHERE p.taken_at IS NOT NULL
     ORDER BY p.taken_at DESC
     LIMIT ?
   `).all(limit).map(r => ({
-    ...r,
-    tags: r.tagList ? r.tagList.split(',').filter(Boolean) : [],
+    id: r.id, date: r.date, url: r.url,
+    cameraName: r.cameraName, cameraId: r.cameraId,
+    // What is KNOWN about the frame, kept apart: a person's tags are fact
+    // (two rows of deer read "deer, deer" — one row per animal), the camera's
+    // unconfirmed words are a claim, and "likely wind" is a measured match
+    // against frames a person reviewed as empty — silenced the moment a
+    // confirmed tag exists, because the person has already ruled.
+    confirmed: r.confirmedList || null,
+    claims: r.claimList ? r.claimList.split(',').join(', ') : null,
+    wind: r.confirmedList ? null : windMatch(r.phash, baseFor(r.cameraId)),
     // The page is served over http, so photos are addressed by URL rather than
     // by a filesystem path the browser could not read anyway.
     file: r.file ? `/photos/${encodeURI(r.file.split(path.sep).join('/'))}` : null,
@@ -693,11 +735,15 @@ export function createServer({ out = OPT.out } = {}) {
         const unreviewed = url.searchParams.get('unreviewed') === '1';
         const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 50));
         const cameraId = url.searchParams.get('camera') || null;
-        const visits = allVisits(db, { unreviewed, limit, cameraId }).map(v => ({
-          ...v,
-          photos: photosForVisit(db, v.id).map(photoForClient),
-          detections: detectionsForVisit(db, v.id).map(detectionForClient),
-        }));
+        const visits = allVisits(db, { unreviewed, limit, cameraId }).map(v => {
+          const rows = photosForVisit(db, v.id);
+          return {
+            ...v,
+            photos: rows.map(photoForClient),
+            detections: detectionsForVisit(db, v.id).map(detectionForClient),
+            wind: visitWind(db, v.camera_id, rows),
+          };
+        });
         return sendJson(res, 200, {
           visits,
           // Counted separately from the page, so the queue can say how much is
@@ -711,10 +757,12 @@ export function createServer({ out = OPT.out } = {}) {
       if (visitMatch && req.method === 'GET') {
         const v = visitById(db, Number(visitMatch[1]));
         if (!v) return sendJson(res, 404, { error: `no visit with id ${visitMatch[1]}` });
+        const vRows = photosForVisit(db, v.id);
         return sendJson(res, 200, {
           ...v,
-          photos: photosForVisit(db, v.id).map(photoForClient),
+          photos: vRows.map(photoForClient),
           detections: detectionsForVisit(db, v.id).map(detectionForClient),
+          wind: visitWind(db, v.camera_id, vRows),
         });
       }
 
@@ -759,6 +807,22 @@ export function createServer({ out = OPT.out } = {}) {
           }
         }
       }
+      // The review page computes a frame's fingerprint on a canvas (the
+      // browser is the only JPEG decoder in the house — see phash.mjs) and
+      // posts it here. Validated by shape, so a future algorithm's hashes
+      // cannot slip in and be compared against this one's.
+      const phashMatch = url.pathname.match(/^\/api\/photos\/(.+)\/phash$/);
+      if (phashMatch && req.method === 'POST') {
+        const b = await readJson(req);
+        if (!isHash(b.phash)) {
+          return sendJson(res, 400, { error: 'not a d1 fingerprint' });
+        }
+        const id = decodeURIComponent(phashMatch[1]);
+        return setPhotoPhash(db, id, b.phash)
+          ? sendJson(res, 200, { id, phash: b.phash })
+          : sendJson(res, 404, { error: `no photo with id ${id}` });
+      }
+
       const detMatch = url.pathname.match(/^\/api\/detections\/(\d+)$/);
       if (detMatch) {
         const id = Number(detMatch[1]);

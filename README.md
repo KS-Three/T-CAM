@@ -572,8 +572,32 @@ same way the measuring and lane arithmetic are, so the mesh the browser drapes
 and the mesh the tests measure cannot drift. Elevations travel quantized to
 two bytes a sample (millimetre error against 3DEP's own tenth-of-a-metre), and
 tiles come through the server's own cache like every other tile. Like Terrain,
-it needs the server and real 3DEP coverage; a view with neither says so
-instead of rendering a guess.
+it needs real 3DEP coverage; a view without any says so instead of rendering a
+guess.
+
+#### 3D in the woods
+
+Press **Save offline** and the ground is saved with the tiles: the elevation
+grid the mesh is built from, and the imagery the 3D drapes. One save covers
+three different ways of being disconnected, because each layer keeps its own
+copy:
+
+- **The cabin** — server up, internet down. The elevation grids live in the
+  server's database forever once fetched, and when USGS is unreachable the
+  server answers with the saved ground that covers the spot rather than a 502,
+  saying so in the note.
+- **The woods** — no server at all. The service worker on the phone caches
+  every terrain answer it has ever carried, and replays the newest one whose
+  bounds contain the point being asked about — matching by *coverage*, not by
+  URL, because the terrain URL carries the map centre at full float precision
+  and no two pans ever produce the same one. The drape tiles were pulled
+  through the worker at save time, so the imagery is there too.
+- **Nothing saved** — the failure surfaces honestly. Ground invented from
+  nothing would be worse than none.
+
+Either fallback dates its answer ("the ground as saved Tuesday 7:41 pm"),
+because saved ground passed off as live is how you trust a contour that is
+not there.
 
 ## Map layers
 

@@ -74,6 +74,7 @@ Rules for anything added from here:
 | **Stand hunting report** — click a pin, get the coming sit's verdict, reasons, winds, lanes, covering cameras; Edit one button further | Driven live: red stand's panel named the lane the wind runs down; Edit opened the form and closed the panel |
 | **Ranked pin colours** — green / orange / red from the coming sit, refreshed with the stands | Driven live against a plan fixture: three stands, three colours, all correct |
 | **3D view** — imagery draped over the 3DEP grid, orbit/zoom/slide, relief slider 1–4×, pins riding the ground | Driven headless over real USGS LiDAR (222 ft of relief) and real Esri tiles: orbit moved the pins, report opened off the terrain, exit clean; mesh/matrix maths unit-tested in Node and compared against the browser copy |
+| **3D offline** — Save offline keeps the ground and the drape; the server answers terrain from its database when USGS is down, and the service worker replays covering ground when the server is down | Driven end to end: saved with a real mouse (306 Esri tiles + the grid), server killed, page reloaded from the worker, map panned so no URL matched, 3D built and rendered with pins riding the ground; the cabin case separately, USGS pointed at a dead port and the note naming the fallback |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.

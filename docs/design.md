@@ -47,6 +47,34 @@ the camera AI's species tag as a single row, refined by hand only where it matte
 different bucks in one frame, so buck identity would need this layer added later
 anyway — after a season of data had already been recorded the other way.
 
+### The camera's tag is a suggestion, never a sighting (settled 2026-08-29)
+
+The first real photos surfaced the shape of this. SpyPoint's AI tag is stored
+as an unconfirmed `camera-ai` detection, and the review screen showed it
+exactly like a human tag — so a visit arrived looking already tagged, Enter
+felt natural, and the guess stayed unconfirmed for ever. Unconfirmed means
+invisible to the stand ranking, correctly; the trap was that nothing invited
+the person to turn the guess into evidence.
+
+The decision, in three parts:
+
+- **Agreeing writes YOUR tag; the claim is never promoted.** Y (or a click)
+  creates a manual confirmed detection. The `camera-ai` rows stay behind,
+  unconfirmed and unedited — they are the record of what the vendor's AI
+  said, which is what a later "how often is it right here" question needs.
+  Confirming the machine's row in place would erase the distinction between
+  "the machine said deer" and "I saw a deer" in the one place it is kept.
+- **The vendor's vocabulary maps only where it cannot be wrong.**
+  `VENDOR_SPECIES` in `db.mjs` knows `buck` means deer (antlered is a
+  judgement, recorded by naming the buck, not a species); a word it does not
+  know is shown verbatim with no one-key agreement. SpyPoint's vocabulary is
+  undocumented, so guessing a species from an unrecognized word would put a
+  claim in the machine's mouth. The table grows one confirmed word at a time.
+- **Claims group at visit grain, by mapped species.** The camera tags every
+  frame, so one deer arrives as six claims; six agree-buttons would count six
+  animals for one. One button per species is one animal to agree about — the
+  same grain everything else tags at.
+
 ## 4. Buck identity: named by hand, assisted by grouping
 
 Kent creates a buck ("Split G2") and assigns it. The tool makes that fast:

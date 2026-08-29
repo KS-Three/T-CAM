@@ -1,4 +1,4 @@
-# State of play — 2026-08-28
+# State of play — 2026-08-29
 
 Written so a fresh session (or a future you) can pick this up cold. What works,
 what does not, what is next, and what is still unverified.

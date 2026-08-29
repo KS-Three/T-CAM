@@ -541,7 +541,15 @@ else overlays it or slides in over it.
   its lanes, and the cameras covering it. Edit is one button further away,
   because mostly you are not editing — you are deciding.
 - **Click a camera and its card opens** in the same panel: the exact card the
-  drawer shows, built by one function so the two can never disagree.
+  drawer shows, built by one function so the two can never disagree. The card
+  carries the camera's **latest photos** — a strip of thumbnails from what the
+  page already holds, each opening full-size, with the newest date and a jump
+  to Review. Only photos on disk are shown: a photo the sync has listed but
+  not downloaded exists only at the vendor's URL, and drawing from there would
+  both leak a request off-property and break exactly where the strip is wanted
+  — in the woods. The card says which of those states a photo-less camera is
+  in, because "listed but not downloaded" and "nothing yet" have different
+  fixes.
 - **Stand pins wear tonight's verdict**: green when the coming sit's wind
   works, red when it would run your scent down a lane, orange for every honest
   in-between — winds not recorded, no forecast yet, or a thermal quietly

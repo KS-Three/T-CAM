@@ -180,6 +180,16 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .photos figcaption { font-size: 11px; color: var(--muted); margin-top: 4px; }
   .empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px;
            padding: 20px; color: var(--muted); font-size: 14px; }
+  /* A camera's own latest photos, on its card. A strip rather than a grid,
+     because the card is narrow and the point is a glance — the big grid and
+     the review screen exist for actually working through them. Scrolls
+     sideways past what fits rather than growing the card. */
+  .campics { display: flex; gap: 4px; margin-top: 10px; overflow-x: auto; }
+  .campics a { flex: 0 0 auto; }
+  .campics img { height: 54px; width: auto; border-radius: 5px; display: block;
+                 border: 1px solid var(--line); }
+  .campics-note { font-size: 11px; color: var(--muted); margin-top: 5px; }
+  .campics-note a { color: var(--accent); }
   .sit { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
          padding: 12px 14px; margin-bottom: 8px; display: grid;
          grid-template-columns: auto 1fr; gap: 4px 14px; align-items: start; }
@@ -675,6 +685,55 @@ function cameraCard(c, { withId = true } = {}) {
   const t = el('span', 'tag ' + c.health.level,
     c.health.level === 'ok' ? 'healthy' : c.health.notes.join(' \u00b7 '));
   card.appendChild(t);
+
+  // What this camera has seen lately, on the card itself — the map's select
+  // panel shows this same card, so clicking a pin answers "any deer here?"
+  // without a trip to the drawer.
+  //
+  // Filtered from the photos the page already carries rather than fetched:
+  // D.photos is the newest 200 across the account, which is plenty for a
+  // strip. Only DOWNLOADED photos are drawn. A photo the sync has listed but
+  // not fetched has only the vendor's own URL, and an <img> pointing there
+  // would make the page contact an external host directly — which the
+  // offline test forbids, and which would break the strip in the woods.
+  const listed = D.photos.filter(p => p.cameraId === c.id);
+  const mine = listed.filter(p => p.file);
+  if (mine.length) {
+    const strip = el('div', 'campics');
+    for (const p of mine.slice(0, 8)) {
+      const a = document.createElement('a');
+      a.href = p.file; a.target = '_blank'; a.rel = 'noopener';
+      const i = new Image();
+      i.src = p.file; i.loading = 'lazy';
+      i.alt = c.name + ' ' + fmtDate(p.date);
+      i.title = fmtDate(p.date)
+        + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : '');
+      a.appendChild(i);
+      strip.appendChild(a);
+    }
+    card.appendChild(strip);
+    // No claim of a total: D.photos is the newest 200 across the account, so
+    // this camera's count within it is not its lifetime tally, and "8 of 41"
+    // would read as one.
+    const shown = Math.min(8, mine.length);
+    const note = el('div', 'campics-note',
+      (mine.length > shown ? 'Latest ' + shown + ' photos' : plural(shown, 'photo'))
+      + ' here \u00b7 newest ' + fmtDate(mine[0].date) + (D.live ? ' \u00b7 ' : ''));
+    if (D.live) {
+      const rl = document.createElement('a');
+      rl.href = '/review'; rl.textContent = 'tag them in Review';
+      note.appendChild(rl);
+    }
+    card.appendChild(note);
+  } else if (listed.length) {
+    // Listed and downloaded are different facts, and conflating them would
+    // hide the fix: the sync has SEEN these photos and not fetched them.
+    card.appendChild(el('div', 'campics-note',
+      listed.length + ' photo' + (listed.length === 1 ? '' : 's')
+      + ' listed but not downloaded \u2014 run the sync without --dry-run.'));
+  } else {
+    card.appendChild(el('div', 'campics-note', 'No photos from this camera yet.'));
+  }
   return card;
 }
 for (const c of D.cameras) cards.appendChild(cameraCard(c));

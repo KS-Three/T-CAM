@@ -67,6 +67,37 @@ test('embedded data cannot break out of its JSON block', () => {
   assert.ok(!html.includes('<img src=x onerror'), 'the tag is escaped, not emitted');
 });
 
+test('a camera card carries its own latest photos, from what the page already holds', () => {
+  // Clicking a camera pin should answer "any deer here?" without a trip to
+  // the drawer. The strip is filtered from D.photos — the page carries the
+  // newest 200 already — rather than fetched, so the same card works on the
+  // live page, the baked file, and offline.
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const photo = { id: 1, date: '2026-08-21T07:15:00.000Z',
+    file: '/photos/North_Ridge/2026-08/p1.jpg', url: 'https://vendor.example/p1',
+    cameraName: 'North Ridge', cameraId: 'aaaaaaaaaaaaaaaaaaaaaaaa', tags: ['buck'] };
+  const html = dashboardHtml(rows, [photo], '2026-08-27T12:00:00.000Z');
+  const script = inlineScript(html);
+  assert.doesNotThrow(() => new vm.Script(script), 'the strip branch still compiles');
+
+  const fn = script.slice(script.indexOf('function cameraCard'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /D\.photos\.filter\(p => p\.cameraId === c\.id\)/,
+    'each card shows its own camera\u2019s photos, nobody else\u2019s');
+  assert.match(body, /listed\.filter\(p => p\.file\)/, 'downloaded photos only');
+  // The strip must never draw from the vendor\u2019s own URL. The page contacts
+  // no external host directly — the offline test pins that — and an <img>
+  // pointing at one would break the strip exactly where it is wanted: in the
+  // woods, where the vendor is unreachable and the file on disk is not.
+  const strip = body.slice(body.indexOf("el('div', 'campics')"), body.indexOf('campics-note'));
+  assert.ok(strip.length > 0, 'the strip is built');
+  assert.doesNotMatch(strip, /p\.url/);
+  // Listed and downloaded are different facts with different fixes, and the
+  // empty states keep them apart rather than folding both into "no photos".
+  assert.match(body, /listed but not downloaded/);
+  assert.match(body, /No photos from this camera yet/);
+});
+
 // Every page this program serves goes through the same template-literal
 // hazard, so every page is compiled here rather than only the one that has
 // been bitten. A new page added without a line in this file is a page that can

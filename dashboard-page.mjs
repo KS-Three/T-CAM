@@ -31,6 +31,9 @@
 import { sourceDescriptors } from './tile-sources.mjs';
 import { mapStyles, mapMarkup, mapScript } from './map-view.mjs';
 import { registerSnippet } from './offline.mjs';
+// Only the constant: the number of bits in a photo fingerprint, baked into
+// the wind-match percentage. The page never hashes — review does that.
+import { HASH_BITS } from './phash.mjs';
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
@@ -693,13 +696,27 @@ loadStandPlan();
 // camera's — so the navigation matches what you were already looking at.
 let lb = null;   // { list, i, img, capText, n, prev, next, el, onKey } while open
 
+// What is known about a frame, said once, the same way everywhere a photo is
+// captioned: your confirmed tags as fact, the camera's unconfirmed words as a
+// claim, and the wind match with its measured number \u2014 a real similarity to
+// frames you reviewed as empty, never an invented confidence.
+function photoSay(p) {
+  const parts = [];
+  if (p.confirmed) parts.push(p.confirmed);
+  if (p.claims) parts.push('camera thinks: ' + p.claims);
+  if (p.wind) {
+    parts.push('likely wind \u00b7 ' + Math.round((${HASH_BITS} - p.wind.bits) / ${HASH_BITS} * 100)
+      + '% match to ' + p.wind.of + ' reviewed-empty frame' + (p.wind.of === 1 ? '' : 's'));
+  }
+  return parts.length ? ' \u00b7 ' + parts.join(' \u00b7 ') : '';
+}
+
 function lbShow(i) {
   lb.i = i;
   const p = lb.list[i];
   lb.img.src = p.file;
   lb.img.alt = p.cameraName + ' ' + fmtDate(p.date);
-  lb.capText.textContent = p.cameraName + ' \u00b7 ' + fmtDate(p.date)
-    + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : '');
+  lb.capText.textContent = p.cameraName + ' \u00b7 ' + fmtDate(p.date) + photoSay(p);
   lb.n.textContent = (i + 1) + ' of ' + lb.list.length;
   // The ends stop rather than wrap: a loop makes "have I seen them all?"
   // unanswerable, and on a stand check that is the whole question.
@@ -846,8 +863,7 @@ function cameraCard(c, { withId = true } = {}) {
       const i = new Image();
       i.src = p.file; i.loading = 'lazy';
       i.alt = c.name + ' ' + fmtDate(p.date);
-      i.title = fmtDate(p.date)
-        + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : '');
+      i.title = fmtDate(p.date) + photoSay(p);
       a.appendChild(i);
       strip.appendChild(a);
     });
@@ -960,7 +976,7 @@ if (!D.photos.length) {
       const im = new Image(); im.src = p.file; im.alt = p.cameraName + ' ' + fmtDate(p.date);
       im.loading = 'lazy';
       const cap = el('figcaption', null,
-        p.cameraName + ' \u00b7 ' + fmtDate(p.date) + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : ''));
+        p.cameraName + ' \u00b7 ' + fmtDate(p.date) + photoSay(p));
       f.append(im, cap);
       // The grid shows sixty; the arrows walk the whole list.
       f.onclick = () => openLightbox(onDisk, i);

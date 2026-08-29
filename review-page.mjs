@@ -35,6 +35,7 @@
  */
 
 import { registerSnippet } from './offline.mjs';
+import { browserSource as phashSource } from './phash.mjs';
 
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -146,6 +147,7 @@ export function reviewHtml({ species = [], bucks = [], remaining = 0 } = {}) {
 <script type="application/json" id="data">${payload}</script>
 <script>
 ${registerSnippet()}
+${phashSource('PHASH')}
 const D = JSON.parse(document.getElementById('data').textContent);
 const mainEl = document.getElementById('main');
 const countEl = document.getElementById('count');
@@ -189,6 +191,43 @@ async function loadQueue() {
   visit = queue[0] || null;
   frame = 0;
   render();
+  ensureHashes(visit);
+}
+
+// ---- fingerprints -------------------------------------------------------
+// Each frame is hashed HERE, on a canvas, because the browser is the only
+// JPEG decoder in the house (see phash.mjs). Downloaded frames only: a
+// vendor-CDN fallback is cross-origin, which taints the canvas — and a frame
+// still on the vendor's servers is not evidence on disk yet anyway.
+const hashing = new Set();
+async function ensureHashes(v) {
+  if (!v) return;
+  let stored = 0;
+  for (const p of v.photos) {
+    if (!p.file || p.hashed || hashing.has(p.id)) continue;
+    hashing.add(p.id);
+    try {
+      const img = new Image();
+      await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = p.file; });
+      const canvas = document.createElement('canvas');
+      canvas.width = PHASH.HASH_W; canvas.height = PHASH.HASH_H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, PHASH.HASH_W, PHASH.HASH_H);
+      const data = ctx.getImageData(0, 0, PHASH.HASH_W, PHASH.HASH_H).data;
+      await api('POST', '/api/photos/' + encodeURIComponent(p.id) + '/phash',
+        { phash: PHASH.dhashHex(PHASH.lumaFromRGBA(data)) });
+      p.hashed = true;
+      stored++;
+    } catch (err) { /* an unreadable frame stays unhashed; there is nothing to say */ }
+  }
+  // With new fingerprints stored the server may now have a wind verdict for
+  // this visit — one refetch picks it up, only while it is still on screen.
+  if (stored && visit && visit.id === v.id) {
+    try {
+      visit = await api('GET', '/api/visits/' + visit.id);
+      render();
+    } catch (err) { /* the next action refetches anyway */ }
+  }
 }
 
 const when = iso => {
@@ -331,6 +370,20 @@ function render() {
         'A guess is not evidence until you agree. Y agrees with all of it.'));
     }
     tagCard.appendChild(box);
+  }
+
+  // This program's own read, kept apart from the camera's: measured against
+  // frames YOU reviewed as empty on this camera, never against some model's
+  // idea of what woods look like. Absent until that baseline exists.
+  if (visit.wind) {
+    const wbox = el('div', 'suggest');
+    wbox.appendChild(el('div', 'who', 'Looks like wind'));
+    const pct = Math.round((PHASH.HASH_BITS - visit.wind.bits) / PHASH.HASH_BITS * 100);
+    wbox.appendChild(el('div', 'word',
+      'Every frame is a ' + pct + '% match to the ' + visit.wind.of
+      + ' frames you reviewed as empty on this camera.'));
+    wbox.appendChild(el('div', 'note', 'N agrees. Your eyes overrule.'));
+    tagCard.appendChild(wbox);
   }
 
   const keys = el('div', 'keys');
@@ -533,6 +586,7 @@ async function finish(hadSomething) {
     frame = 0;
     if (!visit && D.remaining > 0) return loadQueue();
     render();
+    ensureHashes(visit);
     toast(hadSomething ? 'Marked reviewed' : 'Marked reviewed \\u2014 nothing there');
   } catch (err) { toast(err.message, true); } finally { busy = false; }
 }

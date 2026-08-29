@@ -42,6 +42,7 @@
 
 import { browserSource as measureSource } from './measure.mjs';
 import { browserSource as coverSource } from './coverage.mjs';
+import { browserSource as t3dSource } from './terrain3d.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -197,8 +198,43 @@ export const mapStyles = `
   .layermenu button.on { border-color: var(--accent); }
   /* Top-LEFT: the zoom buttons own the top-right and the layer switcher the
      bottom-left, so this is the only free corner. */
-  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex;
-              flex-direction: column; gap: 6px; }
+  /* The map tools, as a tree. Eight buttons in a flat stack had stopped
+     reading as anything — a quarter of the map's height of undifferentiated
+     grey. Grouped under branches they read the way they are used: you come to
+     the map to do something ABOUT stands, or scouting, or the ground, and the
+     other groups fold away. The guide lines are the point, not decoration:
+     they are what says "Suggest a stand" belongs to Stands. */
+  .maptools { position: absolute; left: 10px; top: 10px; z-index: 3;
+              display: flex; flex-direction: column; gap: 0; width: 178px; }
+  .tt-root { text-align: left; font-weight: 700; }
+  .tt-root::before { content: '▾'; display: inline-block; margin-right: 6px;
+                     transition: transform .15s ease; }
+  #tooltree.closed .tt-root::before { transform: rotate(-90deg); }
+  #tooltree.closed .tt-body { display: none; }
+  .tt-body { display: flex; flex-direction: column; margin-top: 2px; }
+  /* One trunk down the left; every row hangs a branch off it. The last row in
+     each group closes its trunk with an L rather than running past the join. */
+  .tt-group, .tt-leaf { position: relative; margin-left: 9px; padding-left: 12px; }
+  .tt-group::before, .tt-leaf::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    border-left: 2px solid var(--line); }
+  .tt-group:last-child::before, .tt-leaf:last-child::before { bottom: auto; height: 14px; }
+  .tt-group > .tt-head::before, .tt-leaf > button::before {
+    content: ''; position: absolute; left: -12px; top: 13px; width: 10px;
+    border-top: 2px solid var(--line); }
+  .tt-group > .tt-head, .tt-leaf > button { position: relative; }
+  .tt-head { text-align: left; color: var(--muted); font-weight: 700; }
+  .tt-head::after { content: '▾'; float: right; transition: transform .15s ease; }
+  .tt-group.closed .tt-head::after { transform: rotate(-90deg); }
+  .tt-group.closed .tt-kids { display: none; }
+  .tt-kids { display: flex; flex-direction: column; position: relative;
+             margin-left: 9px; padding-left: 12px; }
+  .tt-kids::before { content: ''; position: absolute; left: 0; top: 0;
+                     bottom: 11px; border-left: 2px solid var(--line); }
+  .tt-kids > button { position: relative; text-align: left; }
+  .tt-kids > button::before { content: ''; position: absolute; left: -12px;
+                              top: 12px; width: 10px; border-top: 2px solid var(--line); }
+  .maptools button { width: 100%; margin-top: 3px; }
   /* The terrain layers cover the whole map, so they MUST not take clicks —
      without pointer-events:none they would swallow every press meant for the
      ground and break stand placement and ownership lookup alike. */
@@ -430,6 +466,84 @@ export const mapStyles = `
            transform: translate(-50%, -100%) rotate(-45deg);
            border: 2px solid #fff; border-radius: 50% 50% 50% 0;
            background: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  /* The stand's verdict for the coming sit, worn on the pin. Fixed colours
+     rather than theme variables, because they sit on satellite imagery which
+     does not change with the theme — and because green/orange/red is a code
+     that must not drift. The glow is what makes them read at a glance from
+     across the map, which is the entire point of putting the answer here
+     instead of only in a panel. */
+  .stand.rank-good { background: #2e9e57; box-shadow: 0 0 0 4px rgba(46,158,87,.30), 0 1px 4px rgba(0,0,0,.5); }
+  .stand.rank-mid  { background: #d98f14; box-shadow: 0 0 0 4px rgba(217,143,20,.30), 0 1px 4px rgba(0,0,0,.5); }
+  .stand.rank-bad  { background: #c8392e; box-shadow: 0 0 0 4px rgba(200,57,46,.32), 0 1px 4px rgba(0,0,0,.5); }
+  /* The ground in three dimensions. Sits over the whole 2D map — tiles,
+     tools, handles — because the two are different answers to different
+     questions and showing both at once would be neither. The select panel
+     stays above it (z below), so a pin clicked on the terrain opens the same
+     report it opens flat. */
+  #view3d { position: absolute; inset: 0; z-index: 7; background: #10131c; }
+  #view3d canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+                   touch-action: none; cursor: grab; display: block; }
+  #view3d.drag canvas { cursor: grabbing; }
+  #pins3d { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  /* The pins are the SAME classes the flat map uses, so a red stand is red in
+     both worlds; only their positioning pipeline differs. Labels fade with
+     nothing behind them, so they stay readable over bright ground. */
+  #pins3d .stand, #pins3d .pin { pointer-events: auto; }
+  .hud3d { position: absolute; left: 10px; top: 52px; z-index: 8; width: 220px;
+           display: flex; flex-direction: column; gap: 8px;
+           background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 10px 12px;
+           box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  .hud3d button { padding: 7px 10px; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                  border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+                  background: var(--bg); color: var(--ink); }
+  .hud3d label { display: flex; align-items: center; gap: 6px; font-size: 12px;
+                 color: var(--muted); }
+  .hud3d input[type=range] { flex: 1; min-width: 0; }
+  .hud3d .hint3d { font-size: 11px; color: var(--muted); line-height: 1.45; }
+  /* What you selected: the hunting report for a stand, or a camera's card.
+     Left of the zoom buttons, under the top bar. */
+  .selpanel { position: absolute; right: 54px; top: 52px; z-index: 9; width: 330px;
+              max-width: calc(100% - 70px); max-height: calc(100% - 120px);
+              overflow-y: auto; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 10px; padding: 12px 14px;
+              box-shadow: 0 6px 28px rgba(0,0,0,.4); }
+  .selpanel h3 { margin: 0 24px 2px 0; font-size: 15px; }
+  .selpanel .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                     background: none; border: 0; color: var(--muted); font-size: 17px; }
+  .selpanel .kind { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .selpanel .sitline { color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
+  .selpanel .sitline b { color: var(--ink); }
+  .rankchip { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0;
+              font: 700 12px/1 ui-sans-serif, system-ui, sans-serif;
+              padding: 5px 10px; border-radius: 999px; }
+  .rankchip i { width: 9px; height: 9px; border-radius: 50%; }
+  .rankchip.good { background: rgba(46,158,87,.15); color: #2e9e57; }
+  .rankchip.good i { background: #2e9e57; }
+  .rankchip.mid { background: rgba(217,143,20,.15); color: #b06d15; }
+  .rankchip.mid i { background: #d98f14; }
+  .rankchip.bad { background: rgba(200,57,46,.14); color: #c8392e; }
+  .rankchip.bad i { background: #c8392e; }
+  .rankchip.unknown { background: rgba(128,128,128,.14); color: var(--muted); }
+  .rankchip.unknown i { background: var(--muted); }
+  .selpanel ul.reasons { margin: 6px 0 0; padding-left: 18px; font-size: 12px;
+                         color: var(--muted); }
+  .selpanel ul.reasons li { margin: 3px 0; }
+  .selpanel ul.reasons li.plus { color: var(--ok); }
+  .selpanel ul.reasons li.minus { color: var(--bad); }
+  .selpanel .fact { display: flex; justify-content: space-between; gap: 12px;
+                    font-size: 12px; padding: 3px 0; color: var(--muted); }
+  .selpanel .fact b { color: var(--ink); font-weight: 600; text-align: right; }
+  .selpanel .camrow { font-size: 12px; color: var(--muted); padding: 2px 0; }
+  .selpanel .camrow a { color: var(--accent); cursor: pointer; }
+  .selpanel .btns { display: flex; gap: 8px; margin-top: 12px; }
+  .selpanel .btns button { flex: 1; padding: 7px; border-radius: 6px; cursor: pointer;
+                           font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+                           border: 1px solid var(--line); background: var(--bg);
+                           color: var(--ink); }
+  .selpanel .btns button.primary { background: var(--accent); color: #fff;
+                                   border-color: var(--accent); }
+  .selpanel .note { margin-top: 8px; font-size: 12px; color: var(--muted); }
   /* Sign markers carry a LETTER as well as a colour, so a rub and a scrape are
      told apart on a sunlit phone screen and in greyscale. */
   .mark { position: absolute; width: 18px; height: 18px; cursor: pointer;
@@ -441,16 +555,48 @@ export const mapStyles = `
 export const mapMarkup = String.raw`
   <div id="map"><div id="tiles"></div><canvas id="terrain"></canvas><svg id="contours"></svg><div id="pins"></div>
     <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">&minus;</button></div>
-    <div class="maptools">
-      <button id="addStand" type="button">+ Add stand</button>
-      <button id="whoOwns" type="button">Who owns this?</button>
-      <button id="terrainBtn" type="button">Terrain</button>
-      <button id="markBtn" type="button">+ Mark sign</button>
-      <button id="offlineBtn" type="button">Save offline</button>
-      <button id="routeBtn" type="button">+ Walk-in route</button>
-      <button id="measureBtn" type="button">Measure</button>
-      <button id="suggestBtn" type="button">Suggest a stand</button>
+    <div class="maptools" id="tooltree">
+      <button class="tt-root" id="ttRoot" type="button">Tools</button>
+      <div class="tt-body">
+        <div class="tt-group">
+          <button class="tt-head" type="button">Stands</button>
+          <div class="tt-kids">
+            <button id="addStand" type="button">+ Add stand</button>
+            <button id="suggestBtn" type="button">Suggest a stand</button>
+          </div>
+        </div>
+        <div class="tt-group">
+          <button class="tt-head" type="button">Scouting</button>
+          <div class="tt-kids">
+            <button id="markBtn" type="button">+ Mark sign</button>
+            <button id="routeBtn" type="button">+ Walk-in route</button>
+          </div>
+        </div>
+        <div class="tt-group">
+          <button class="tt-head" type="button">Ground</button>
+          <div class="tt-kids">
+            <button id="terrainBtn" type="button">Terrain</button>
+            <button id="view3dBtn" type="button">3D view</button>
+            <button id="measureBtn" type="button">Measure</button>
+            <button id="whoOwns" type="button">Who owns this?</button>
+          </div>
+        </div>
+        <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
+      </div>
     </div>
+    <div id="view3d" hidden>
+      <canvas id="gl3d"></canvas>
+      <div id="pins3d"></div>
+      <div class="hud3d">
+        <button id="exit3d" type="button">&larr; Back to the map</button>
+        <label>Relief
+          <input id="exagg3d" type="range" min="1" max="4" step="0.5" value="1.5">
+          <span id="exaggSay">1.5&times;</span>
+        </label>
+        <div class="hint3d" id="hint3d"></div>
+      </div>
+    </div>
+    <div class="selpanel" id="selpanel" hidden></div>
     <div class="layers">
       <button id="layerToggle" class="swatch" type="button" title="Change map type">
         <span id="layerLabel"></span>
@@ -464,6 +610,7 @@ export const mapMarkup = String.raw`
 export const mapScript = String.raw`
 ${measureSource('MEASURE')}
 ${coverSource('COVER')}
+${t3dSource('T3D')}
 
 // ---- map --------------------------------------------------------------
 const TS = 256;
@@ -614,8 +761,8 @@ function draw() {
     const p = el('div', 'pin ' + c.health.level);
     p.style.left = x + 'px'; p.style.top = y + 'px';
     p.title = c.name + ' \u2014 last contact ' + fmtDate(c.lastSeen);
-    p.onclick = () => document.getElementById('cam-' + c.id)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (selected && selected.kind === 'camera' && selected.id === c.id) p.classList.add('sel');
+    p.onclick = ev => { ev.stopPropagation(); showCameraPanel(c); };
     pinsEl.append(lab, p);
   }
 
@@ -626,7 +773,10 @@ function draw() {
     if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
     const lab = el('div', 'slabel', s.name);
     lab.style.left = x + 'px'; lab.style.top = y + 'px';
-    const pin = el('div', 'stand' + (editing && editing.id === s.id ? ' sel' : ''));
+    const rank = rankOf(s.id);
+    const pin = el('div', 'stand' + (rank ? ' rank-' + rank : '')
+      + ((editing && editing.id === s.id)
+        || (selected && selected.kind === 'stand' && selected.id === s.id) ? ' sel' : ''));
     pin.style.left = x + 'px'; pin.style.top = y + 'px';
     // The winds this stand is actually judged on, which since the tick-boxes
     // went is the lanes wherever they exist. Showing the ticked set here would
@@ -637,7 +787,7 @@ function draw() {
       + (s.nearbyCameras && s.nearbyCameras.length
         ? ' \u00b7 covers ' + s.nearbyCameras.map(c => c.name + ' (' + c.metres + 'm)').join(', ')
         : '');
-    pin.onclick = ev => { ev.stopPropagation(); openStandForm(s); };
+    pin.onclick = ev => { ev.stopPropagation(); showStandReport(s); };
     pinsEl.append(lab, pin);
   }
 
@@ -1166,6 +1316,7 @@ let gripDrag = null;    // { i, kind } while a handle is held
  */
 function closeStandForm() {
   document.querySelector('.standform')?.remove();
+  closeSelPanel();
   editing = null;
   laneEdit = null;
   laneForm = null;
@@ -1834,6 +1985,192 @@ let STANDS = D.stands || [];
 let placing = false;
 let editing = null;
 
+// ---- the coming sit's verdict, per stand --------------------------------
+// The ranking the tonight screen runs, fetched here so the map can wear it:
+// each pin is tinted by whether the NEXT sit's wind works for that stand.
+// One fetch at load and one after each save — the answer changes when the
+// lanes do, and a colour that lags the edit that changed it would be worse
+// than no colour.
+let RANKING = null;    // { sit, byId: {standId: rankedRow} } or null
+
+async function refreshRanking() {
+  if (!D.live) return;
+  try {
+    const t = await (await fetch('/api/tonight')).json();
+    const sit = t.sits && t.sits[0];
+    if (!sit || !sit.stands || !sit.stands.length) { RANKING = null; draw(); return; }
+    const byId = {};
+    for (const r of sit.stands) byId[r.id] = r;
+    RANKING = { sit, byId };
+  } catch (err) { RANKING = null; }
+  draw();
+}
+
+/**
+ * One stand's colour: green, orange or red.
+ *
+ * Green is "the coming sit's wind works, nothing arguing"; red is "your scent
+ * blows down a lane"; orange is every honest in-between — winds not recorded,
+ * no forecast to judge against, or a thermal quietly working against a wind
+ * that looks fine. Unknown is deliberately NOT green: a stand that has not
+ * said its winds must not look like one that works.
+ */
+function rankOf(id) {
+  const r = RANKING && RANKING.byId[id];
+  if (!r) return null;
+  if (r.huntable === false) return 'bad';
+  if (r.huntable === true) {
+    return r.reasons && r.reasons.some(x => x.points < 0) ? 'mid' : 'good';
+  }
+  return 'mid';
+}
+
+// ---- the select panel ----------------------------------------------------
+// Clicking a pin used to jump straight into the edit form, which answers the
+// wrong question: mostly you are not editing, you are deciding — is this the
+// stand for the sit in front of me? So a click opens the report, and the form
+// is one button further away.
+const selPanel = document.getElementById('selpanel');
+let selected = null;   // { kind: 'stand'|'camera', id } while the panel is up
+
+function closeSelPanel() {
+  selPanel.hidden = true;
+  selPanel.textContent = '';
+  selected = null;
+}
+
+function panelShell(title, kindLine) {
+  selPanel.textContent = '';
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'close'; x.textContent = '\u00d7';
+  x.onclick = () => { closeSelPanel(); draw(); };
+  selPanel.appendChild(x);
+  selPanel.appendChild(el('h3', null, title));
+  if (kindLine) selPanel.appendChild(el('div', 'kind', kindLine));
+  selPanel.hidden = false;
+}
+
+const RANK_WORDS = {
+  good: 'Good for the coming sit',
+  mid: 'Marginal \u2014 look at why',
+  bad: 'Wrong wind \u2014 scent runs down a lane',
+  unknown: 'Not ranked',
+};
+
+/** The hunting report for one stand. */
+function showStandReport(s) {
+  closeStandForm();
+  clearMapModes();
+  selected = { kind: 'stand', id: s.id };
+  panelShell(s.name, s.type.replace('-', ' ')
+    + (s.notes ? ' \u00b7 ' + s.notes : ''));
+
+  const r = RANKING && RANKING.byId[s.id];
+  const rank = rankOf(s.id) || 'unknown';
+  const chip = el('div', 'rankchip ' + rank);
+  chip.appendChild(document.createElement('i'));
+  chip.appendChild(document.createTextNode(RANK_WORDS[rank]
+    + (r ? ' \u00b7 ' + (r.total > 0 ? '+' : '') + r.total + ' pts' : '')));
+  selPanel.appendChild(chip);
+
+  if (r && RANKING.sit) {
+    const sit = RANKING.sit;
+    const line = el('div', 'sitline');
+    line.appendChild(document.createTextNode('Ranked for '));
+    line.appendChild(el('b', null, sit.when || sit.date + ' ' + sit.window));
+    if (sit.windFrom) {
+      line.appendChild(document.createTextNode(' \u00b7 wind '));
+      line.appendChild(el('b', null, sit.windFrom));
+      if (Number.isFinite(sit.windSpeed)) {
+        line.appendChild(document.createTextNode(' at ' + Math.round(sit.windSpeed) + ' mph'));
+      }
+    }
+    selPanel.appendChild(line);
+    const ul = el('ul', 'reasons');
+    for (const part of r.reasons || []) {
+      const li = el('li', part.points > 0 ? 'plus' : part.points < 0 ? 'minus' : null,
+        part.why + (part.points ? ' (' + (part.points > 0 ? '+' : '') + part.points + ')' : ''));
+      ul.appendChild(li);
+    }
+    selPanel.appendChild(ul);
+  } else {
+    selPanel.appendChild(el('div', 'note', D.live
+      ? 'No ranking yet \u2014 run the planner (node hunt-planner.mjs) and the '
+        + 'coming sits can judge this stand.'
+      : 'Ranking needs the server.'));
+  }
+
+  // The facts that decide the ranking, so the verdict can be argued with.
+  const winds = s.effectiveWinds && s.effectiveWinds.length ? s.effectiveWinds : (s.winds || []);
+  const windRow = el('div', 'fact');
+  windRow.appendChild(el('span', null, 'Huntable winds'));
+  windRow.appendChild(el('b', null, winds.length
+    ? winds.join(', ') + (s.windSource === 'lanes' ? ' (from its lanes)' : '')
+    : 'not recorded'));
+  selPanel.appendChild(windRow);
+  if (s.lanes && s.lanes.length) {
+    const geo = COVER.laneGeometries({ lat: s.lat, lng: s.lng }, s.lanes);
+    const longest = geo.length ? Math.max(...geo.map(g => g.metres)) : 0;
+    const laneRowEl = el('div', 'fact');
+    laneRowEl.appendChild(el('span', null, 'Shooting lanes'));
+    laneRowEl.appendChild(el('b', null, geo.length + (geo.length === 1 ? ' lane' : ' lanes')
+      + (longest ? ', longest ' + toYd(longest) + ' yd' : '')));
+    selPanel.appendChild(laneRowEl);
+  }
+  if (s.nearbyCameras && s.nearbyCameras.length) {
+    const head = el('div', 'fact');
+    head.appendChild(el('span', null, 'Covered by'));
+    selPanel.appendChild(head);
+    for (const nc of s.nearbyCameras) {
+      const row = el('div', 'camrow');
+      const a = el('a', null, nc.name);
+      a.onclick = () => {
+        const cam = D.cameras.find(c => c.id === nc.id || c.name === nc.name);
+        if (cam) showCameraPanel(cam);
+      };
+      row.appendChild(a);
+      row.appendChild(document.createTextNode(' \u00b7 ' + nc.metres + ' m away'));
+      selPanel.appendChild(row);
+    }
+  }
+
+  const btns = el('div', 'btns');
+  if (D.live) {
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.className = 'primary'; edit.textContent = 'Edit stand';
+    edit.onclick = () => { closeSelPanel(); openStandForm(s); };
+    btns.appendChild(edit);
+  }
+  const done = document.createElement('button');
+  done.type = 'button'; done.textContent = 'Close';
+  done.onclick = () => { closeSelPanel(); draw(); };
+  btns.appendChild(done);
+  selPanel.appendChild(btns);
+  draw();
+}
+
+/** A camera's card, in the same panel. */
+function showCameraPanel(c) {
+  closeStandForm();
+  clearMapModes();
+  selected = { kind: 'camera', id: c.id };
+  panelShell(c.name, 'camera');
+  // The card the report drawer shows, reused whole — two renderings of one
+  // camera is how they end up disagreeing about battery life.
+  selPanel.appendChild(cameraCard(c, { withId: false }));
+  const btns = el('div', 'btns');
+  const more = document.createElement('button');
+  more.type = 'button'; more.textContent = 'Show in camp report';
+  more.onclick = () => { revealInDrawer('cam-' + c.id); };
+  btns.appendChild(more);
+  const done = document.createElement('button');
+  done.type = 'button'; done.textContent = 'Close';
+  done.onclick = () => { closeSelPanel(); draw(); };
+  btns.appendChild(done);
+  selPanel.appendChild(btns);
+  draw();
+}
+
 const TYPES = [['stand','Ladder / hang-on'],['tripod','Tripod'],['ground-blind','Ground blind'],
                ['box-blind','Box blind'],['saddle','Saddle'],['other','Other']];
 
@@ -1967,8 +2304,12 @@ async function apiWrite(method, path, body) {
 
 async function refreshStands() {
   STANDS = await (await fetch('/api/stands')).json();
+  // The colours are derived from the stands, so they refresh together: a lane
+  // just saved can flip tonight's verdict.
+  refreshRanking();
   draw();
 }
+refreshRanking();
 
 // The drop/edit form. A row with an id is an edit; {lat,lng} alone is new.
 /**
@@ -2003,6 +2344,7 @@ function centreClearOfForm(form, at) {
 }
 
 function openStandForm(stand) {
+  if (V3) exitView3d();
   closeStandForm();
   editing = stand.id ? stand : null;
   const isNew = !stand.id;
@@ -2383,6 +2725,388 @@ function openStandForm(stand) {
   if (isNew) name.focus();
   draw();
 }
+// ---- the ground in three dimensions --------------------------------------
+// The same elevation grid the hillshade reads, built into a mesh with the
+// satellite imagery draped over it. All the arithmetic — quantized metres,
+// mesh, matrices, projection — is T3D, emitted from terrain3d.mjs and tested
+// in Node; what lives here is only what needs a browser: a GL context, tile
+// images, and fingers.
+const view3dBtn = document.getElementById('view3dBtn');
+const view3dEl = document.getElementById('view3d');
+const gl3dCanvas = document.getElementById('gl3d');
+const pins3dEl = document.getElementById('pins3d');
+const hint3dEl = document.getElementById('hint3d');
+const exaggInput = document.getElementById('exagg3d');
+const exaggSay = document.getElementById('exaggSay');
+
+let V3 = null;          // everything the live view holds; null when flat
+let view3dLoading = false;
+
+if (!D.live) {
+  view3dBtn.disabled = true;
+  view3dBtn.title = '3D needs the server';
+  view3dBtn.style.opacity = '0.6';
+  view3dBtn.style.cursor = 'not-allowed';
+}
+
+/**
+ * The imagery to drape: the current base layer's tiles for the terrain's
+ * ground, stitched onto one canvas. Tiles come in powers-of-two chunks that
+ * never line up with the grid edge, so the canvas is bigger than the ground
+ * and the UV mapping (below) is what cuts it to fit. Served pages fetch
+ * through their own cache, so most of these are already on disk.
+ *
+ * A tile that fails stays the dark fill rather than aborting the view —
+ * offline, the ground you have looked at renders and the ground you have not
+ * is dark, which is the truth.
+ */
+function textureFor3d(bounds) {
+  const L = LAYERS[layerKey];
+  let z = L.maxZoom;
+  const widthPx = zz => projX(bounds.east, zz) - projX(bounds.west, zz);
+  while (z > 11 && widthPx(z) > 2048) z -= 1;
+  const x0 = Math.floor(projX(bounds.west, z) / TS), x1 = Math.floor(projX(bounds.east, z) / TS);
+  const y0 = Math.floor(projY(bounds.north, z) / TS), y1 = Math.floor(projY(bounds.south, z) / TS);
+  const canvas = document.createElement('canvas');
+  canvas.width = (x1 - x0 + 1) * TS;
+  canvas.height = (y1 - y0 + 1) * TS;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#232920';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      jobs.push(new Promise(done => {
+        const img = new Image();
+        img.onload = () => { ctx.drawImage(img, (x - x0) * TS, (y - y0) * TS); done(); };
+        img.onerror = () => done();
+        img.src = layerUrl(layerKey, z, x, y);
+      }));
+    }
+  }
+  return Promise.all(jobs).then(() => ({ canvas, z, originX: x0 * TS, originY: y0 * TS }));
+}
+
+const V3_VERT = 'attribute vec3 aPos; attribute vec2 aUV; attribute vec2 aSlope;'
+  + 'uniform mat4 uMVP; uniform float uExagg;'
+  + 'varying vec2 vUV; varying vec3 vNormal; varying float vDist;'
+  + 'void main() {'
+  + '  vec3 p = vec3(aPos.x, aPos.y * uExagg, aPos.z);'
+  + '  gl_Position = uMVP * vec4(p, 1.0);'
+  + '  vUV = aUV;'
+  // The normal is rebuilt from the ground's true slope and the CURRENT
+  // exaggeration, so lighting stays honest while the relief slider moves —
+  // a stored normal is only right for one setting.
+  + '  vNormal = normalize(vec3(-aSlope.x * uExagg, 1.0, -aSlope.y * uExagg));'
+  + '  vDist = gl_Position.w;'
+  + '}';
+const V3_FRAG = 'precision mediump float;'
+  + 'varying vec2 vUV; varying vec3 vNormal; varying float vDist;'
+  + 'uniform sampler2D uTex; uniform vec3 uLight; uniform vec3 uSky; uniform float uFog;'
+  + 'void main() {'
+  + '  vec3 ground = texture2D(uTex, vUV).rgb;'
+  + '  float diff = max(dot(normalize(vNormal), uLight), 0.0);'
+  + '  vec3 lit = ground * (0.5 + 0.6 * diff);'
+  + '  float f = clamp(vDist * uFog, 0.0, 0.8);'
+  + '  gl_FragColor = vec4(mix(lit, uSky, f), 1.0);'
+  + '}';
+
+function glCompile(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error('shader: ' + gl.getShaderInfoLog(sh));
+  }
+  return sh;
+}
+
+/** Buffers, program and texture for one mesh. Rebuilt on every entry, because
+ *  the ground under the view may have changed since last time. */
+function initGL(mesh, texCanvas) {
+  const gl = gl3dCanvas.getContext('webgl', { antialias: true })
+    || gl3dCanvas.getContext('experimental-webgl');
+  if (!gl) throw new Error('this browser has no WebGL');
+  const prog = gl.createProgram();
+  gl.attachShader(prog, glCompile(gl, gl.VERTEX_SHADER, V3_VERT));
+  gl.attachShader(prog, glCompile(gl, gl.FRAGMENT_SHADER, V3_FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error('link: ' + gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  const buf = (target, data) => {
+    const b = gl.createBuffer();
+    gl.bindBuffer(target, b);
+    gl.bufferData(target, data, gl.STATIC_DRAW);
+    return b;
+  };
+  const attr = (name, buffer, size) => {
+    const loc = gl.getAttribLocation(prog, name);
+    // -1 means the compiler optimised the attribute away, which for THIS
+    // shader always means a line went missing from it: every attribute here
+    // is load-bearing. Shipping past it renders confidently wrong ground —
+    // the texture sampled at one undefined texel painted the whole property
+    // a uniform green, with no error anywhere — so it is a thrown error, not
+    // a warning.
+    if (loc < 0) throw new Error('shader lost attribute ' + name);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  };
+  attr('aPos', buf(gl.ARRAY_BUFFER, mesh.positions), 3);
+  attr('aUV', buf(gl.ARRAY_BUFFER, mesh.uvs), 2);
+  attr('aSlope', buf(gl.ARRAY_BUFFER, mesh.slopes), 2);
+  buf(gl.ELEMENT_ARRAY_BUFFER, mesh.indices);
+
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texCanvas);
+  // The stitched canvas is not power-of-two sized, which WebGL 1 only accepts
+  // clamped and unmipped.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.72, 0.80, 0.89, 1);   // haze at the horizon, not space
+
+  const u = name => gl.getUniformLocation(prog, name);
+  // Light from the north-west, matching the hillshade's azimuth 315 — the 2D
+  // and 3D pictures of the same draw must shade the same side.
+  const light = [-0.45, 0.77, -0.45];
+  const ll = Math.hypot(...light);
+  gl.uniform3f(u('uLight'), light[0] / ll, light[1] / ll, light[2] / ll);
+  gl.uniform3f(u('uSky'), 0.72, 0.80, 0.89);
+  return { gl, uMVP: u('uMVP'), uExagg: u('uExagg'), uFog: u('uFog'),
+           count: mesh.indices.length,
+           indexType: mesh.indices.BYTES_PER_ELEMENT === 4 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
+}
+
+function size3dCanvas() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  gl3dCanvas.width = Math.round(W * dpr);
+  gl3dCanvas.height = Math.round(H * dpr);
+  if (V3) V3.res.gl.viewport(0, 0, gl3dCanvas.width, gl3dCanvas.height);
+}
+
+/** Every stand and camera on this ground, as DOM pins that ride the mesh. */
+function build3dPins() {
+  pins3dEl.textContent = '';
+  const b = TERRAIN.bounds, g = TERRAIN.grid;
+  const pins = [];
+  const world = (lat, lng) => {
+    const fc = (lng - b.west) / ((b.east - b.west) / (g.cols - 1));
+    const fr = (lat - b.south) / ((b.north - b.south) / (g.rows - 1));
+    const e = T3D.elevAtCell(V3.elev, g.cols, g.rows, fc, fr) - V3.mesh.meanElev;
+    return [(fc - (g.cols - 1) / 2) * g.spacingM, e, ((g.rows - 1) / 2 - fr) * g.spacingM];
+  };
+  const inside = (lat, lng) =>
+    lat >= b.south && lat <= b.north && lng >= b.west && lng <= b.east;
+  for (const st of STANDS) {
+    if (!inside(st.lat, st.lng)) continue;
+    const rank = rankOf(st.id);
+    const pin = el('div', 'stand' + (rank ? ' rank-' + rank : ''));
+    pin.title = st.name;
+    pin.onclick = ev => { ev.stopPropagation(); showStandReport(st); };
+    const lab = el('div', 'slabel', st.name);
+    pins3dEl.append(lab, pin);
+    pins.push({ w: world(st.lat, st.lng), pin, lab });
+  }
+  for (const c of D.cameras) {
+    if (typeof c.lat !== 'number' || !inside(c.lat, c.lng)) continue;
+    const pin = el('div', 'pin ' + c.health.level);
+    pin.title = c.name;
+    pin.onclick = ev => { ev.stopPropagation(); showCameraPanel(c); };
+    const lab = el('div', 'plabel', c.name);
+    pins3dEl.append(lab, pin);
+    pins.push({ w: world(c.lat, c.lng), pin, lab });
+  }
+  V3.pins = pins;
+}
+
+function render3d() {
+  if (!V3) return;
+  const { gl } = V3.res;
+  const W = mapEl.clientWidth, H = mapEl.clientHeight;
+  const eye = T3D.orbitEye(V3.target, V3.yaw, V3.pitch, V3.dist);
+  const mvp = T3D.mat4Multiply(
+    T3D.mat4Perspective(55, W / H, 5, V3.spanM * 8),
+    T3D.mat4LookAt(eye, V3.target));
+  gl.uniformMatrix4fv(V3.res.uMVP, false, new Float32Array(mvp));
+  gl.uniform1f(V3.res.uExagg, V3.exagg);
+  // Fog starts mattering past a few spans of ground, so it scales with the
+  // property rather than with a constant that suits one radius only.
+  gl.uniform1f(V3.res.uFog, 0.9 / (V3.spanM * 5));
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.drawElements(gl.TRIANGLES, V3.res.count, V3.res.indexType, 0);
+
+  for (const p of V3.pins) {
+    const pt = T3D.projectPoint(mvp, p.w[0], p.w[1] * V3.exagg, p.w[2], W, H);
+    p.pin.style.display = pt.visible ? '' : 'none';
+    p.lab.style.display = pt.visible ? '' : 'none';
+    if (!pt.visible) continue;
+    p.pin.style.left = pt.x + 'px'; p.pin.style.top = pt.y + 'px';
+    p.lab.style.left = pt.x + 'px'; p.lab.style.top = pt.y + 'px';
+    const z = Math.max(1, Math.round((1 - pt.depth) * 500));
+    p.pin.style.zIndex = z; p.lab.style.zIndex = z;
+  }
+  V3.raf = requestAnimationFrame(render3d);
+}
+
+function exitView3d() {
+  if (!V3) return;
+  cancelAnimationFrame(V3.raf);
+  view3dEl.hidden = true;
+  view3dBtn.classList.remove('on');
+  pins3dEl.textContent = '';
+  V3 = null;
+}
+
+async function enterView3d() {
+  if (V3 || view3dLoading || !D.live) return;
+  view3dLoading = true;
+  view3dBtn.textContent = 'Building 3D…';
+  try {
+    // The same fetch, cache and coverage rules the flat terrain uses; a view
+    // with no LiDAR under it says so through the terrain note rather than
+    // rendering a guess.
+    if (!TERRAIN || !TERRAIN.covered || !TERRAIN.elev || !terrainCoversView()) {
+      await loadTerrain();
+    }
+    if (!TERRAIN || !TERRAIN.covered || !TERRAIN.elev) return;
+    const b = TERRAIN.bounds, g = TERRAIN.grid;
+    const elev = T3D.dequantizeElev(
+      T3D.bytesToU16(unb64(TERRAIN.elev.b64)), TERRAIN.elev.min, TERRAIN.elev.scale);
+    const tex = await textureFor3d(b);
+    const uv = (c, r) => {
+      const lng = b.west + c * (b.east - b.west) / (g.cols - 1);
+      const lat = b.south + r * (b.north - b.south) / (g.rows - 1);
+      return [(projX(lng, tex.z) - tex.originX) / tex.canvas.width,
+              (projY(lat, tex.z) - tex.originY) / tex.canvas.height];
+    };
+    const mesh = T3D.buildTerrainMesh({
+      cols: g.cols, rows: g.rows, dxM: g.spacingM, dyM: g.spacingM, elev, uv,
+    });
+    if (!mesh) return;
+    size3dCanvas();
+    const res = initGL(mesh, tex.canvas);
+    const spanM = Math.max(g.cols, g.rows) * g.spacingM;
+    V3 = {
+      res, mesh, elev, spanM,
+      target: [0, 0, 0],
+      yaw: 0, pitch: 55, dist: spanM * 1.05,
+      exagg: Number(exaggInput.value) || 1.5,
+      pins: [], raf: 0,
+    };
+    size3dCanvas();
+    build3dPins();
+    view3dEl.hidden = false;
+    view3dBtn.classList.add('on');
+    say3dHint();
+    render3d();
+  } catch (err) {
+    terrainNote('3D failed: ' + err.message);
+    exitView3d();
+  } finally {
+    view3dLoading = false;
+    view3dBtn.textContent = '3D view';
+  }
+}
+
+/** The HUD line: how to drive it, and how honest the relief is. */
+function say3dHint() {
+  if (!hint3dEl) return;
+  const st = TERRAIN && TERRAIN.stats;
+  hint3dEl.textContent = 'Drag to orbit · scroll to zoom · shift-drag to slide.'
+    + (st ? ' ' + st.reliefFt + ' ft of relief on this ground.' : '')
+    + (V3 && V3.exagg > 1
+      ? ' Hills stretched ' + V3.exagg + '× — slide to 1× for true scale.'
+      : ' True vertical scale.');
+}
+
+view3dBtn.onclick = ev => {
+  ev.stopPropagation();
+  if (V3) exitView3d();
+  else enterView3d();
+};
+document.getElementById('exit3d').onclick = () => exitView3d();
+exaggInput.oninput = () => {
+  if (V3) V3.exagg = Number(exaggInput.value) || 1;
+  exaggSay.textContent = exaggInput.value + '×';
+  say3dHint();
+};
+
+// One finger orbits; a second zooms and slides. Pointer events carry both.
+const p3 = new Map();     // pointerId -> {x, y}
+let pinch0 = null;        // {dist, cx, cy} at the moment the second finger lands
+gl3dCanvas.addEventListener('pointerdown', e => {
+  if (!V3) return;
+  e.preventDefault();
+  gl3dCanvas.setPointerCapture(e.pointerId);
+  p3.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (p3.size === 2) {
+    const [a, bb] = [...p3.values()];
+    pinch0 = { dist: Math.hypot(a.x - bb.x, a.y - bb.y), d0: V3.dist };
+  }
+  view3dEl.classList.add('drag');
+});
+gl3dCanvas.addEventListener('pointermove', e => {
+  if (!V3 || !p3.has(e.pointerId)) return;
+  const prev = p3.get(e.pointerId);
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  p3.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (p3.size === 2 && pinch0) {
+    const [a, bb] = [...p3.values()];
+    const d = Math.hypot(a.x - bb.x, a.y - bb.y);
+    if (d > 1) V3.dist = Math.max(60, Math.min(V3.spanM * 4, pinch0.d0 * pinch0.dist / d));
+    return;
+  }
+  if (e.shiftKey || e.buttons === 2) {
+    // Slide the target across the ground, in the direction the screen moves.
+    const k = V3.dist * 0.0016;
+    const basis = T3D.orbitBasis(V3.yaw);
+    V3.target[0] += (-dx * basis.rightX + dy * basis.fwdX) * k;
+    V3.target[2] += (-dx * basis.rightZ + dy * basis.fwdZ) * k;
+  } else {
+    V3.yaw = (V3.yaw + dx * 0.35 + 360) % 360;
+    V3.pitch = Math.max(12, Math.min(85, V3.pitch + dy * 0.25));
+  }
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  gl3dCanvas.addEventListener(ev, e => {
+    p3.delete(e.pointerId);
+    if (p3.size < 2) pinch0 = null;
+    if (!p3.size) view3dEl.classList.remove('drag');
+  });
+}
+gl3dCanvas.addEventListener('wheel', e => {
+  if (!V3) return;
+  e.preventDefault();
+  V3.dist = Math.max(60, Math.min(V3.spanM * 4, V3.dist * (e.deltaY > 0 ? 1.15 : 0.87)));
+}, { passive: false });
+gl3dCanvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('resize', () => { if (V3) size3dCanvas(); });
+
+// ---- the tool tree ------------------------------------------------------
+// Groups fold, and the whole tree folds from its root — which is what makes
+// this usable on a phone, where the open tree is a third of the screen. No
+// state is kept: the tree opens fresh each visit, expanded, because a tool
+// you cannot see is a tool you forget the map has.
+document.getElementById('ttRoot').onclick = ev => {
+  ev.stopPropagation();
+  document.getElementById('tooltree').classList.toggle('closed');
+};
+for (const head of document.querySelectorAll('.tt-head')) {
+  head.onclick = ev => {
+    ev.stopPropagation();
+    head.parentElement.classList.toggle('closed');
+  };
+}
+
 // ---- map type control -------------------------------------------------
 const layersEl = document.querySelector('.layers');
 const toggleEl = document.getElementById('layerToggle');

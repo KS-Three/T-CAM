@@ -61,7 +61,7 @@ import { assessRoute, routeWinds, routeLength } from './routes.mjs';
 import { getTile, prefetch, cacheStats, clearCache, PREFETCH_MAX_TILES } from './tile-cache.mjs';
 import {
   fetchElevationGrid, contourLines, hillshade, gridStats, gridBounds,
-  slopeAspect, metresToFeet, planGrid, slopeAspectAt,
+  slopeAspect, metresToFeet, planGrid, slopeAspectAt, packElevations,
 } from './terrain.mjs';
 import { buildStamp, isStale, stampLine } from './build-stamp.mjs';
 
@@ -170,11 +170,27 @@ export function recentPhotos(db, limit = 200) {
   }));
 }
 
+/**
+ * Stands the way a page needs them: with the wind derivation attached.
+ *
+ * One function, used by the baked dashboard payload AND /api/stands. They
+ * were two shapes for a while — the API carried effectiveWinds and the baked
+ * page did not — so the map's tooltips and report panel were blank until the
+ * first save forced a refetch. Two producers of one thing is how that happens.
+ */
+export function standsForClient(db) {
+  return allStands(db).map(s => {
+    const c = windsForStand(s);
+    return { ...s, coverage: c.derived, windSource: c.source,
+             effectiveWinds: c.winds, windsCompared: c.compared };
+  });
+}
+
 export async function buildState(db, out) {
   const cameras = allCameras(db).map(cameraFromRow);
   const photos = recentPhotos(db);
   const plan = await readPlan(out);
-  const stands = allStands(db);
+  const stands = standsForClient(db);
   const markers = allMarkers(db);
   return { generatedAt: new Date().toISOString(), cameras, photos, stands, markers,
            plan, counts: counts(db) };
@@ -311,6 +327,7 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
   }
 
   const hs = hillshade(grid);
+  const packed = packElevations(grid, stats);
   const features = terrainFeatures(grid);
   const { slope } = slopeAspect(grid);
   const slopes = [...slope].filter(Number.isFinite).sort((a, b) => a - b);
@@ -321,6 +338,14 @@ export async function terrainFor(db, { lat, lng, radiusM = 300, spacingM = 10 })
     cached,
     bounds: gridBounds(grid),
     grid: { cols: grid.cols, rows: grid.rows, spacingM: grid.spacingM },
+    // The raw elevations, for the 3D view to build its mesh from. Same row
+    // order as the grid itself — row 0 the SOUTH edge — where the hillshade
+    // below flips rows because an image's first row is its top. Two layouts
+    // because they feed two different consumers, and both say so.
+    elev: {
+      b64: Buffer.from(packed.bytes).toString('base64'),
+      min: packed.min, scale: packed.scale,
+    },
     stats: {
       minFt: Math.round(metresToFeet(stats.min) * 10) / 10,
       maxFt: Math.round(metresToFeet(stats.max) * 10) / 10,
@@ -554,11 +579,7 @@ export function createServer({ out = OPT.out } = {}) {
           // The derivation travels with the stand. The page draws lanes and
           // shows the winds they imply, and re-deriving it in the browser is
           // how the two quietly start disagreeing.
-          return sendJson(res, 200, allStands(db).map(s => {
-            const c = windsForStand(s);
-            return { ...s, coverage: c.derived, windSource: c.source,
-                     effectiveWinds: c.winds, windsCompared: c.compared };
-          }));
+          return sendJson(res, 200, standsForClient(db));
         }
         if (req.method === 'POST') {
           const b = await readJson(req);

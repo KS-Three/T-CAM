@@ -132,11 +132,13 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   }
   /* The one-question screen. Server-only, so the static page hides it rather
      than offering a link that 404s off a file:// copy. */
-  header .tonight { align-self: center; white-space: nowrap;
-    color: var(--accent); text-decoration: none; font-size: 14px; font-weight: 600;
-    border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
-  header .tonight:hover { border-color: var(--accent); }
-  header .tonight.first { margin-left: auto; }
+  /* Scoped to the top bar now that the header is one; the old header-element
+     scoping quietly dropped these to bare blue links when the layout moved. */
+  #topbar .tonight { align-self: center; white-space: nowrap;
+    color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+    background: var(--panel); }
+  #topbar .tonight:hover { border-color: var(--accent); }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
@@ -239,19 +241,85 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .srow.unknown .verdict-tag { color: var(--muted); }
   .srow ul { margin: 2px 0 0; padding-left: 15px; color: var(--muted); font-size: 12px; }
   .srow li.minus { color: var(--warn); }
+
+  /* ---- full-screen layout -------------------------------------------------
+     The map used to be one card among many, 420px tall, with the report
+     stacked around it. It is the thing this page IS — every tool on it needs
+     ground to breathe — so it now fills the viewport, and the report slides in
+     from the right instead of living underneath. Written as overrides after
+     the shared map styles rather than edits to them, because the map CSS is
+     shared text and the other pages still embed it un-fullscreened. */
+  :root { --glass: rgba(255,255,255,.86); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --glass: rgba(24,27,20,.86); }
+  }
+  html, body { height: 100%; }
+  #map { position: fixed; inset: 0; height: auto; margin: 0;
+         border: none; border-radius: 0; z-index: 0; }
+  /* The slim bar across the top. Translucent so the map reads as running
+     underneath it rather than stopping at it. */
+  #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 10px; padding: 6px 12px; background: var(--glass);
+            border-bottom: 1px solid var(--line);
+            backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); }
+  #topbar h1 { font-size: 15px; display: inline; margin: 0 8px 0 0; }
+  .tb-id { min-width: 0; white-space: nowrap; overflow: hidden;
+           text-overflow: ellipsis; }
+  .tb-id .sub { display: inline; margin-right: 8px; font-size: 12px; }
+  .tb-links { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+  #drawerBtn { padding: 6px 11px; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
+               border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+               background: var(--panel); color: var(--ink); }
+  #drawerBtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* Everything pinned to the map's top edge drops below the bar. */
+  .zoom { top: 52px; }
+  .maptools { top: 52px; }
+  .standform.aside { top: 52px; }
+  /* The report: the whole old page, in a drawer. Scrolls on its own, so a
+     long camera list never moves the map behind it. */
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+            width: min(460px, 94vw); background: var(--bg);
+            border-left: 1px solid var(--line);
+            box-shadow: -10px 0 34px rgba(0,0,0,.35);
+            overflow-y: auto; padding: 0 18px 48px;
+            transform: translateX(103%); transition: transform .22s ease;
+            overscroll-behavior: contain; }
+  #drawer.open { transform: none; }
+  .drawhead { position: sticky; top: 0; z-index: 2; display: flex;
+              align-items: center; justify-content: space-between;
+              margin: 0 -18px 10px; padding: 10px 18px;
+              background: var(--glass); border-bottom: 1px solid var(--line);
+              backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); }
+  .drawhead h2 { margin: 0; font-size: 15px; }
+  .drawhead button { border: none; background: none; color: var(--muted);
+                     font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px; }
+  .drawhead button:hover { color: var(--ink); }
+  /* Attribution moves onto the map, where the map now is. */
+  .attrib { position: fixed; right: 8px; bottom: 4px; z-index: 6; margin: 0;
+            padding: 2px 8px; border-radius: 5px; background: var(--glass);
+            font-size: 10px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <h1>Trail Cameras</h1>
-      <div class="sub" id="sub"></div>
-    </div>
+${mapMarkup}
+<div id="topbar">
+  <div class="tb-id">
+    <h1>Trail Cameras</h1>
+    <div class="sub" id="sub"></div>
     <div class="sub" id="plan"></div>
+  </div>
+  <div class="tb-links">
     <a class="tonight first" id="tonightLink" href="/tonight" hidden>Tonight &rarr;</a>
     <a class="tonight" id="journalLink" href="/journal" hidden>Journal</a>
-  </header>
+    <button id="drawerBtn" type="button">Camp report</button>
+  </div>
+</div>
+<div id="drawer">
+  <div class="drawhead">
+    <h2>Camp report</h2>
+    <button id="drawerClose" type="button" title="Close">&times;</button>
+  </div>
   <div id="alerts"></div>
   <h2 class="section" style="margin-top:0">Best sits ahead</h2>
   <div id="planArea"></div>
@@ -262,7 +330,6 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   <h2 class="section">Where to sit</h2>
   <div id="standPlan"></div>
   <h2 class="section">Cameras</h2>
-  ${mapMarkup}
   <div class="grid" id="cards"></div>
   <h2 class="section">Recent photos</h2>
   <div id="photoArea"></div>
@@ -282,6 +349,26 @@ document.getElementById('sub').textContent =
 const planned = D.cameras.find(c => c.plan);
 if (planned) document.getElementById('plan').textContent =
   planned.plan + ' plan \u00b7 ' + planned.photoCount + '/' + planned.photoLimit + ' photos this cycle';
+
+// ---- the report drawer -------------------------------------------------
+// The old page, on demand. Open it, find your card, close it, and the map is
+// exactly where you left it — the drawer scrolls on its own.
+const drawer = document.getElementById('drawer');
+const drawerBtn = document.getElementById('drawerBtn');
+const setDrawer = open => {
+  drawer.classList.toggle('open', open);
+  drawerBtn.classList.toggle('on', open);
+};
+drawerBtn.onclick = () => setDrawer(!drawer.classList.contains('open'));
+document.getElementById('drawerClose').onclick = () => setDrawer(false);
+/** Open the drawer and bring one element into view — how a pin reaches its card. */
+function revealInDrawer(id) {
+  setDrawer(true);
+  // After the slide-in, or the scroll math runs against a drawer that is
+  // still off-screen and lands somewhere arbitrary.
+  setTimeout(() => document.getElementById(id)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 240);
+}
 
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
 
@@ -543,9 +630,14 @@ const meter = (pct, colour) => {
 const line = (k, v) => { const r = el('div', 'row');
   r.append(el('span', null, k), typeof v === 'string' ? el('span', null, v) : v); return r; };
 
-for (const c of D.cameras) {
+// One builder for a camera's card, wherever it is shown. The map's select
+// panel shows the same card for a clicked pin, and two renderings of one
+// camera is how they would end up disagreeing about battery life. The id
+// goes only on the report drawer's copy — ids must stay unique, and the
+// drawer's is the one revealInDrawer scrolls to.
+function cameraCard(c, { withId = true } = {}) {
   const card = el('div', 'card ' + c.health.level);
-  card.id = 'cam-' + c.id;
+  if (withId) card.id = 'cam-' + c.id;
   card.appendChild(el('h3', null, c.name));
   // Name the brand only when more than one is present. On a single-brand
   // account it would be the same word on every card, which is just noise.
@@ -583,8 +675,9 @@ for (const c of D.cameras) {
   const t = el('span', 'tag ' + c.health.level,
     c.health.level === 'ok' ? 'healthy' : c.health.notes.join(' \u00b7 '));
   card.appendChild(t);
-  cards.appendChild(card);
+  return card;
 }
+for (const c of D.cameras) cards.appendChild(cameraCard(c));
 // ---- hunt plan --------------------------------------------------------
 const planArea = document.getElementById('planArea');
 if (!D.plan || !D.plan.sits || !D.plan.sits.length) {

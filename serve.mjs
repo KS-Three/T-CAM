@@ -33,6 +33,7 @@ import {
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
+  upsertProperty, allProperties, assignPropertyMembers,
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
@@ -845,6 +846,31 @@ export function createServer({ out = OPT.out } = {}) {
           return deleteRoute(db, id)
             ? sendJson(res, 200, { deleted: id })
             : sendJson(res, 404, { error: `no route with id ${id}` });
+        }
+      }
+      // --- properties: the named grounds ---------------------------------
+      // A property is created by NAMING a ground on the map, and the member
+      // ids arrive with the name — the caller assigns exactly what it showed
+      // the person when they typed. There is no PATCH and no DELETE: renaming
+      // is naming again (majority labelling absorbs the old rows), and a
+      // property with no members labels nothing.
+      if (url.pathname === '/api/properties') {
+        if (req.method === 'GET') return sendJson(res, 200, allProperties(db));
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          const name = (b.name ?? '').trim();
+          if (!name) return sendJson(res, 400, { error: 'a property needs a name' });
+          try {
+            const made = upsertProperty(db, name);
+            const { assigned } = assignPropertyMembers(db, made.id, {
+              cameraIds: Array.isArray(b.cameraIds) ? b.cameraIds : [],
+              standIds: Array.isArray(b.standIds) ? b.standIds : [],
+              markerIds: Array.isArray(b.markerIds) ? b.markerIds : [],
+            });
+            return sendJson(res, 201, { ...made, assigned });
+          } catch (err) {
+            return sendJson(res, 400, { error: err.message });
+          }
         }
       }
       // --- scouting markers ---------------------------------------------

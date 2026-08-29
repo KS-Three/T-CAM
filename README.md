@@ -91,6 +91,12 @@ are never written to disk, never logged, and never stored in this repo.
 `/tonight` is the one to put on a phone's home screen: it installs as an app
 and keeps working with no signal.
 
+Hunt more than one piece of land and the map notices: a dropdown appears (top
+bar on a desktop, bottom-centre on a phone) listing each ground it found by
+clustering what you've placed. Pick one and the map jumps there; the choice
+sticks. Name a ground once and it stops being "Ground 2 — 2 stands" and starts
+being "Dan's place", on the map and in the records underneath.
+
 | Flag | Meaning |
 | --- | --- |
 | `--out DIR` | Output directory (default `./spypoint-data`, or `$SPYPOINT_OUT`) |

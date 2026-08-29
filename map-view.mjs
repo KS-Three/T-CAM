@@ -43,6 +43,7 @@
 import { browserSource as measureSource } from './measure.mjs';
 import { browserSource as coverSource } from './coverage.mjs';
 import { browserSource as t3dSource } from './terrain3d.mjs';
+import { browserSource as groundsSource } from './grounds.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -611,6 +612,7 @@ export const mapScript = String.raw`
 ${measureSource('MEASURE')}
 ${coverSource('COVER')}
 ${t3dSource('T3D')}
+${groundsSource('GROUNDS')}
 
 // ---- map --------------------------------------------------------------
 const TS = 256;
@@ -690,23 +692,29 @@ const framePoints = [
   ...(D.markers || []).map(m => [m.lng, m.lat]),
 ].filter(([lng, lat]) => typeof lat === 'number' && typeof lng === 'number');
 
+// Centre on a set of points, at the widest zoom whose pixel span still fits
+// the viewport. A single point has no span, so it settles at 18 and is then
+// clamped by the layer's own maximum when the first draw happens. A function
+// rather than inline arithmetic because the ground switcher re-frames with
+// exactly the same rule — two fitting rules is how "jump to the other
+// property" and "open the map" would come to disagree about what fits.
+function frameFor(pts) {
+  const lats = pts.map(p => p[1]), lngs = pts.map(p => p[0]);
+  const [m1, m2] = [Math.min(...lats), Math.max(...lats)];
+  const [n1, n2] = [Math.min(...lngs), Math.max(...lngs)];
+  const at = { lat: (m1 + m2) / 2, lng: (n1 + n2) / 2 };
+  let z = 16;
+  for (let zz = 18; zz >= 2; zz--) {
+    const w = Math.abs(projX(n2, zz) - projX(n1, zz)), h = Math.abs(projY(m1, zz) - projY(m2, zz));
+    if (w < mapEl.clientWidth - 90 && h < mapEl.clientHeight - 90) { z = zz; break; }
+  }
+  return { centre: at, zoom: z };
+}
+
 // Nothing placed at all: the continental US, wide, so panning to your ground
 // and dropping the first stand is possible rather than blocked.
 let zoom = 4, centre = { lat: 39.5, lng: -98.35 };
-if (framePoints.length) {
-  const lats = framePoints.map(p => p[1]), lngs = framePoints.map(p => p[0]);
-  const [m1, m2] = [Math.min(...lats), Math.max(...lats)];
-  const [n1, n2] = [Math.min(...lngs), Math.max(...lngs)];
-  centre = { lat: (m1 + m2) / 2, lng: (n1 + n2) / 2 };
-  // Widest zoom whose pixel span still fits, so everything lands on screen.
-  // A single point has no span, so this settles at 18 and is then clamped by
-  // the layer's own maximum when the first draw happens.
-  zoom = 16;
-  for (let z = 18; z >= 2; z--) {
-    const w = Math.abs(projX(n2, z) - projX(n1, z)), h = Math.abs(projY(m1, z) - projY(m2, z));
-    if (w < mapEl.clientWidth - 90 && h < mapEl.clientHeight - 90) { zoom = z; break; }
-  }
-}
+if (framePoints.length) ({ centre, zoom } = frameFor(framePoints));
 
 function draw() {
   const W = mapEl.clientWidth, H = mapEl.clientHeight;
@@ -3444,6 +3452,159 @@ mapEl.addEventListener('wheel', e => {
   setZoom(zoom + (e.deltaY < 0 ? 1 : -1));
 }, { passive: false });
 addEventListener('resize', draw);
+// ---- the ground switcher -------------------------------------------------
+// Two hunting properties means a map framed on both opens at a zoom where
+// each parcel is a speck, and "go look at the other place" is a minute of
+// panning. The dropdown in the top bar jumps between them.
+//
+// Grounds are DISCOVERED, not configured: everything with coordinates,
+// clustered by walking distance (GROUNDS.groundsFrom, 2 km single-linkage).
+// Nothing gets filed anywhere for the dropdown to work, and a stand dropped
+// on the far parcel next week lands in the right ground because geography
+// says so. Naming one is the single deliberate act — it creates the property
+// row and assigns the members, and the label afterwards comes from the
+// members' own property names, majority-wins.
+const groundSel = document.getElementById('groundSel');
+let GROUND_LIST = [];
+let groundChoice = 'all';
+try { groundChoice = localStorage.getItem('trailcam.ground') || 'all'; } catch { /* ignore */ }
+const saveGroundChoice = k => { try { localStorage.setItem('trailcam.ground', k); } catch { /* ignore */ } };
+// An unnamed ground has no stable identity across sessions, so the remembered
+// key falls back to a rounded centre: enough to survive a reload, and a
+// mismatch just opens the map framed on everything, never on the wrong place.
+const groundKey = g => g.name || ('at:' + g.centre.lat.toFixed(2) + ',' + g.centre.lng.toFixed(2));
+const groundPoints = () => [
+  ...located.map(c => ({ id: c.id, kind: 'camera', lat: c.lat, lng: c.lng, property: c.property || null })),
+  ...STANDS.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+    .map(s => ({ id: s.id, kind: 'stand', lat: s.lat, lng: s.lng, property: s.property_name || null })),
+  ...MARKERS.filter(m => Number.isFinite(m.lat) && Number.isFinite(m.lng))
+    .map(m => ({ id: m.id, kind: 'marker', lat: m.lat, lng: m.lng, property: m.property_name || null })),
+];
+
+function rebuildGrounds() {
+  if (!groundSel) return;
+  GROUND_LIST = GROUNDS.groundsFrom(groundPoints());
+  // One ground is not a choice. The control appears when the land splits in
+  // two — dropping the first pin on the far property is what summons it.
+  if (GROUND_LIST.length < 2) { groundSel.hidden = true; return; }
+  groundSel.hidden = false;
+  groundSel.textContent = '';
+  const opt = (value, label) => {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    groundSel.appendChild(o);
+  };
+  opt('all', 'Everything');
+  GROUND_LIST.forEach((g, i) =>
+    opt('g' + i, g.name || ('Ground ' + (i + 1) + ' — ' + GROUNDS.describeGround(g))));
+  const current = GROUND_LIST.findIndex(g => groundKey(g) === groundChoice);
+  // Naming is offered for the ground on screen, once it has no name yet — and
+  // only where saving is possible at all (the static file cannot).
+  if (D.live && current >= 0 && !GROUND_LIST[current].name) opt('name', '✎ Name this ground…');
+  groundSel.value = current >= 0 ? 'g' + current : 'all';
+}
+
+function frameGround(g) {
+  const b = g.bounds;
+  ({ centre, zoom } = frameFor([[b.west, b.south], [b.east, b.north]]));
+  draw();
+}
+
+/**
+ * Naming happens in the bar, not in a prompt() — same reasoning as naming a
+ * buck on the review screen: prompt blocks the page, cannot be styled, and
+ * dies to a stray Escape.
+ */
+function nameGround(g) {
+  if (!groundSel || document.getElementById('groundName')) return;
+  const input = document.createElement('input');
+  input.id = 'groundName';
+  input.placeholder = 'Name this ground';
+  input.maxLength = 60;
+  groundSel.hidden = true;
+  groundSel.after(input);
+  input.focus();
+  const done = () => { input.remove(); groundSel.hidden = false; rebuildGrounds(); };
+  input.onblur = () => { if (document.getElementById('groundName')) done(); };
+  input.onkeydown = async e => {
+    e.stopPropagation();
+    if (e.key === 'Escape') return done();
+    if (e.key !== 'Enter') return;
+    const name = input.value.trim();
+    if (!name) return done();
+    try {
+      const res = await fetch('/api/properties', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name,
+          cameraIds: g.ids.camera, standIds: g.ids.stand, markerIds: g.ids.marker }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((body && body.error) || ('save failed: ' + res.status));
+      // The page's own copies learn the name, so the label is right without a
+      // reload and the next rebuild votes it straight back in.
+      for (const c of located) if (g.ids.camera.includes(c.id)) c.property = name;
+      for (const s of STANDS) if (g.ids.stand.includes(s.id)) s.property_name = name;
+      for (const m of MARKERS) if (g.ids.marker.includes(m.id)) m.property_name = name;
+      groundChoice = name;
+      saveGroundChoice(name);
+      done();
+    } catch (err) {
+      input.value = '';
+      input.placeholder = err.message;
+    }
+  };
+}
+
+if (groundSel) {
+  // On a phone the switcher floats bottom-centre (the bar has no room — see
+  // the dashboard's stylesheet). That styling is position: fixed, and the top
+  // bar's backdrop-filter makes the BAR the containing block for fixed
+  // descendants — the chip pinned itself to the bar and vanished off its top
+  // edge (measured). So at phone width the select moves to body, where fixed
+  // means the screen; back into the bar when the screen widens again.
+  const groundHome = groundSel.parentElement;
+  const phoneQ = matchMedia('(max-width: 560px)');
+  const placeGround = () => {
+    if (phoneQ.matches) document.body.appendChild(groundSel);
+    else groundHome.insertBefore(groundSel, groundHome.firstChild);
+  };
+  phoneQ.addEventListener('change', placeGround);
+  placeGround();
+  // Rebuilt as the list opens, so a stand dropped five minutes ago is already
+  // in the right ground without every save path having to remember this.
+  groundSel.addEventListener('pointerdown', rebuildGrounds);
+  groundSel.onchange = () => {
+    const v = groundSel.value;
+    if (v === 'name') {
+      const g = GROUND_LIST.find(x => groundKey(x) === groundChoice);
+      rebuildGrounds();
+      if (g) nameGround(g);
+      return;
+    }
+    if (v === 'all') {
+      groundChoice = 'all';
+      saveGroundChoice('all');
+      const pts = groundPoints().map(p => [p.lng, p.lat]);
+      if (pts.length) { ({ centre, zoom } = frameFor(pts)); draw(); }
+      return;
+    }
+    const g = GROUND_LIST[Number(v.slice(1))];
+    if (!g) return;
+    groundChoice = groundKey(g);
+    saveGroundChoice(groundChoice);
+    frameGround(g);
+  };
+  rebuildGrounds();
+  // Reopen where you were: the remembered ground frames the FIRST draw below,
+  // so there is no flash of the wrong place.
+  const saved = GROUND_LIST.find(g => groundKey(g) === groundChoice);
+  if (saved) {
+    const b = saved.bounds;
+    ({ centre, zoom } = frameFor([[b.west, b.south], [b.east, b.north]]));
+  } else if (groundChoice !== 'all') {
+    groundChoice = 'all';
+  }
+}
 paintControl();
 draw();
 // Said once, in the note strip, rather than by hiding the map. Both facts are

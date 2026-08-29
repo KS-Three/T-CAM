@@ -86,7 +86,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `/` | The map, full screen: every stand wearing tonight's verdict, with the camp report in a drawer |
 | `/tonight` | One screen: which stand, the walk in, when to leave, log the sit |
 | `/journal` | The season, and what it is entitled to claim from it |
-| `/review` | Tagging photos — keyboard-driven, built for volume. The camera's own AI guess shows up as a suggestion to agree with (Y), never as a tag you didn't make |
+| `/review` | Tagging photos — keyboard-driven, built for volume. The camera's own AI guess shows up as a suggestion to agree with (Y), never as a tag you didn't make. It also learns what your cameras' empty frames look like from every "nothing here" you press, and flags likely wind with a measured match — no cloud, no model |
 
 `/tonight` is the one to put on a phone's home screen: it installs as an app
 and keeps working with no signal.

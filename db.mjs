@@ -744,6 +744,37 @@ export function addDetection(db, { photoId, species = null, count = 1,
   return db.prepare('SELECT * FROM detections WHERE id = ?').get(info.lastInsertRowid);
 }
 
+/**
+ * Store a photo's fingerprint. The browser computes it (the server has no
+ * JPEG decoder and is not getting one — see phash.mjs); this just remembers.
+ * Idempotent and last-writer-wins: every browser runs the same emitted code,
+ * so two clients hashing one photo agree.
+ */
+export function setPhotoPhash(db, photoId, phash) {
+  return db.prepare('UPDATE photos SET phash = ? WHERE id = ?')
+    .run(phash, photoId).changes > 0;
+}
+
+/**
+ * A camera's reviewed-empty fingerprints: photos in visits a person marked
+ * reviewed that hold NO confirmed detection. The camera's own unconfirmed
+ * claims do not disqualify a visit — the machine saying 'deer' about a frame
+ * a person looked at and called empty is exactly the claim being overruled.
+ */
+export function emptyBaseline(db, cameraId) {
+  return db.prepare(`
+    SELECT p.phash FROM photos p
+    JOIN visits v ON v.id = p.visit_id
+    WHERE p.camera_id = ? AND p.phash IS NOT NULL
+      AND v.reviewed_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM detections d
+        JOIN photos p2 ON p2.id = d.photo_id
+        WHERE p2.visit_id = v.id AND d.confirmed = 1
+      )
+  `).all(cameraId).map(r => r.phash);
+}
+
 export function upsertBuck(db, name, notes = null) {
   db.prepare('INSERT OR IGNORE INTO bucks (name, notes, created_at) VALUES (?, ?, ?)')
     .run(name, notes, nowIso());

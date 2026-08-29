@@ -78,7 +78,10 @@ test('photos come back newest first, with their species tags', async t => {
   assert.equal(photos.length, 2);
   assert.equal(photos[0].id, 'spypoint:p2', 'newest first');
   assert.equal(photos[1].id, 'spypoint:p1');
-  assert.deepEqual(photos[1].tags.sort(), ['buck', 'deer']);
+  // A person's tag and the camera's claim arrive apart, never as one list.
+  assert.equal(photos[1].confirmed, 'buck', "a person's tag is fact");
+  assert.equal(photos[1].claims, 'deer', "the camera's word is a claim");
+  assert.equal(photos[1].wind, null, 'no reviewed-empty baseline, no wind talk');
   assert.equal(photos[1].cameraName, 'North Ridge');
   assert.match(photos[1].file, /^\/photos\/North_Ridge\/2026-08\/p1\.jpg$/,
     'addressed by URL, with separators normalized for the web');

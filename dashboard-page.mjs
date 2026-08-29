@@ -190,6 +190,31 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
                  border: 1px solid var(--line); }
   .campics-note { font-size: 11px; color: var(--muted); margin-top: 5px; }
   .campics-note a { color: var(--accent); }
+  /* The lightbox: one photo at full size, over everything (the drawer sits
+     at z 40). Click a photo anywhere — the grid or a camera card's strip —
+     and it expands; the on-screen arrows, the arrow keys, or a swipe walk
+     the list it came from. */
+  .lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(10,12,8,.93);
+              display: flex; flex-direction: column; align-items: center;
+              justify-content: center; }
+  .lightbox img { max-width: 96vw; max-height: 82vh; border-radius: 6px;
+                  box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+  .lightbox .lb-cap { color: #e8ebe4; font-size: 13px; margin-top: 12px;
+                      max-width: 92vw; text-align: center; }
+  .lightbox .lb-cap .lb-n { color: #9aa294; margin-left: 8px;
+                            font-variant-numeric: tabular-nums; }
+  .lightbox button { position: absolute; border: 0; background: rgba(0,0,0,.4);
+                     color: #fff; cursor: pointer; border-radius: 8px;
+                     font: 700 26px/1 ui-sans-serif, system-ui, sans-serif; }
+  .lightbox button:disabled { opacity: .25; cursor: default; }
+  .lightbox .lb-x { top: 14px; right: 14px; width: 44px; height: 44px; font-size: 20px; }
+  /* Tall, phone-sized hit areas: this gets used with cold thumbs. */
+  .lightbox .lb-prev, .lightbox .lb-next { top: 50%; transform: translateY(-50%);
+                     width: 52px; height: 96px; }
+  .lightbox .lb-prev { left: 10px; }
+  .lightbox .lb-next { right: 10px; }
+  .photos figure { cursor: zoom-in; }
+  .campics img { cursor: zoom-in; }
   .sit { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
          padding: 12px 14px; margin-bottom: 8px; display: grid;
          grid-template-columns: auto 1fr; gap: 4px 14px; align-items: start; }
@@ -629,6 +654,84 @@ async function loadStandPlan() {
   }
 }
 loadStandPlan();
+// ---- lightbox ---------------------------------------------------------
+// Click a photo and it expands over the page; the arrows, the arrow keys, or
+// a swipe walk the list. WHICH list is the click site's call — the drawer
+// grid hands over every downloaded photo, a camera's strip hands over that
+// camera's — so the navigation matches what you were already looking at.
+let lb = null;   // { list, i, img, capText, n, prev, next, el, onKey } while open
+
+function lbShow(i) {
+  lb.i = i;
+  const p = lb.list[i];
+  lb.img.src = p.file;
+  lb.img.alt = p.cameraName + ' ' + fmtDate(p.date);
+  lb.capText.textContent = p.cameraName + ' \u00b7 ' + fmtDate(p.date)
+    + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : '');
+  lb.n.textContent = (i + 1) + ' of ' + lb.list.length;
+  // The ends stop rather than wrap: a loop makes "have I seen them all?"
+  // unanswerable, and on a stand check that is the whole question.
+  lb.prev.disabled = i === 0;
+  lb.next.disabled = i === lb.list.length - 1;
+  // The neighbours are fetched while this one is on screen, so the next
+  // press is instant — and since every photo passes through the service
+  // worker on its way, each one looked at is one more saved for the woods.
+  for (const j of [i - 1, i + 1]) {
+    if (lb.list[j] && lb.list[j].file) { const pre = new Image(); pre.src = lb.list[j].file; }
+  }
+}
+
+function closeLightbox() {
+  if (!lb) return;
+  removeEventListener('keydown', lb.onKey);
+  lb.el.remove();
+  lb = null;
+}
+
+function openLightbox(list, i) {
+  closeLightbox();
+  const box = el('div', 'lightbox');
+  const img = new Image();
+  img.draggable = false;             // a swipe must not become an image drag
+  const cap = el('div', 'lb-cap');
+  const capText = el('span');
+  const n = el('span', 'lb-n');
+  cap.append(capText, n);
+  const mk = (cls, label, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = cls; b.textContent = label;
+    b.onclick = ev => { ev.stopPropagation(); fn(); };
+    return b;
+  };
+  const prev = mk('lb-prev', '\u2039', () => { if (lb.i > 0) lbShow(lb.i - 1); });
+  const next = mk('lb-next', '\u203a', () => { if (lb.i < lb.list.length - 1) lbShow(lb.i + 1); });
+  const x = mk('lb-x', '\u00d7', closeLightbox);
+  box.append(img, cap, prev, next, x);
+  // The backdrop closes; the photo itself does not, because a tap on the
+  // picture is how a phone zooms about, not a request to leave.
+  box.onclick = ev => { if (ev.target === box) closeLightbox(); };
+  const onKey = ev => {
+    if (ev.key === 'Escape') closeLightbox();
+    else if (ev.key === 'ArrowLeft' && lb.i > 0) lbShow(lb.i - 1);
+    else if (ev.key === 'ArrowRight' && lb.i < lb.list.length - 1) lbShow(lb.i + 1);
+  };
+  addEventListener('keydown', onKey);
+  // A swipe is the phone's arrow key; pointer events make it a mouse drag
+  // too, which costs nothing.
+  let downX = null;
+  box.onpointerdown = ev => { downX = ev.clientX; };
+  box.onpointerup = ev => {
+    if (downX === null) return;
+    const dx = ev.clientX - downX;
+    downX = null;
+    if (dx > 40 && lb.i > 0) lbShow(lb.i - 1);
+    else if (dx < -40 && lb.i < lb.list.length - 1) lbShow(lb.i + 1);
+  };
+  document.body.appendChild(box);
+  lb = { list, i, img, capText, n, prev, next, el: box, onKey };
+  lbShow(i);
+}
+
 // ---- camera cards -----------------------------------------------------
 const MIXED_BRANDS = new Set(D.cameras.map(c => c.provider).filter(Boolean)).size > 1;
 const cards = document.getElementById('cards');
@@ -700,9 +803,14 @@ function cameraCard(c, { withId = true } = {}) {
   const mine = listed.filter(p => p.file);
   if (mine.length) {
     const strip = el('div', 'campics');
-    for (const p of mine.slice(0, 8)) {
+    mine.slice(0, 8).forEach((p, idx) => {
       const a = document.createElement('a');
-      a.href = p.file; a.target = '_blank'; a.rel = 'noopener';
+      // The href survives for a middle-click or long-press; a plain click
+      // stays on the page and expands the photo instead. The strip shows the
+      // latest eight, but the arrows keep going through everything this
+      // camera has on disk.
+      a.href = p.file;
+      a.onclick = ev => { ev.preventDefault(); openLightbox(mine, idx); };
       const i = new Image();
       i.src = p.file; i.loading = 'lazy';
       i.alt = c.name + ' ' + fmtDate(p.date);
@@ -710,7 +818,7 @@ function cameraCard(c, { withId = true } = {}) {
         + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : '');
       a.appendChild(i);
       strip.appendChild(a);
-    }
+    });
     card.appendChild(strip);
     // No claim of a total: D.photos is the newest 200 across the account, so
     // this camera's count within it is not its lifetime tally, and "8 of 41"
@@ -815,14 +923,17 @@ if (!D.photos.length) {
   const onDisk = D.photos.filter(p => p.file);
   if (onDisk.length) {
     const g = el('div', 'photos');
-    for (const p of onDisk.slice(0, 60)) {
+    onDisk.slice(0, 60).forEach((p, i) => {
       const f = document.createElement('figure');
-      const i = new Image(); i.src = p.file; i.alt = p.cameraName + ' ' + fmtDate(p.date);
-      i.loading = 'lazy';
+      const im = new Image(); im.src = p.file; im.alt = p.cameraName + ' ' + fmtDate(p.date);
+      im.loading = 'lazy';
       const cap = el('figcaption', null,
         p.cameraName + ' \u00b7 ' + fmtDate(p.date) + (p.tags && p.tags.length ? ' \u00b7 ' + p.tags.join(', ') : ''));
-      f.append(i, cap); g.appendChild(f);
-    }
+      f.append(im, cap);
+      // The grid shows sixty; the arrows walk the whole list.
+      f.onclick = () => openLightbox(onDisk, i);
+      g.appendChild(f);
+    });
     area.appendChild(g);
   }
   const listedOnly = D.photos.length - onDisk.length;

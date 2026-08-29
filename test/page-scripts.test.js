@@ -67,6 +67,29 @@ test('embedded data cannot break out of its JSON block', () => {
   assert.ok(!html.includes('<img src=x onerror'), 'the tag is escaped, not emitted');
 });
 
+test('a photo expands in place, and the arrows walk the list it came from', () => {
+  // The lightbox takes the LIST from the click site: the drawer grid hands
+  // over every downloaded photo, a camera's strip hands over that camera's —
+  // so left/right always mean "the photos I was just looking at".
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const html = dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z');
+  const script = inlineScript(html);
+  assert.doesNotThrow(() => new vm.Script(script));
+  assert.match(script, /function openLightbox\(list, i\)/);
+  assert.match(script, /f\.onclick = \(\) => openLightbox\(onDisk, i\)/,
+    'the grid opens over every downloaded photo');
+  assert.match(script, /ev\.preventDefault\(\); openLightbox\(mine, idx\)/,
+    'a strip thumb opens over its own camera\u2019s, staying on the page');
+  for (const k of ["'Escape'", "'ArrowLeft'", "'ArrowRight'"]) {
+    assert.ok(script.includes(k), k + ' is handled');
+  }
+  assert.match(script, /lb\.prev\.disabled = i === 0/,
+    'the ends stop rather than wrap — "have I seen them all" must stay answerable');
+  assert.match(script, /removeEventListener\('keydown', lb\.onKey\)/,
+    'closing detaches the key handler rather than leaking it');
+  assert.match(script, /box\.onpointerdown/, 'a swipe works where there are no keys');
+});
+
 test('the photo grid never draws a broken icon for an undownloaded photo', () => {
   // An <img> whose src is null renders as a broken icon wearing a real
   // caption — which is indistinguishable from a lost photo. Listed-but-not-
@@ -79,7 +102,7 @@ test('the photo grid never draws a broken icon for an undownloaded photo', () =>
   const body = grid.slice(0, grid.indexOf('listedOnly)') + 400);
   assert.match(body, /const onDisk = D\.photos\.filter\(p => p\.file\)/,
     'only photos on disk get a picture');
-  assert.match(body, /for \(const p of onDisk\.slice/,
+  assert.match(body, /onDisk\.slice\(0, 60\)\.forEach/,
     'and the grid iterates that filtered list, not D.photos');
   assert.match(body, /listed at SpyPoint but not downloaded yet/,
     'the rest are counted and explained, not drawn broken');

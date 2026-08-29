@@ -543,8 +543,12 @@ else overlays it or slides in over it.
 - **Click a camera and its card opens** in the same panel: the exact card the
   drawer shows, built by one function so the two can never disagree. The card
   carries the camera's **latest photos** — a strip of thumbnails from what the
-  page already holds, each opening full-size, with the newest date and a jump
-  to Review. Only photos on disk are shown: a photo the sync has listed but
+  page already holds, with the newest date and a jump to Review. **Click any
+  photo — here or in the drawer's grid — and it expands over the page**; the
+  on-screen arrows, the arrow keys, or a swipe walk through the rest. Which
+  photos "the rest" means follows from where you clicked: the grid walks every
+  downloaded photo, a camera's strip walks that camera's own. The ends stop
+  rather than wrap, so "have I seen them all" stays answerable. Only photos on disk are shown: a photo the sync has listed but
   not downloaded exists only at the vendor's URL, and drawing from there would
   both leak a request off-property and break exactly where the strip is wanted
   — in the woods. The card says which of those states a photo-less camera is

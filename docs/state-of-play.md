@@ -80,6 +80,11 @@ Rules for anything added from here:
 | **Photo lightbox** — click a photo anywhere and it expands; arrows/keys/swipe walk the list it came from | Driven in a browser against healed real-shape photos: opened from grid and card strip, arrowed to both ends (stops, no wrap), Esc and backdrop close, key handler detached on close |
 | **Species suggestions in review** — the camera's own AI tag renders as "The camera thinks", apart from your tags; Y (or a click) agrees, writing YOUR confirmed tag while the claim stays behind unconfirmed | Driven in a browser with real keys against sync-shape rows: 'buck' offered as deer with the vendor's word shown, 'lynx' listed verbatim and refused a key, Y idempotent, naming refused until a person had tagged, the buck landing on the manual row, machine rows untouched, and the ranking counting exactly the one confirmed deer |
 | **Ground switcher** — two hunting lands, one dropdown in the top bar; grounds discovered by clustering everything placed (2 km walking-distance gap), naming one creates the property row and assigns its members | Driven in a browser at desktop and emulated phone width: two clusters 21 km apart seeded, jumped between, named through real key events ("Dans Place" — its 2 stands assigned, the home ground's rows untouched), reload reopened framed on it; the phone chip measured clear of Tools and Camp report after two placement bugs that only measurement caught |
+| **Zoom under control** — the wheel accumulates and anchors under the cursor, two fingers pinch, double-tap steps in, and a ⌂ button reframes on the ground | Driven with real input events: a 25-event trackpad flick cost 3 levels where it used to cost 25 (the "suddenly zoomed all the way out" report), one mouse notch moved exactly one, a pinch went 17→19 about the fingers without flinging the centre, ⌂ came home |
+| **Weather strip** (bottom of the map) — wind arrow + compass word, temperature, sky, and an hourly scrubber a week out | Driven against a stubbed forecast: opened, scrubbed to Thursday, the readout swung N→SSE and fell 21 °F; the fetch-once/cache/stale-with-a-note paths tested against a live stub, a dead one, and a planted day-old cache row |
+| **Crop fields** — outline, crop type, faint wash in the crop's colour, cut recorded as a DATE; USDA's Cropland Data Layer pre-selects the crop | Driven end to end with a real mouse: four corners clicked, the stubbed CDL pre-selected corn with the person's own choice protected, saved, reloaded baked into the page, "Cut today" went dashed with the date on the chip; the EPSG:5070 projection pinned at its defined origin and against ground distance |
+| **Routes editable at last** — every route wears a chip; rename, re-stand, redraw the line, delete | Driven with a real mouse: renamed through the form, deleted through its confirm; redraw keeps the route's identity (API + structural tests); the server had PATCH/DELETE all along — the map just never offered them |
+| **Suggested walk-in** — from an Access marker (or a click saying where the truck is) to a stand, bent around every wedge of ground the wind would carry scent across, arriving from downwind | Judged by `routes.mjs` independently of the code that planned it, on the plan's own wind and all 16; the first browser screenshot caught a 3-corner "clean" path sweeping through the beds — paths are now densified so the judged points ARE the walked line, and the driven rerun swung visibly wide and saved as an ordinary route |
 | **Wind recognition** — each frame fingerprinted in the browser (256-bit dHash, canvas); a visit matching the frames YOU reviewed as empty gets "Looks like wind" with the measured match; previews caption confirmed tags, the camera's claims, and the wind match | Driven end to end on real generated images: the empty burst hashed itself on arrival, N built the baseline, the animal-blob frame was refused wind talk (after the drive caught 9×8 hashing calling it a 97% match — the hash was rebuilt at 17×16), the empty-like visit was called at 100%, and the lightbox captions carried all three kinds of knowing |
 | **Zoom that behaves** — trackpad deltas bank (~100 px per step) instead of one step per event, wheel zoom anchors the ground under the cursor, two fingers pinch | Driven with synthetic input: twelve small deltas moved ONE level (was twelve — the "suddenly zoomed all the way out" bug), four full notches moved four, the point under the cursor drifted 0.0 in a zoom, and a touch pinch stepped in |
 
@@ -319,21 +324,23 @@ the two. Lanes are now the only way to record what a stand can be hunted on.
 which about 1,950 were the dashboard inside one template literal; the dashboard
 was then 2,100 lines of which about 1,300 were the map. The files now are:
 
-| File | Lines | Holds |
+| File | Lines (2026-08-29) | Holds |
 | --- | --- | --- |
-| `spypoint-sync.mjs` | ~420 | the sync, and the files it writes |
-| `dashboard-page.mjs` | ~680 | alerts, wind rose, review queue, sit ranking, cards, photos |
-| `map-view.mjs` | ~2,400 | the map: layers, pins, markers, routes, lanes, measure, terrain, parcels |
-| `tonight-page.mjs`, `journal-page.mjs`, `review-page.mjs` | ~500 each | one screen each |
+| `spypoint-sync.mjs` | ~430 | the sync, and the files it writes |
+| `dashboard-page.mjs` | ~1,000 | alerts, wind rose, review queue, sit ranking, cards, photos |
+| `map-view.mjs` | ~4,500 | the map: layers, pins, markers, routes, fields, lanes, measure, terrain, 3D, weather strip, parcels |
+| `tonight-page.mjs`, `journal-page.mjs`, `review-page.mjs` | ~400–830 each | one screen each |
 
-**`map-view.mjs` has grown back to the size that triggered the split.** It was
-1,600 lines when it came out of the dashboard on 2026-08-28 and is 2,400 by the
-end of that same day — the same length `spypoint-sync.mjs` was when it became
-unworkable. Nothing is wrong with it yet, and splitting it on a line count alone
-would be cargo-culting the last split rather than learning from it; the seam
-worth watching for is the forms (stand, marker, route — three of them, sharing a
-class and now a close path) coming out as their own file. Naming it here so the
-next person sees a trend rather than a number.
+**`map-view.mjs` has grown well past the size that triggered the split.** It
+was 1,600 lines when it came out of the dashboard on 2026-08-28, 2,400 by the
+end of that day, and is ~4,500 after 2026-08-29 (3D, the ground switcher, then
+zoom/weather/fields/route-editing/suggested walk-ins) — nearly twice the length
+`spypoint-sync.mjs` was when it became unworkable. Nothing is wrong with it
+yet, and splitting on a line count alone would be cargo-culting the last split;
+but the seam named here last time has widened: the forms (stand, marker, route,
+field — FOUR now, sharing a class and a close path) are the obvious first file,
+and the weather strip is self-contained enough to be a second. The next person
+to add a map feature should probably do that split first.
 
 The template-literal hazard that motivated it is still real for every page:
 escapes inside such a literal resolve when the PAGE IS BUILT rather than when

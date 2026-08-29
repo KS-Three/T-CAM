@@ -514,6 +514,56 @@ const MIGRATIONS = [
                WHERE file_path LIKE 'photos/%';`);
     },
   },
+  {
+    version: 12,
+    name: 'crop fields and a forecast cache',
+    up: db => {
+      // A crop field, outlined by hand on the map. Deer patterns hang off
+      // these more than off any single terrain feature on flat ground — a
+      // standing cornfield is bedding and food at once, and the day it is cut
+      // the whole property's evening traffic reorganises. So a field carries
+      // the two facts that drive that: what is growing, and whether it has
+      // been cut yet (and when).
+      //
+      // Points are JSON like a route's, and for the same reason: a boundary is
+      // read and written whole. cut_at is a date, not a boolean — "cut" means
+      // something different the first week (grain on the ground, deer pour in)
+      // than a month later, and without the date the map cannot say which.
+      // NULL means standing, or simply not recorded; the reader decides from
+      // the crop and the calendar what to make of it.
+      db.exec(`
+        CREATE TABLE fields (
+          id          INTEGER PRIMARY KEY,
+          property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+          name        TEXT,
+          crop        TEXT NOT NULL
+                        CHECK (crop IN ('corn', 'soybeans', 'alfalfa', 'winter-wheat',
+                                        'oats', 'clover', 'brassicas', 'pasture', 'other')),
+          points      TEXT NOT NULL,
+          cut_at      TEXT,
+          notes       TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+      `);
+      db.exec('CREATE INDEX fields_crop ON fields(crop);');
+
+      // The hourly forecast the map's weather strip scrubs through. Cached so
+      // the strip still answers in the truck with no signal — stale and saying
+      // so, which beats blank. Keyed by rounded coordinates exactly like the
+      // wind climatology above, and for the same reason: the forecast does not
+      // know where the property line is.
+      db.exec(`
+        CREATE TABLE forecasts (
+          lat         REAL NOT NULL,
+          lng         REAL NOT NULL,
+          fetched_at  TEXT NOT NULL,
+          data        TEXT NOT NULL,
+          PRIMARY KEY (lat, lng)
+        );
+      `);
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1452,6 +1502,35 @@ export function windClimatology(db, lat, lng, months, years) {
 }
 
 // ---------------------------------------------------------------------------
+// Forecast cache — the hourly forecast the map's weather strip reads.
+//
+// Same rounded key as the climatology: within a couple of kilometres the
+// forecast is the same numbers, and per-pan fetching would hammer a free
+// service for identical answers. Unlike the climatology this goes stale in
+// hours, so the ROW does not decide freshness — the caller compares
+// fetched_at against its own TTL and refetches, keeping the old row as the
+// offline fallback.
+// ---------------------------------------------------------------------------
+
+export function saveForecast(db, lat, lng, data) {
+  const [la, ln] = climKey(lat, lng);
+  db.prepare(`
+    INSERT INTO forecasts (lat, lng, fetched_at, data)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (lat, lng)
+    DO UPDATE SET fetched_at = excluded.fetched_at, data = excluded.data
+  `).run(la, ln, nowIso(), JSON.stringify(data));
+  return cachedForecast(db, lat, lng);
+}
+
+export function cachedForecast(db, lat, lng) {
+  const [la, ln] = climKey(lat, lng);
+  const row = db.prepare('SELECT * FROM forecasts WHERE lat = ? AND lng = ?').get(la, ln);
+  if (!row) return null;
+  return { data: JSON.parse(row.data), fetchedAt: row.fetched_at };
+}
+
+// ---------------------------------------------------------------------------
 // Entry and exit routes
 // ---------------------------------------------------------------------------
 
@@ -1529,6 +1608,87 @@ export function updateRoute(db, id, patch = {}) {
 
 export const deleteRoute = (db, id) =>
   db.prepare('DELETE FROM routes WHERE id = ?').run(id).changes > 0;
+
+// ---------------------------------------------------------------------------
+// Crop fields
+// ---------------------------------------------------------------------------
+
+export const CROP_KINDS = ['corn', 'soybeans', 'alfalfa', 'winter-wheat',
+  'oats', 'clover', 'brassicas', 'pasture', 'other'];
+
+export const CROP_LABELS = {
+  corn: 'Corn', soybeans: 'Soybeans', alfalfa: 'Alfalfa / hay',
+  'winter-wheat': 'Winter wheat', oats: 'Oats', clover: 'Clover plot',
+  brassicas: 'Brassicas / turnips', pasture: 'Pasture / CRP', other: 'Other',
+};
+
+/** A field boundary: the route's coordinate rules plus one of its own — a
+ *  shape needs three corners before it encloses anything. Length is checked
+ *  FIRST, or a two-point field would be refused in a route's words. */
+function parseRing(points) {
+  const list = typeof points === 'string' ? JSON.parse(points) : points;
+  if (!Array.isArray(list) || list.length < 3) {
+    throw new Error('a field boundary needs at least three points');
+  }
+  return parsePoints(list);
+}
+
+/** '' and null are both "not recorded"; anything else must be a real date,
+ *  because "cut" without a date cannot age (same reasoning as a marker's
+ *  found_at). */
+function cutDateOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) {
+    throw new Error('cutAt must be a date (YYYY-MM-DD)');
+  }
+  return s;
+}
+
+export function createField(db, { name = null, crop, points, cutAt = null,
+                                  notes = null, propertyId = null }) {
+  if (!CROP_KINDS.includes(crop)) {
+    throw new Error(`crop must be one of: ${CROP_KINDS.join(', ')}`);
+  }
+  const ring = parseRing(points);
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO fields (property_id, name, crop, points, cut_at, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(propertyId, name, crop, JSON.stringify(ring), cutDateOrNull(cutAt), notes, now, now);
+  return fieldById(db, Number(info.lastInsertRowid));
+}
+
+const fieldRow = r => r && ({ ...r, points: JSON.parse(r.points) });
+
+export const fieldById = (db, id) =>
+  fieldRow(db.prepare('SELECT * FROM fields WHERE id = ?').get(id)) ?? null;
+
+export const allFields = db =>
+  db.prepare('SELECT * FROM fields ORDER BY id').all().map(fieldRow);
+
+export function updateField(db, id, patch = {}) {
+  const row = fieldById(db, id);
+  if (!row) throw new Error(`no field with id ${id}`);
+  const next = {
+    name: patch.name !== undefined ? patch.name : row.name,
+    crop: patch.crop !== undefined ? patch.crop : row.crop,
+    points: patch.points !== undefined ? parseRing(patch.points) : row.points,
+    cutAt: patch.cutAt !== undefined ? cutDateOrNull(patch.cutAt) : row.cut_at,
+    notes: patch.notes !== undefined ? patch.notes : row.notes,
+  };
+  if (!CROP_KINDS.includes(next.crop)) {
+    throw new Error(`crop must be one of: ${CROP_KINDS.join(', ')}`);
+  }
+  db.prepare(`
+    UPDATE fields SET name = ?, crop = ?, points = ?, cut_at = ?, notes = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.name, next.crop, JSON.stringify(next.points), next.cutAt, next.notes, nowIso(), id);
+  return fieldById(db, id);
+}
+
+export const deleteField = (db, id) =>
+  db.prepare('DELETE FROM fields WHERE id = ?').run(id).changes > 0;
 
 // ---------------------------------------------------------------------------
 // The sit journal

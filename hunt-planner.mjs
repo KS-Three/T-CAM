@@ -252,7 +252,7 @@ const OFF_SEASON_CAP = 5;
  * disagreeing about the same evening.
  */
 export const RATINGS = [[46, 'PRIME'], [34, 'strong'], [24, 'good'], [14, 'fair'], [-999, 'poor']];
-export const rate = n => RATINGS.find(([t]) => n >= t)[1];
+const rate = n => RATINGS.find(([t]) => n >= t)[1];
 
 async function loadCameras() {
   if (OPT.lat !== null && OPT.lng !== null) {

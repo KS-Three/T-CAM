@@ -77,6 +77,24 @@ export const TREND_HOURS = 3;
  */
 export const GROUPS = [
   {
+    // No cut at all: how often a deer walks past this camera, period.
+    //
+    // Here because it is the honest BASE for a confidence figure. Conditioning
+    // the rate on tonight's weather AND then multiplying it by a weather-
+    // derived activity factor would count the weather twice; the rate says how
+    // busy the ground is, the factor says what tonight does to that. It is also
+    // the cut with the most hours behind it by a wide margin, which is what
+    // decides whether anything can be said at all in a first season.
+    key: 'any',
+    label: 'All hours',
+    // Not a condition, and marked so: it places every hour including an empty
+    // one, and tonight's forecast must never "fall in" to it.
+    everyHour: true,
+    ask: 'Which camera is busiest at all?',
+    buckets: [{ key: 'all', label: 'Every hour watched', phrase: 'hours watched' }],
+    bucketOf: () => 'all',
+  },
+  {
     key: 'rain',
     label: 'Rain',
     ask: 'Does rain move deer past a different camera?',
@@ -398,6 +416,7 @@ export function whereTable(db, { group = 'rain', species = 'deer', minHours = MI
 export function bucketsForConditions(hour) {
   const out = {};
   for (const g of GROUPS) {
+    if (g.everyHour) continue;   // not a condition — see the group's own note
     const b = g.bucketOf(hour ?? {});
     if (b) out[g.key] = b;
   }

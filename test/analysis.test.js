@@ -58,9 +58,25 @@ test('a bucket places an hour, and a missing reading is unknown rather than "no"
   assert.equal(rain.bucketOf({}), null, 'an absent column is not "dry" either');
 
   for (const g of GROUPS) {
-    assert.equal(g.bucketOf({}), null, `${g.key} places an empty hour nowhere`);
+    // The all-hours group is not a condition and marks itself so: it places
+    // EVERY hour, including an empty one, because it is the base rate the
+    // conditional cuts are read against. Every other group must still refuse
+    // an empty hour — that refusal is the whole point of this test.
+    if (g.everyHour) {
+      assert.equal(g.bucketOf({}), 'all', `${g.key} places every hour, by design`);
+    } else {
+      assert.equal(g.bucketOf({}), null, `${g.key} places an empty hour nowhere`);
+    }
     for (const b of g.buckets) assert.ok(b.key && b.label, `${g.key}.${b.key} is labelled`);
   }
+  // Exactly one group may claim that exemption, so a future condition group
+  // cannot quietly opt out of the guard above by setting a flag.
+  assert.equal(GROUPS.filter(g => g.everyHour).length, 1,
+    'only the base-rate group is exempt from the empty-hour guard');
+  // And the exempt group must stay out of what tonight's forecast falls into,
+  // or the "all hours" rate would be double-counted as a condition.
+  assert.equal(bucketsForConditions({ precip_in: 0.05 }).any, undefined,
+    'the base-rate group is never a condition tonight matches');
 });
 
 test('the bucket boundaries are the ones the planner already uses', () => {

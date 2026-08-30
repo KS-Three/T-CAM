@@ -78,34 +78,45 @@ const SCALE = (() => {
 export const CEILING = 64;
 
 /**
+ * How far below the "fair" threshold the bottom band is spread.
+ *
+ * The planner's lowest threshold is the sentinel -999, which means "everything
+ * else" and is not a score anybody sees. Interpolating across it would squeeze
+ * every poor evening into the top hair of the poor band — a score of 0 and a
+ * score of -20 would both read 24.9%. Twenty points is roughly the width of the
+ * bands above, so the bottom of the scale behaves like the rest of it.
+ */
+export const POOR_SPAN = 20;
+
+/**
  * The planner's additive score as 0–100.
  *
- * Strictly increasing, so it never reorders two evenings the planner ranked —
- * a percentage that disagreed with the list it sits in would be worse than no
- * percentage. Below the "fair" threshold it tapers to zero rather than clamping
- * there, because a genuinely awful evening and a merely poor one are different
- * and the ranking already knows it.
+ * Monotonic, so it can never reorder two evenings the planner ranked — a
+ * percentage disagreeing with the list it sits in would be worse than no
+ * percentage at all. It is a remapping of the published PRIME/strong/good/fair
+ * scale and nothing more: 78% here means "a strong evening", not "78% of
+ * anything happening".
  */
 export function conditionsPct(score) {
   if (!Number.isFinite(score)) return null;
-  const bands = SCALE;
-  const top = bands[bands.length - 1];
   if (score >= CEILING) return 100;
+
+  // Every band except the sentinel at the bottom, lowest first.
+  const real = SCALE.filter(b => b.score > -900);
+  const top = real[real.length - 1];
   if (score >= top.score) {
     return round1(top.from + (top.to - top.from) * (score - top.score) / (CEILING - top.score));
   }
-  for (let i = bands.length - 2; i >= 0; i--) {
-    const b = bands[i], next = bands[i + 1];
+  for (let i = real.length - 2; i >= 0; i--) {
+    const b = real[i], next = real[i + 1];
     if (score >= b.score) {
       return round1(b.from + (b.to - b.from) * (score - b.score) / (next.score - b.score));
     }
   }
-  // Below the bottom threshold: taper over the same width as the band above it,
-  // and floor at zero. A score of -20 is not "as bad as" a score of 0.
-  const bottom = bands[0];
-  const width = bands[1].score - bottom.score;
-  return round1(Math.max(0, bottom.to * (1 + (score - bottom.score) / width) * (bottom.from || 1) / (bottom.from || 1) * 0
-    + Math.max(0, bottom.from + (score - bottom.score) / width * bottom.to)));
+  const lowest = real[0];               // "fair" — the bottom real threshold
+  const poor = SCALE[0];                // the 0–25 band under it
+  return round1(Math.max(0,
+    poor.to * (score - (lowest.score - POOR_SPAN)) / POOR_SPAN));
 }
 
 const round1 = n => Math.round(n * 10) / 10;

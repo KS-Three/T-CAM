@@ -84,6 +84,37 @@ test('the served page is given proxy templates and never an upstream URL', () =>
   assert.equal(direct.base.satellite.kind, 'zyx', 'keeping its real coordinate order');
 });
 
+test('the LiDAR layer asks USGS for the stretch rendering, defined once', () => {
+  // Gray-Stretch is the load-bearing choice: the service's fixed hillshades
+  // are scaled for real hills and draw the flat home ground near-solid white
+  // (measured — see tile-sources.mjs). The stretch normalises each window to
+  // its own relief, so a two-foot draw reads. Losing the rule, or the two
+  // copies of it drifting apart, would be invisible in any structural sense
+  // except this one.
+  const url = expandTile(sourceByKey('lidar'), 15, 8132, 11764);
+  assert.match(url, /^https:\/\/elevation\.nationalmap\.gov/);
+  assert.match(url, /bboxSR=3857/, 'metres, to line up with the slippy tiles');
+  assert.ok(url.includes('Hillshade%20Gray-Stretch'), 'the adaptive rendering');
+  assert.ok(!url.includes('{bbox3857}'), 'the placeholder is replaced');
+  assert.equal(BASE_SOURCES.lidar.maxZoom, 17, '1 m data has nothing new past z17');
+  assert.ok(BASE_SOURCES.lidar.bulkAllowed, 'a federal service; Save offline may prefetch');
+  assert.equal(sourceByKey('lidarshade').template, BASE_SOURCES.lidar.template,
+    'the overlay is the SAME rendering, referenced not repeated');
+});
+
+test('an overlay says how it sits on the imagery, and the page obeys', async () => {
+  const d = sourceDescriptors({ proxied: true });
+  assert.equal(d.overlays.lidarshade.blend, 'overlay',
+    'overlay, not multiply — multiply dimmed dark canopy into mud (measured in screenshots)');
+  assert.equal(d.overlays.lidarshade.opacity, 0.8);
+  assert.equal(d.overlays.vpa.blend, null, 'the DNR washes keep their flat look');
+  const { mapScript } = await import('../map-view.mjs');
+  assert.match(mapScript, /ov\.style\.opacity = String\(def\.opacity \?\? 0\.55\)/,
+    'per-overlay opacity, defaulting to the old wash');
+  assert.match(mapScript, /if \(def\.blend\) ov\.style\.mixBlendMode = def\.blend/,
+    'and the blend is applied when a source declares one');
+});
+
 test('every proxy template names a source the server can resolve', () => {
   // Drift guard: a template pointing at a key sourceByKey does not know would
   // 400 on every tile, and the map would simply be blank.

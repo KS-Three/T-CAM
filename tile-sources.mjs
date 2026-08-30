@@ -79,6 +79,31 @@ export const BASE_SOURCES = {
     credit: 'Topo © <a href="https://www.usgs.gov/">USGS</a> The National Map',
     bulkAllowed: true,
   },
+  // The bare-earth LiDAR hillshade, as a basemap you can pan anywhere — the
+  // layer onX and Spartan Forge sell, from the same free USGS 3DEP the
+  // Terrain button already reads. Rendered per request by USGS's image
+  // service, so tiles arrive slower than a pre-cut cache (a second or a few
+  // each, first time) and are then held by the tile cache like everything
+  // else.
+  //
+  // Gray-Stretch, deliberately, out of the service's fixed menu of
+  // renderings (it refuses custom parameters — measured: a hand-built
+  // rasterFunction returns a 200-byte error stub). The plain hillshades are
+  // scaled for real hills, and on ground as flat as the home property they
+  // draw near-solid white — the exact trap the Terrain layer's adaptive
+  // exaggeration exists to avoid. The stretch normalises each rendered
+  // window to the relief actually in it, so a two-foot draw on flat sand and
+  // a two-hundred-foot bluff both read. The honest cost: grey levels are
+  // RELATIVE to each window, so compare shapes within a view, not brightness
+  // across views.
+  lidar: {
+    key: 'lidar', label: 'LiDAR', alt: 'Satellite', maxZoom: 17, kind: 'export',
+    template: 'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/'
+      + 'exportImage?bbox={bbox3857}&bboxSR=3857&imageSR=3857&size=256,256&format=jpgpng'
+      + '&renderingRule=%7B%22rasterFunction%22%3A%22Hillshade%20Gray-Stretch%22%7D&f=image',
+    credit: 'LiDAR hillshade © <a href="https://www.usgs.gov/3d-elevation-program">USGS 3DEP</a>',
+    bulkAllowed: true,
+  },
 };
 
 /**
@@ -114,6 +139,28 @@ export const OVERLAY_SOURCES = {
     credit: 'Deer zones © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
     bulkAllowed: true,
   },
+  // The LiDAR hillshade again, but OVER the imagery instead of instead of it,
+  // so the ground's structure and the cover on it read together — the draw
+  // through the standing corn, not the draw or the corn.
+  //
+  // 'overlay' blend, chosen by looking, not by convention. The terrain
+  // canvas multiplies, and multiply was tried first here: over dark November
+  // canopy a mid-grey stretch hillshade multiplied in just dims the whole
+  // picture and the ditches vanish (screenshots in the PR). Overlay pushes
+  // shadows down AND lights up, so structure survives on dark ground.
+  // Same rendering and the same relative-greys caveat as the base layer.
+  lidarshade: {
+    key: 'lidarshade', label: 'LiDAR shade', kind: 'export', maxZoom: 19,
+    // The base layer's URL, referenced rather than repeated: two copies of a
+    // rendering rule is how the layer and the overlay quietly stop showing
+    // the same ground.
+    template: BASE_SOURCES.lidar.template,
+    note: 'Bare-earth LiDAR hillshade over the imagery. Shading is stretched '
+      + 'to each area’s own relief, so compare shapes, not brightness.',
+    credit: 'LiDAR hillshade © <a href="https://www.usgs.gov/3d-elevation-program">USGS 3DEP</a>',
+    bulkAllowed: true,
+    blend: 'overlay', opacity: 0.8,
+  },
 };
 
 export const ALL_SOURCES = { ...BASE_SOURCES, ...OVERLAY_SOURCES };
@@ -145,6 +192,10 @@ export function sourceDescriptors({ proxied }) {
     credit: src.credit, note: src.note ?? null,
     kind: proxied ? 'xyz' : src.kind,
     template: proxied ? `/tiles/${src.key}/{z}/{x}/{y}` : src.template,
+    // How an overlay sits on the imagery. Most are flat translucent pngs;
+    // the LiDAR shade declares a blend so structure survives on dark ground.
+    blend: src.blend ?? null,
+    opacity: src.opacity ?? null,
   });
   return {
     base: Object.fromEntries(Object.entries(BASE_SOURCES).map(([k, v]) => [k, {

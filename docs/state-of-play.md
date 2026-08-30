@@ -86,6 +86,7 @@ Rules for anything added from here:
 | **Routes editable at last** — every route wears a chip; rename, re-stand, redraw the line, delete | Driven with a real mouse: renamed through the form, deleted through its confirm; redraw keeps the route's identity (API + structural tests); the server had PATCH/DELETE all along — the map just never offered them |
 | **Suggested walk-in** — from an Access marker (or a click saying where the truck is) to a stand, bent around every wedge of ground the wind would carry scent across, arriving from downwind | Judged by `routes.mjs` independently of the code that planned it, on the plan's own wind and all 16; the first browser screenshot caught a 3-corner "clean" path sweeping through the beds — paths are now densified so the judged points ARE the walked line, and the driven rerun swung visibly wide and saved as an ordinary route |
 | **Wind recognition** — each frame fingerprinted in the browser (256-bit dHash, canvas); a visit matching the frames YOU reviewed as empty gets "Looks like wind" with the measured match; previews caption confirmed tags, the camera's claims, and the wind match | Driven end to end on real generated images: the empty burst hashed itself on arrival, N built the baseline, the animal-blob frame was refused wind talk (after the drive caught 9×8 hashing calling it a 97% match — the hash was rebuilt at 17×16), the empty-like visit was called at 100%, and the lightbox captions carried all three kinds of knowing |
+| **LiDAR basemap + shade overlay** — the browsable bare-earth hillshade (USGS 3DEP Gray-Stretch, rendered on demand, cached and offline-saveable like every tile); "LiDAR shade" lays the same rendering over the imagery with an overlay blend | Probed live first: the service refuses custom exaggeration (200-byte error stubs) and its fixed hillshades paint the flat home ground solid white, so Gray-Stretch — which normalises each window to its own relief — is the load-bearing choice, pinned by test; then driven in a real browser against live USGS through the real proxy at z16 and z17 (ditches, knobs and an old road legible on 12-ft-relief ground), the blend chosen from four screenshotted candidates (multiply dimmed dark canopy to mud; overlay kept structure), 117 tiles landing in the offline cache on the way |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -160,7 +161,7 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 | --- | --- | --- |
 | Land ownership | onX: 161.5M parcels nationwide | **Yes, Wisconsin only, free — boundaries drawn** |
 | Trail-camera integration | onX: Elite tier only | **Native** |
-| LiDAR terrain | Both, prominently | **Yes — free USGS 3DEP, 1 m at the camera** |
+| LiDAR terrain | Both, prominently | **Yes — free USGS 3DEP, 1 m at the camera; since 2026-08-29 also a browsable LiDAR basemap and an over-imagery shade, like theirs** |
 | Terrain feature ID (saddles, benches, funnels) | Spartan Forge | **Yes, with absolute thresholds — it reports "none here" on flat ground** |
 | Thermals | Spartan Forge charges for it | **Yes where there is slope; says so plainly where there is not** |
 | Scouting waypoints | Both, core | **Yes, and dated — sign ages and fades** |

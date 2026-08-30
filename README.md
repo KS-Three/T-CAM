@@ -666,6 +666,7 @@ remembered per browser.
 | **Hybrid** | Esri imagery + place/boundary labels | 19 |
 | **Map** | OpenStreetMap | 19 |
 | **Terrain** | USGS Topo | 17 |
+| **LiDAR** | USGS 3DEP bare-earth hillshade, rendered on demand | 17 |
 
 Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
 staring at blank tiles past its coverage.
@@ -679,6 +680,29 @@ are pointing at instead of sliding away from it. On a phone, **pinch** zooms
 usually how it got lost in the first place), and **double-tap** steps in one.
 When the view is lost anyway, the **⌂ button** under the zoom controls is one
 press back to your ground.
+
+### LiDAR
+
+The **LiDAR** layer is the bare-earth hillshade the paid apps sell, from the
+same free USGS 3DEP the Terrain button already reads — but browsable: pan
+anywhere and the ground texture is simply there, no button to press. On it a
+two-foot ditch, an old logging road, a knob a deer beds behind all read at a
+glance, under canopy the satellite cannot see through. **LiDAR shade** in the
+overlays list is the same rendering laid over the imagery instead of replacing
+it, so the draw and the standing corn read together.
+
+Three honest notes. The shading is **stretched to each rendered window's own
+relief** — that is why flat sand country shows its two-foot draws at all
+(a fixed hillshade paints it solid white; measured) — so grey levels are
+relative: compare shapes within a view, not brightness across views, and
+expect a faint tone step at the odd tile edge. Tiles are **rendered on
+demand by USGS**, so the first look at new ground takes seconds; every tile
+is then cached like the rest, offline included. And it needs 3DEP coverage,
+which most of the country has and not every corner does.
+
+This layer is for *scanning* ground by eye. The **Terrain** button is still
+the analysis: it fetches the actual elevations and finds the draws, ridges,
+saddles and benches, names them, and feeds the stand suggester and 3D view.
 
 Google's own tiles are deliberately **not** used — serving them outside the
 Google Maps API breaches their terms. Esri's imagery is free for this with

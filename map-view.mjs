@@ -824,13 +824,19 @@ function draw() {
         ov.style.pointerEvents = 'none';
         place(ov);
       }
-      // DNR regulatory overlays, each a transparent PNG in its own pass.
+      // Overlays, each a translucent image in its own pass. Opacity and blend
+      // come from the source description: the DNR layers are flat washes, the
+      // LiDAR shade blends with 'overlay' so the ground's structure survives
+      // on dark canopy (multiply was tried and just dimmed it — see
+      // tile-sources.mjs for the reasoning and the PR for the screenshots).
       for (const key of overlayOn) {
-        const dnr = new Image();
-        dnr.src = overlayUrl(key, zoom, wx, ty);
-        dnr.style.pointerEvents = 'none';
-        dnr.style.opacity = '0.55';
-        place(dnr);
+        const def = OVERLAYS[key];
+        const ov = new Image();
+        ov.src = overlayUrl(key, zoom, wx, ty);
+        ov.style.pointerEvents = 'none';
+        ov.style.opacity = String(def.opacity ?? 0.55);
+        if (def.blend) ov.style.mixBlendMode = def.blend;
+        place(ov);
       }
     }
   }
@@ -3823,8 +3829,9 @@ function paintControl() {
   }
 
   // Overlays are checkboxes rather than a choice: they stack on any base map,
-  // and several can be on at once.
-  const sep = el('div', 'ovsep', 'Overlays \u2014 Wisconsin DNR');
+  // and several can be on at once. The label stopped naming the DNR when the
+  // LiDAR shade joined them; each row's tooltip says where it comes from.
+  const sep = el('div', 'ovsep', 'Overlays');
   menuEl.appendChild(sep);
   for (const [key, def] of Object.entries(OVERLAYS)) {
     const b = document.createElement('button');

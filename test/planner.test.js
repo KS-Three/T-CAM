@@ -23,24 +23,44 @@ test('rut calendar covers every day of the year exactly once', () => {
 });
 
 test('rut phases land on the right dates for this latitude', () => {
-  assert.match(rutPhase(on(10, 10)).phase, /October lull/);
-  assert.match(rutPhase(on(10, 25)).phase, /Pre-rut/);
-  assert.match(rutPhase(on(11, 5)).phase, /Seeking/);
-  assert.match(rutPhase(on(11, 12)).phase, /Chasing|peak/i);
+  assert.match(rutPhase(on(10, 10)).phase, /October transition/);
+  assert.match(rutPhase(on(10, 20)).phase, /Pre-rut/);
+  // Moved 2026-08-30. Hunsaker et al. 2025 collared 188 males in southwest
+  // Wisconsin and ran changepoint analysis three ways — movement rate, range
+  // size, conception date — and all three put the peak rut starting 23-27
+  // October. The old calendar called this "pre-rut" and scored it a full tier
+  // below the first week of November. See docs/deer-evidence.md section 1.
+  assert.match(rutPhase(on(10, 25)).phase, /Peak rut/);
+  assert.match(rutPhase(on(11, 5)).phase, /best week/);
+  assert.match(rutPhase(on(11, 12)).phase, /Peak rut/i);
   assert.match(rutPhase(on(11, 20)).phase, /Post-peak/);
   assert.match(rutPhase(on(12, 15)).phase, /Second rut/);
   assert.match(rutPhase(on(7, 4)).phase, /Off season/);
 });
 
-test('the rut peaks in early-to-mid November, above every other date', () => {
+test('the rut peaks in the measured week, above every other date', () => {
   const nov = rutPhase(on(11, 5)).score;
-  for (const [m, d] of [[9, 15], [10, 10], [10, 25], [12, 1], [12, 15], [1, 20], [7, 4]]) {
+  for (const [m, d] of [[9, 15], [10, 10], [10, 20], [12, 1], [12, 15], [1, 20], [7, 4]]) {
     assert.ok(nov > rutPhase(on(m, d)).score,
       `Nov 5 (${nov}) should outrank ${m}/${d} (${rutPhase(on(m, d)).score})`);
   }
-  // The October lull must score below both the season either side of it.
+  // The October transition still scores below the season either side of it —
+  // but for a stated reason that changed. It is a VISIBILITY dip, not a
+  // movement one: collar data has movement rising steadily through October.
   assert.ok(rutPhase(on(10, 10)).score < rutPhase(on(9, 15)).score);
   assert.ok(rutPhase(on(10, 10)).score < rutPhase(on(10, 25)).score);
+  assert.match(rutPhase(on(10, 10)).note, /VISIBILITY effect, not a movement one/);
+});
+
+test('the last week of October now scores inside the peak', () => {
+  // The single biggest calendar change, and the one most worth pinning: it is
+  // the difference between saving your best stand for November and being told
+  // to hunt it on the 25th of October, which is what the Wisconsin data says.
+  assert.ok(rutPhase(on(10, 25)).score >= 26,
+    'inside the measured peak rut (23 Oct - 12 Nov)');
+  assert.ok(rutPhase(on(10, 25)).score > rutPhase(on(11, 20)).score,
+    'and above the post-peak week that used to outrank it');
+  assert.equal(rutPhase(on(10, 25)).tier, 'A', 'on collar data from this latitude');
 });
 
 test('moon phase tracks the synodic cycle', () => {
@@ -71,23 +91,49 @@ const hour = (o = {}) => ({
   precip: 0, cloud: 50, ...o,
 });
 const hours = (n, o) => Array.from({ length: n }, () => hour(o));
-const RUT = { score: 24, phase: 'Seeking', note: 'test' };
+const RUT = { score: 24, phase: 'Seeking', note: 'test', tier: 'A' };
 const MOON = { illum: 0.5, name: 'first quarter', frac: 0.25 };
 const base = extra => scoreSit({
-  hours: hours(4), rut: RUT, moon: MOON, tempDropF: 0, pressureTrend: 0, ...extra,
+  hours: hours(4), rut: RUT, moon: MOON, tempDropF: 0, pressureTrend: 0,
+  window: 'PM', ...extra,
 });
 
-test('a cold front scores above a warm-up, and bigger drops score higher', () => {
+test('a cold front is scored small, and says why', () => {
+  // Reversed 2026-08-30, and this is the most important test in the file.
+  //
+  // A 20-degree drop used to score +14 — on a par with an entire rut phase,
+  // and the largest weather number in the program. The Penn State Deer-Forest
+  // Study found no difference in movement speed or distance before, during or
+  // after a front; Oklahoma collar work found temperature drops produced no
+  // movement response either. It keeps a small positive because a front does
+  // bring the cold anomaly that has support, and the reason string admits the
+  // classic claim is not backed.
   const flat = base({}).total;
-  const mild = base({ tempDropF: 6 }).total;
   const front = base({ tempDropF: 12 }).total;
   const hard = base({ tempDropF: 22 }).total;
-  const warmUp = base({ tempDropF: -15 }).total;
 
-  assert.ok(mild > flat, 'any drop beats no change');
-  assert.ok(front > mild, 'a real front beats a mild drop');
-  assert.ok(hard > front, 'a hard front scores highest');
-  assert.ok(warmUp < flat, 'a warm-up is a penalty');
+  assert.ok(front > flat, 'a front is still worth something');
+  assert.ok(hard - flat <= 4, `but small: a 22-degree drop moved the score ${hard - flat}`);
+  const reason = base({ tempDropF: 22 }).parts.find(p => /colder than yesterday/.test(p.reason));
+  assert.match(reason.reason, /no movement change|not there/,
+    'and it tells you the evidence does not support the folklore');
+});
+
+test('the rut outweighs every weather factor put together', () => {
+  // The ordering used to be a matter of taste. It is now a finding: the rut
+  // calendar is tier A and measured at this latitude, and every weather term
+  // is tier B or worse.
+  const perfect = scoreSit({
+    hours: hours(4, { wind: 8, cloud: 90 }), rut: { score: 6, phase: 'October transition', note: 'x', tier: 'B' },
+    moon: { illum: 0.02, name: 'new', frac: 0 }, tempDropF: 25, pressureTrend: 0.3,
+    window: 'PM', normalF: 60,
+  }).total;
+  const rutDay = scoreSit({
+    hours: hours(4, { wind: 20 }), rut: { score: 30, phase: 'Peak rut - best week', note: 'x', tier: 'A' },
+    moon: MOON, tempDropF: 0, pressureTrend: 0, window: 'PM',
+  }).total;
+  assert.ok(rutDay > perfect,
+    `peak rut in bad weather (${rutDay}) must beat October in perfect weather (${perfect})`);
 });
 
 test('wind is scored as a curve, not more-is-better', () => {
@@ -110,8 +156,56 @@ test('heavy rain is penalised but a drizzle is not', () => {
   assert.ok(downpour < dry, 'heavy rain is a penalty');
 });
 
-test('rising pressure beats falling pressure', () => {
-  assert.ok(base({ pressureTrend: 0.2 }).total > base({ pressureTrend: -0.2 }).total);
+test('barometric pressure is reported and scores nothing', () => {
+  // Reversed 2026-08-30. The "active band" of 30.00-30.40 inHg that this used
+  // to score +5 for traces to hunting-magazine logbook compilations, not a
+  // study, and the one collar test of it (Oklahoma, 32 deer) found nothing.
+  // A rising or falling trend has no collar support either.
+  //
+  // It is still COMPUTED and still SHOWN, because a number Kent can see
+  // contributing zero is better than one that vanished without explanation and
+  // gets proposed again next season.
+  assert.equal(base({ pressureTrend: 0.2 }).total, base({ pressureTrend: -0.2 }).total,
+    'the trend moves nothing either way');
+  const parts = base({ pressureTrend: 0.2 }).parts.filter(p => /pressure|barometer/i.test(p.reason));
+  assert.ok(parts.length, 'but it is still reported');
+  for (const p of parts) {
+    assert.equal(p.points, 0);
+    assert.equal(p.tier, 'D', 'flagged as received wisdom with no traceable study');
+  }
+});
+
+test('the moon is reported and scores nothing', () => {
+  // Penn State and Mississippi State both report NO lunar pattern in movement.
+  // This used to be +/-2 and called "deliberately small"; the honest weight is
+  // zero.
+  const dark = scoreSit({ hours: hours(4), rut: RUT, moon: { illum: 0.01, name: 'new', frac: 0 }, window: 'PM' });
+  const bright = scoreSit({ hours: hours(4), rut: RUT, moon: { illum: 0.99, name: 'full', frac: 0.5 }, window: 'PM' });
+  assert.equal(dark.total, bright.total, 'a full moon and a new moon score identically');
+  const moonPart = dark.parts.find(p => /moon/.test(p.reason));
+  assert.equal(moonPart.points, 0);
+  assert.match(moonPart.reason, /NO lunar pattern/);
+});
+
+test('wind no longer penalises the deer, only the hunter', () => {
+  // Reversed 2026-08-30, sign and all. 18+ mph used to score -9 on the belief
+  // that deer hold in cover. Deer-Forest measured the LEAST movement in dead
+  // calm and steadily more as wind rose; Webb 2010 found no clear relationship
+  // either way. What survives is entirely about scent management, and is
+  // labelled as being about the hunter rather than dressed up as behaviour.
+  const gale = scoreSit({ hours: hours(4, { wind: 25 }), rut: RUT, moon: MOON, window: 'PM' });
+  const ideal = scoreSit({ hours: hours(4, { wind: 8 }), rut: RUT, moon: MOON, window: 'PM' });
+  const calm = scoreSit({ hours: hours(4, { wind: 1 }), rut: RUT, moon: MOON, window: 'PM' });
+
+  assert.ok(ideal.total - gale.total <= 6,
+    'a gale is a mild inconvenience now, not a nine-point disaster');
+  assert.ok(calm.total < ideal.total, 'dead calm is still the worst wind to hunt');
+  for (const s of [gale, ideal, calm]) {
+    const w = s.parts.find(p => /wind \d/.test(p.reason));
+    assert.equal(w.about, 'hunter', 'wind is scored as craft, not as deer behaviour');
+  }
+  assert.match(calm.parts.find(p => /wind \d/.test(p.reason)).reason,
+    /deer move LESS in calm/, 'and it corrects the folklore out loud');
 });
 
 test('perfect weather out of season never outranks a poor day in the rut', () => {
@@ -119,11 +213,11 @@ test('perfect weather out of season never outranks a poor day in the rut', () =>
   // windy November rut sit — which is nonsense, there being no season in
   // August. This is the assertion that caught it.
   const rutBadWeather = scoreSit({
-    hours: hours(4, { wind: 20 }), rut: { score: 24, phase: 'Seeking', note: '' },
-    moon: MOON, tempDropF: 0, pressureTrend: 0,
+    hours: hours(4, { wind: 20 }), rut: { score: 24, phase: 'Seeking', note: '', tier: 'A' },
+    moon: MOON, tempDropF: 0, pressureTrend: 0, window: 'PM',
   }).total;
   const offSeasonPerfect = scoreSit({
-    hours: hours(4, { wind: 8, cloud: 80 }), rut: { score: 2, phase: 'Off season', note: '' },
+    hours: hours(4, { wind: 8, cloud: 80 }), rut: { score: 2, phase: 'Off season', note: '', tier: 'A' },
     moon: { illum: 0.02, name: 'new', frac: 0 }, tempDropF: 22, pressureTrend: 0.2,
   }).total;
 
@@ -135,7 +229,7 @@ test('perfect weather out of season never outranks a poor day in the rut', () =>
 
 test('the off-season cap is recorded as a visible reason, not applied silently', () => {
   const s = scoreSit({
-    hours: hours(4, { wind: 8, cloud: 80 }), rut: { score: 2, phase: 'Off season', note: '' },
+    hours: hours(4, { wind: 8, cloud: 80 }), rut: { score: 2, phase: 'Off season', note: '', tier: 'A' },
     moon: { illum: 0.02, name: 'new', frac: 0 }, tempDropF: 22, pressureTrend: 0.2,
   });
   assert.match(s.parts.at(-1).reason, /outside the hunting season/);
@@ -145,22 +239,49 @@ test('the off-season cap is recorded as a visible reason, not applied silently',
 
 test('in-season scores are never touched by the cap', () => {
   const s = scoreSit({
-    hours: hours(4, { wind: 8 }), rut: { score: 24, phase: 'Seeking', note: '' },
-    moon: MOON, tempDropF: 12, pressureTrend: 0.2,
+    hours: hours(4, { wind: 8 }), rut: { score: 24, phase: 'Seeking', note: '', tier: 'A' },
+    moon: MOON, tempDropF: 12, pressureTrend: 0.2, window: 'PM',
   });
   assert.equal(s.parts.reduce((t, p) => t + p.points, 0), s.total);
   assert.ok(!s.parts.some(p => /outside the hunting season/.test(p.reason)));
-  assert.ok(s.total > 40, 'a rut sit on a front should rate highly');
+  // Note what is NOT asserted any more: that weather pushes this over 40. It
+  // cannot, and that is the finding. The rut carries the score now.
+  assert.ok(s.total >= 24, 'the rut phase alone floors it');
+  assert.ok(s.total - 24 <= 8, `weather moved it by only ${s.total - 24} points`);
 });
 
-test('every scored factor carries a human-readable reason', () => {
+test('every factor carries a reason and an evidence tier', () => {
+  // The rule changed on 2026-08-30. Zero-point factors USED to be dropped;
+  // they are now deliberately kept, because a factor visibly counting for
+  // nothing is the whole mechanism by which this model argues with the folklore
+  // it replaced. What must never be missing is the reason or the tier.
   const s = base({ tempDropF: 12, pressureTrend: 0.2 });
   assert.ok(s.parts.length >= 3);
   for (const p of s.parts) {
     assert.equal(typeof p.reason, 'string');
     assert.ok(p.reason.length > 5, `reason too terse: ${p.reason}`);
-    assert.notEqual(p.points, 0, 'zero-point factors are not recorded');
+    assert.ok(['A', 'B', 'C', 'D'].includes(p.tier), `part has no evidence tier: ${p.reason}`);
+    assert.ok(['deer', 'hunter'].includes(p.about), `part does not say what it is about: ${p.reason}`);
   }
+  // And a tier-D part can never move the number.
+  for (const p of s.parts.filter(x => x.tier === 'D')) assert.equal(p.points, 0);
+});
+
+test('a score says what it rests on, not just how big it is', () => {
+  const rutDriven = scoreSit({
+    hours: hours(4), rut: { score: 30, phase: 'Peak rut - best week', note: 'x', tier: 'A' },
+    moon: MOON, window: 'PM',
+  });
+  assert.equal(rutDriven.evidence.tier, 'A');
+  assert.match(rutDriven.evidence.driver, /Peak rut/);
+
+  // The same total assembled from weather is not the same claim.
+  const weatherDriven = scoreSit({
+    hours: hours(4, { wind: 8 }), rut: { score: 6, phase: 'October transition', note: 'x', tier: 'C' },
+    moon: MOON, window: 'PM',
+  });
+  assert.ok(['B', 'C'].includes(weatherDriven.evidence.tier),
+    'a weather-carried score is weaker evidence than a rut-carried one');
 });
 
 test('compass converts bearings to the direction wind comes from', () => {

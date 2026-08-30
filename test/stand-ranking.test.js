@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { thermalAt, thermalStrength, rankStands, summarise } from '../stand-ranking.mjs';
+import { thermalAt, thermalStrength, rankStands, summarise, verdict } from '../stand-ranking.mjs';
+
+// A shooting lane is measured geometry, not a ticked compass point: it is a
+// place on the ground you can shoot to, and the winds fall out of the shape.
+const M_LAT = 1 / 111320, M_LNG = 1 / (111320 * Math.cos(44.1 * Math.PI / 180));
+const laneTo = (deg, m = 60, label = null) => {
+  const r = deg * Math.PI / 180;
+  return { to: [-90.6 + Math.sin(r) * m * M_LNG, 44.1 + Math.cos(r) * m * M_LAT], label };
+};
 
 const stand = (name, winds, extra = {}) => ({
   id: extra.id ?? 1, name, type: 'stand', lat: 44.1, lng: -90.6,
@@ -133,14 +141,61 @@ test('camera coverage is reported honestly while no photos exist', () => {
   assert.match(r.why, /no photos have been synced/);
 });
 
-test('detections count once they exist', () => {
+test('your own photographs count once there are enough matched hours', () => {
+  // Replaced 2026-08-30. This used to be a raw 30-day detection count, which is
+  // a fact about how long a camera was out rather than about the ground. It is
+  // now a RATE per hundred matched camera-hours, produced by evidence.mjs, and
+  // the stand is credited in proportion to the best camera on the property.
+  const evidence = {
+    condition: 'dusk on a NW wind',
+    minHours: 10,
+    rows: [
+      { cameraId: 'c1', name: 'Creek Bottom', hours: 120, detections: 9, per100: 7.5, enough: true, nocturnalShare: 40 },
+      { cameraId: 'c2', name: 'Far Corner', hours: 130, detections: 1, per100: 0.8, enough: true, nocturnalShare: 50 },
+    ],
+  };
   const ranked = rankStands({
-    sit: sitNW,
-    stands: [stand('Hot', ['NW'], {
-      nearbyCameras: [{ name: 'Creek Bottom', metres: 80, recentDetections: 6 }],
-    })],
+    sit: sitNW, evidence,
+    stands: [
+      stand('Hot', ['NW'], { id: 1, nearbyCameras: [{ id: 'c1', name: 'Creek Bottom', metres: 80 }] }),
+      stand('Cold', ['NW'], { id: 2, nearbyCameras: [{ id: 'c2', name: 'Far Corner', metres: 90 }] }),
+    ],
   });
-  assert.ok(ranked[0].reasons.some(r => r.points > 0 && /6 recent detections/.test(r.why)));
+  assert.equal(ranked[0].name, 'Hot', 'the productive camera wins on an equal wind');
+  assert.ok(ranked[0].reasons.some(r => r.points > 0 && /7\.5 per 100/.test(r.why)),
+    'and the rate is shown, with its denominator');
+  assert.ok(ranked[0].reasons.some(r => /120 camera-hours/.test(r.why)));
+  assert.ok(ranked[1].total < ranked[0].total);
+});
+
+test('a camera with too few matched hours is refused, not guessed at', () => {
+  const evidence = {
+    condition: 'dusk on a NW wind',
+    minHours: 10,
+    rows: [{ cameraId: 'c1', name: 'Creek Bottom', hours: 4, detections: 3, per100: null, enough: false, nocturnalShare: 33 }],
+  };
+  const ranked = rankStands({
+    sit: sitNW, evidence,
+    stands: [stand('Thin', ['NW'], { id: 1, nearbyCameras: [{ id: 'c1', name: 'Creek Bottom', metres: 80 }] })],
+  });
+  const r = ranked[0].reasons.find(x => /matched camera-hours/.test(x.why));
+  assert.ok(r, 'it says the data is too thin');
+  assert.equal(r.points, 0, 'and three deer in four hours buys nothing');
+  assert.equal(ranked[0].total, 30, 'the stand is still ranked on wind alone');
+});
+
+test('a mostly-nocturnal camera says so on the stand it recommends', () => {
+  const evidence = {
+    condition: 'dusk on a NW wind',
+    minHours: 10,
+    rows: [{ cameraId: 'c1', name: 'Night Owl', hours: 200, detections: 20, per100: 10, enough: true, nocturnalShare: 91 }],
+  };
+  const ranked = rankStands({
+    sit: sitNW, evidence,
+    stands: [stand('Busy', ['NW'], { id: 1, nearbyCameras: [{ id: 'c1', name: 'Night Owl', metres: 80 }] })],
+  });
+  assert.ok(ranked[0].reasons.some(r => /91% of everything it sees is after dark/.test(r.why)),
+    'the rate alone would recommend a stand you will never see a deer from');
 });
 
 test('no wind forecast is not treated as a passing wind', () => {
@@ -179,4 +234,67 @@ test('the summary names the pick, and flags a fighting thermal', () => {
 test('the summary admits when thermals were not considered at all', () => {
   const ranked = rankStands({ sit: sitNW, stands: [stand('A', ['NW'])] });
   assert.match(summarise(ranked, { hasTerrain: false }), /Load Terrain/);
+});
+
+// ---------------------------------------------------------------------------
+// Confidence — how much to believe the order, which is NOT how high it scored
+// ---------------------------------------------------------------------------
+
+test('a stand with no recorded winds has no confidence at all', () => {
+  const ranked = rankStands({ sit: sitNW, stands: [stand('Untold', [])] });
+  assert.equal(ranked[0].confidence.tier, 'none');
+  assert.match(ranked[0].confidence.why, /neither shooting lanes nor recorded winds/);
+});
+
+test('a high score on no evidence is low confidence, and says so', () => {
+  // The failure this exists to prevent: a stand tops the list on a perfect wind
+  // and nothing else, and the number looks like the output of a model.
+  const ranked = rankStands({ sit: sitNW, stands: [stand('Lucky', ['NW'])] });
+  assert.equal(ranked[0].total, 30, 'it scores well');
+  assert.ok(['low', 'moderate'].includes(ranked[0].confidence.tier),
+    'but a good wind alone is not a confident recommendation');
+  assert.ok(ranked[0].confidence.factors.some(f => /none of your own photographs/.test(f)));
+  assert.ok(ranked[0].confidence.factors.some(f => /no sits logged/.test(f)));
+});
+
+test('confidence rises as the things it is made of arrive', () => {
+  const evidence = {
+    condition: 'dusk on a NW wind', minHours: 10,
+    rows: [{ cameraId: 'c1', name: 'Creek', hours: 300, detections: 20, per100: 6.7, enough: true, nocturnalShare: 30 }],
+  };
+  const bare = rankStands({ sit: sitNW, stands: [stand('S', ['NW'], { id: 1 })] })[0];
+  const full = rankStands({
+    sit: sitNW, evidence,
+    stands: [stand('S', ['NW'], { id: 1, lanes: [laneTo(135, 60, 'the crossing')],
+      nearbyCameras: [{ id: 'c1', name: 'Creek', metres: 60 }] })],
+    sits: [{ stand_id: 1, ended_at: '2026-10-01T18:00:00Z' }],
+    now: Date.parse('2026-11-07T12:00:00Z'),
+  })[0];
+  assert.ok(full.confidence.score > bare.confidence.score,
+    `lanes + photos + logged sits should beat nothing (${full.confidence.score} vs ${bare.confidence.score})`);
+  assert.ok(full.confidence.factors.some(f => /lanes you traced/.test(f)));
+  assert.ok(full.confidence.factors.some(f => /camera-hours of your own/.test(f)));
+});
+
+test('two stands a point apart are called level rather than ranked', () => {
+  const ranked = rankStands({
+    sit: sitNW,
+    stands: [stand('A', ['NW'], { id: 1 }), stand('B', ['NW'], { id: 2 })],
+  });
+  assert.equal(ranked[0].total, ranked[1].total, 'a genuine tie');
+  assert.ok(ranked[0].confidence.factors.some(f => /treat these two as level/.test(f)));
+});
+
+test('the verdict answers where, why and how much to believe it, in one place', () => {
+  const ranked = rankStands({
+    sit: { ...sitNW, date: '2026-11-07' },
+    stands: [stand('Creek', ['NW'], { id: 1 }), stand('Wrong', ['S'], { id: 2 })],
+  });
+  const v = verdict(ranked, { sit: { ...sitNW, date: '2026-11-07' } });
+  assert.equal(v.stand, 'Creek');
+  assert.ok(v.why.length, 'the reasons that moved the number');
+  assert.ok(v.why.every(r => r.points !== 0), 'and only those');
+  assert.ok(v.confidence, 'with a confidence beside it');
+  assert.ok(v.todo.some(t => /trace|log|draw|mark/i.test(t.why)),
+    'and what to do to make the answer better');
 });

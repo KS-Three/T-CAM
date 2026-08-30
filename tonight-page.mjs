@@ -86,6 +86,15 @@ const dur = (mins) => {
 };
 
 const RATING_CLASS = { prime: 'ok', good: 'ok', fair: 'warn', poor: 'bad' };
+// How much to believe the pick, which is a different question from how good
+// the evening is. A prime evening at a stand nothing is known about is a
+// confident WHEN and a guessed WHERE, and the page has to be able to say that.
+const CONF_CLASS = { high: 'ok', moderate: 'warn', low: 'bad', none: 'bad' };
+// Evidence tiers, spelled out. A letter on its own is a code nobody can read.
+const TIER_WORD = {
+  A: 'collar data at this latitude', B: 'peer-reviewed, southern or direction-only',
+  C: 'extension summary of collar work', D: 'no traceable study — scores nothing',
+};
 
 let DATA = null;
 let clockTimer = null;
@@ -161,6 +170,7 @@ function render() {
 
   const sit = sits[0];
   parts.push(verdictCard(sit));
+  parts.push(whyCard(sit));
   parts.push(lightCard(sit));
   const walk = walkCard(sit);
   if (walk) parts.push(walk);
@@ -209,6 +219,16 @@ function verdictCard(sit) {
   const line = el('div', 'why');
   const rating = el('span', 'pill ' + (RATING_CLASS[sit.rating] || 'muted'), sit.rating || '?');
   line.appendChild(rating);
+  // The confidence sits next to the rating deliberately. Given further down it
+  // reads as a disclaimer nobody scrolls to; given here it is part of the
+  // answer, and a 'low' beside a 'PRIME' is exactly the pairing that stops a
+  // good-looking number being believed more than it has earned.
+  const conf = pick.confidence;
+  if (conf) {
+    line.appendChild(document.createTextNode(' '));
+    line.appendChild(el('span', 'pill ' + (CONF_CLASS[conf.tier] || 'muted'),
+      conf.tier + ' confidence'));
+  }
   line.appendChild(document.createTextNode(' '));
   // The wind reason is the one that decided it, so it is the one shown.
   const windReason = (pick.reasons || []).find(r => /wind is/.test(r.why));
@@ -238,6 +258,100 @@ function verdictCard(sit) {
     t.appendChild(el('span', 'pill warn', 'thermal'));
     t.appendChild(document.createTextNode(' ' + thermal.why));
     c.appendChild(t);
+  }
+  return c;
+}
+
+/**
+ * Why — the reasons behind both halves of the answer, with what each rests on.
+ *
+ * The program has always HAD these reasons; it printed them to a console
+ * nobody reads and showed one of them on the page. Putting them here is the
+ * point of the whole exercise: a recommendation you can argue with beats one
+ * you have to trust, and the evidence tier is what makes arguing possible.
+ */
+function whyCard(sit) {
+  const c = card('Why');
+  const pick = sit.pick;
+
+  const list = (title, rows, opts) => {
+    if (!rows || !rows.length) return;
+    c.appendChild(el('div', 'sub', title));
+    const ul = el('div', 'reasons');
+    rows.forEach(function (r) {
+      const row = el('div', 'reason');
+      const pts = r.points > 0 ? '+' + r.points : String(r.points);
+      row.appendChild(el('span', 'pts ' + (r.points > 0 ? 'ok' : r.points < 0 ? 'bad' : 'muted'), pts));
+      row.appendChild(document.createTextNode(' ' + (r.why || r.reason || '')));
+      // The tier is the honest part. A factor scoring zero because nothing
+      // supports it is worth more on screen than one quietly left out.
+      if (r.tier) {
+        const t = el('span', 'tier', ' [' + r.tier + ']');
+        t.title = TIER_WORD[r.tier] || '';
+        row.appendChild(t);
+      }
+      ul.appendChild(row);
+    });
+    c.appendChild(ul);
+  };
+
+  // WHEN: why this evening rates what it does.
+  const when = (sit.reasons || []).filter(function (r) { return r.points !== 0; })
+    .sort(function (a, b) { return Math.abs(b.points) - Math.abs(a.points); }).slice(0, 4);
+  list('This evening', when);
+  if (sit.whenEvidence && sit.whenEvidence.tier) {
+    c.appendChild(el('div', 'note', 'The rating rests mostly on ' + sit.whenEvidence.note + '.'));
+  }
+  if (sit.advice) c.appendChild(el('div', 'note', sit.advice));
+
+  // WHERE: why this stand.
+  if (pick) {
+    const where = (pick.reasons || []).filter(function (r) { return r.points !== 0; })
+      .sort(function (a, b) { return Math.abs(b.points) - Math.abs(a.points); }).slice(0, 5);
+    list(pick.name, where);
+  }
+
+  // What your own cameras contributed, and what they could not.
+  if (sit.evidence) {
+    if (sit.evidence.note) {
+      c.appendChild(el('div', 'note', sit.evidence.note));
+    } else if (sit.evidence.condition) {
+      const rows = (sit.evidence.rows || []).filter(function (r) { return r.enough; });
+      if (rows.length) {
+        c.appendChild(el('div', 'sub', 'Your cameras, on ' + sit.evidence.condition));
+        const ul = el('div', 'reasons');
+        rows.forEach(function (r) {
+          const row = el('div', 'reason');
+          row.appendChild(el('span', 'pts muted', r.per100 === null ? '—' : r.per100.toFixed(1)));
+          row.appendChild(document.createTextNode(
+            ' ' + r.name + ' — ' + r.detections + ' deer in ' + r.hours + ' camera-hours'
+            + (r.nocturnalShare === null ? '' : ', ' + r.nocturnalShare + '% after dark')));
+          ul.appendChild(row);
+        });
+        c.appendChild(ul);
+        c.appendChild(el('div', 'note',
+          'Per 100 camera-hours. Cameras are compared against each other in the '
+          + 'same weather, so the date, the rut and the moon are held constant.'));
+      }
+    }
+  }
+
+  // And the things that would make the answer better, which are the only rows
+  // worth showing that scored nothing.
+  const todo = pick ? (pick.reasons || []).filter(function (r) {
+    return r.points === 0 && /trace|log|draw|mark/i.test(r.why || '');
+  }) : [];
+  if (todo.length) {
+    c.appendChild(el('div', 'sub', 'To make this answer firmer'));
+    const ul = el('div', 'reasons');
+    todo.forEach(function (r) {
+      ul.appendChild(el('div', 'reason todo', r.why));
+    });
+    c.appendChild(ul);
+  }
+  if (pick && pick.confidence && pick.confidence.factors && pick.confidence.factors.length) {
+    c.appendChild(el('div', 'note',
+      'Confidence ' + pick.confidence.tier + ': ' + pick.confidence.factors.join('; ') + '.'));
   }
   return c;
 }
@@ -749,6 +863,16 @@ export function tonightHtml({ title = 'Tonight' } = {}) {
           border: 1px solid currentColor; }
   .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); }
   .pill.bad { color: var(--bad); } .pill.muted { color: var(--muted); }
+  .sub { font-weight: 600; margin: 12px 0 4px; font-size: 0.95rem; }
+  .reasons { display: flex; flex-direction: column; gap: 5px; }
+  .reason { display: flex; gap: 8px; align-items: baseline; font-size: 0.92rem;
+    line-height: 1.35; }
+  .reason.todo { color: var(--muted); font-style: italic; }
+  .pts { flex: 0 0 auto; min-width: 2.6em; text-align: right;
+    font-variant-numeric: tabular-nums; font-weight: 600; }
+  .pts.ok { color: var(--ok); } .pts.bad { color: var(--bad); }
+  .pts.muted { color: var(--muted); }
+  .tier { color: var(--muted); font-size: 0.85em; }
 
   .rows { display: flex; flex-direction: column; gap: 8px; }
   .row { display: flex; gap: 12px; align-items: baseline; }

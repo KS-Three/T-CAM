@@ -28,6 +28,44 @@ test('location comes out as [longitude, latitude], not transposed', () => {
   assert.equal(r.gpsFix, '2025-11-28T15:00:42.000Z');
 });
 
+test('a moved camera reports its NEWEST fix, whatever order they arrive in', () => {
+  // The bug this pins, reported from the field 2026-08-30: one camera's
+  // position "did not update". status.coordinates is an ARRAY of fixes, and
+  // the code took [0] — a guess about ordering that held only because every
+  // fixture and every camera so far carried exactly one. Move a camera and it
+  // carries several; with the old fix first, the pin stays on ground the
+  // camera has left while its battery, signal and photos all update around
+  // it. Nothing is malformed, so nothing complains.
+  const moved = { ...FLEX_M, status: { ...FLEX_M.status, coordinates: [
+    { dateTime: '2025-11-28T15:00:42.000Z',
+      position: { type: 'Point', coordinates: [-90.654321, 44.123456] } },
+    { dateTime: '2026-08-20T11:30:00.000Z',
+      position: { type: 'Point', coordinates: [-90.640000, 44.130000] } },
+  ] } };
+  const r = cameraSummary(moved);
+  assert.equal(r.lat, 44.130000, 'the newer fix wins even though it is last');
+  assert.equal(r.lng, -90.640000);
+  assert.equal(r.gpsFix, '2026-08-20T11:30:00.000Z', 'and the date matches it');
+
+  // Order must not decide the answer: the same two fixes the other way round.
+  const flipped = cameraSummary({ ...moved,
+    status: { ...moved.status, coordinates: [...moved.status.coordinates].reverse() } });
+  assert.deepEqual([flipped.lat, flipped.lng, flipped.gpsFix],
+    [r.lat, r.lng, r.gpsFix], 'newest-wins, not first-wins or last-wins');
+
+  // An undated fix loses to a dated one but is never dropped: one undated
+  // entry is still the only answer there is.
+  const undated = cameraSummary({ ...FLEX_M, status: { ...FLEX_M.status,
+    coordinates: [{ position: { type: 'Point', coordinates: [-90.66, 44.11] } }] } });
+  assert.equal(undated.lat, 44.11, 'a lone undated fix is still used');
+  const mixed = cameraSummary({ ...FLEX_M, status: { ...FLEX_M.status, coordinates: [
+    { position: { type: 'Point', coordinates: [-90.66, 44.11] } },
+    { dateTime: '2026-08-20T11:30:00.000Z',
+      position: { type: 'Point', coordinates: [-90.64, 44.13] } },
+  ] } });
+  assert.equal(mixed.lat, 44.13, 'but a dated fix beats an undated one');
+});
+
 test('signal is read from the nested object, not hunted for as a number', () => {
   // Regression: status.signal is an OBJECT, so a "first number named signal"
   // search matched nothing and every camera reported an unknown signal.

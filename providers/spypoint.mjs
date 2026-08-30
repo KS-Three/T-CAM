@@ -72,6 +72,31 @@ function findFirst(obj, keyRe, pred = () => true) {
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const first = a => (Array.isArray(a) ? a[0] : undefined);
 
+/**
+ * The newest entry of a list that carries `dateTime` stamps.
+ *
+ * status.coordinates is an ARRAY of fixes, and taking [0] was a guess about
+ * its order that held only while every camera had exactly one fix in it. Move
+ * a camera and it carries several — and if the older one sits first, the map
+ * pins that camera where it used to be while its battery, signal and photos
+ * all update around it. That reads as "the GPS did not update", which is
+ * exactly the report this fixes; nothing in the document is malformed, so
+ * nothing anywhere complains.
+ *
+ * An undated entry loses to a dated one but is never dropped: one undated fix
+ * is still the only answer there is.
+ */
+const newestBy = list => {
+  if (!Array.isArray(list) || !list.length) return undefined;
+  return list.reduce((best, x) => {
+    const t = Date.parse(x?.dateTime ?? '');
+    const bt = Date.parse(best?.dateTime ?? '');
+    if (!Number.isFinite(t)) return best;
+    if (!Number.isFinite(bt)) return x;
+    return t > bt ? x : best;
+  }, list[0]);
+};
+
 
 // Field paths below were confirmed against a real 4-camera FLEX-M account on
 // 2026-08-27 via --inspect. The generic findFirst() hunts remain as fallbacks,
@@ -85,7 +110,8 @@ const first = a => (Array.isArray(a) ? a[0] : undefined);
 // complaining, so test/extract.test.js pins the ordering. Do not "fix" this.
 function cameraSummary(cam) {
   const st = cam?.status ?? {};
-  const gps = first(st.coordinates);
+  // Newest fix, NOT coordinates[0] — see newestBy above.
+  const gps = newestBy(st.coordinates);
   const pos = gps?.position?.coordinates;
   const geo = Array.isArray(pos) && isNum(pos[0]) && isNum(pos[1]);
   const power = first(st.powerSources);

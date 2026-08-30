@@ -143,6 +143,9 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
     border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
     background: var(--panel); }
   #topbar .tonight:hover { border-color: var(--accent); }
+  /* A GPS fix well older than the camera's last contact: the pin may be on
+     ground the camera has left. Warn-coloured rather than hidden. */
+  .gpsold { color: var(--warn); }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
@@ -412,6 +415,14 @@ const el = (t, c, x) => { const n = document.createElement(t); if (c) n.classNam
   if (x !== undefined) n.textContent = x; return n; };
 const fmtDate = s => { if (!s) return 'never';
   const d = new Date(s); return isNaN(d) ? 'never' : d.toLocaleDateString(); };
+/** Whole days between two instants, or null if either is unusable. Used to
+ *  age a GPS fix against the camera's own last contact rather than against
+ *  today, so a camera silent for a month is not accused of a stale fix. */
+const daysBetween = (a, b) => {
+  const t1 = Date.parse(a || ''), t2 = Date.parse(b || '');
+  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return null;
+  return Math.floor((t2 - t1) / 86400000);
+};
 
 document.getElementById('sub').textContent =
   D.cameras.length + ' camera' + (D.cameras.length === 1 ? '' : 's') +
@@ -833,6 +844,23 @@ function cameraCard(c, { withId = true } = {}) {
     a.target = '_blank'; a.rel = 'noopener';
     a.textContent = c.lat.toFixed(6) + ', ' + c.lng.toFixed(6);
     card.appendChild(line('Location', a));
+    // WHEN that position was fixed, which is not the same as when the camera
+    // last checked in. A camera that has been moved keeps reporting battery,
+    // signal and photos from its new spot while its GPS fix stays weeks old,
+    // and the pin sits where it used to be with nothing on screen saying so —
+    // the exact way this went unnoticed. A fix much older than the last
+    // contact is called out rather than merely printed.
+    if (c.gpsFix) {
+      const fixAge = daysBetween(c.gpsFix, c.lastSeen);
+      const stale = fixAge !== null && fixAge >= 7;
+      const v = el('span', stale ? 'gpsold' : null, fmtDate(c.gpsFix)
+        + (stale ? ' — ' + fixAge + 'd before its last contact' : ''));
+      v.title = stale
+        ? 'The camera has reported since, but not a new position. If you have '
+          + 'moved it, the pin is still on the old spot.'
+        : 'When the camera last fixed its own position.';
+      card.appendChild(line('GPS fix', v));
+    }
   }
   const t = el('span', 'tag ' + c.health.level,
     c.health.level === 'ok' ? 'healthy' : c.health.notes.join(' \u00b7 '));

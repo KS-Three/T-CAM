@@ -48,7 +48,8 @@ import { dashboardHtml } from './dashboard-page.mjs';
 import { readPlan } from './spypoint-sync.mjs';
 import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
-import { rankStands, summarise } from './stand-ranking.mjs';
+import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.mjs';
+import { evidenceFor } from './evidence.mjs';
 import { suggestStands, onYourGround } from './stand-suggester.mjs';
 import { windsForStand } from './coverage.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
@@ -529,10 +530,11 @@ function standTerrainLookup(db) {
  * drift, and the two screens disagreeing about which stand to sit is exactly
  * the failure that would destroy trust in both of them.
  */
-function rankSits(db, sits) {
+function rankSits(db, sits, { now = Date.now() } = {}) {
   // Confirmed detections per camera, attached to the stands each camera
-  // covers. This is the number the ranking has been scoring as zero because no
-  // photos existed; it starts counting the moment they do.
+  // covers. Kept alongside the conditional rates below because "how busy has
+  // this camera been lately" is a different and simpler question from "what
+  // does it do on a north-west wind", and both are worth showing.
   const recent = recentDetectionCounts(db);
   const stands = allStands(db).map(st => ({
     ...st,
@@ -542,9 +544,18 @@ function rankSits(db, sits) {
   }));
   const terrainAt = standTerrainLookup(db);
   const hasTerrain = stands.some(st => terrainAt(st) !== null);
+  // Read once for the whole batch: the sits journal and the crop fields do not
+  // change between the two sits on /tonight, and the evidence pass walks a
+  // season of weather hours per camera.
+  const loggedSits = allSits(db, { limit: 500 });
+  const fields = allFields(db);
 
   const ranked = sits.map(sit => {
-    const withWalk = rankStands({ stands, sit, terrainAt }).map(r => {
+    // The conditional evidence is per SIT, because the condition it matches on
+    // is this sit's own wind and window. That is the entire point of it.
+    const evidence = evidenceFor(db, sit);
+    const withWalk = rankStands({ stands, sit, terrainAt, evidence,
+      sits: loggedSits, fields, now }).map(r => {
       const routes = routesForStand(db, r.id);
       if (!routes.length) return r;
       const stand = stands.find(s => s.id === r.id);
@@ -564,7 +575,8 @@ function rankSits(db, sits) {
     return {
       sit,
       stands: withWalk,
-      summary: summarise(withWalk, { hasTerrain }),
+      evidence,
+      summary: summarise(withWalk, { hasTerrain, evidence }),
     };
   });
 
@@ -1206,7 +1218,7 @@ export function createServer({ out = OPT.out } = {}) {
         const { sits: upcoming, stale, lastEnded } = nextSits(plan?.sits ?? [], { now, count: 2 });
         const { ranked, stands, hasTerrain } = rankSits(db, upcoming);
 
-        const sits = ranked.map(({ sit, stands: rows, summary }) => {
+        const sits = ranked.map(({ sit, stands: rows, summary, evidence }) => {
           const pick = rows.find(r => r.huntable === true) ?? rows[0] ?? null;
           const walk = pick?.walk ?? null;
           return {
@@ -1217,6 +1229,17 @@ export function createServer({ out = OPT.out } = {}) {
             hours: sit.hours, light: sit.light,
             timezone: sit.timezone ?? null,
             depart: departure(sit, walk),
+            // WHY this evening is rated what it is, and how well founded the
+            // rating is — separate questions, separately answered.
+            reasons: sit.parts ?? [], advice: sit.advice ?? null,
+            whenEvidence: sit.evidence ?? null,
+            // WHERE, and how well founded THAT is.
+            verdict: standVerdict(rows, { sit, evidence, hasTerrain }),
+            evidence: evidence
+              ? { condition: evidence.condition, note: evidence.note,
+                  minHours: evidence.minHours, rows: evidence.rows,
+                  confidence: evidence.confidence ?? null }
+              : null,
             pick, walk, stands: rows, summary,
           };
         });

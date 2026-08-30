@@ -491,37 +491,89 @@ Pulls a real forecast for each camera's coordinates and scores every morning
 and evening sit for the next N days, ranked, with the reasoning printed:
 
 ```
-  PRIME   58  Thu, Nov 5 AM (from 5:21 AM)  North Ridge
-         28°F, wind NW 9 mph, Seeking
-         +24  Seeking — bucks cruising for the first does
-         +14  temperature 21°F below yesterday — strong cold front
-         +8   pressure rising 0.19 inHg — front clearing
+  strong  37  Sat, Nov 7 PM (from 1:02 PM)  Creek Bottom
+         31°F, wind NW 9 mph, Peak rut — best week
+         evidence A — collar/fetal data at this latitude
+         +30  [A] Peak rut — best week — highest mean movement rate of the year
+         +4   [B] 7°F below the seasonal normal — cold pushes activity into the evening
+         +3   [C] wind 9 mph — steady enough to give a predictable scent cone
+         Sit all day if you can. During the peak, about 70% of rut excursions
+         happen in daylight — against about 30% in the weeks either side.
 ```
 
-### What the score is built from
+### What the score is built from — and what each part rests on
 
-Additive and deliberately transparent, in rough order of effect size:
+Every factor carries the **tier of evidence** behind it, and the tiers are the
+point. They were added after a literature pass
+([`docs/deer-evidence.md`](docs/deer-evidence.md)) found that GPS-collar studies
+flatly contradict several things this tool used to score.
 
-| Factor | Why |
+| Tier | Means |
 | --- | --- |
-| **Rut phase** | Photoperiod-driven, so the dates barely move year to year. The calendar in the source is for ~43–45°N (Wisconsin); further south it all slides later |
-| **Temperature drop** | A day-over-day fall in the high is the most reliable non-rut trigger. A warm-up scores negative |
-| **Barometric trend** | Rising behind a departing front is the classic signal; a steep fall means deer sit it out |
-| **Wind** | A curve, not more-is-better — a steady breeze is cover, dead calm pools your scent, a gale shuts movement down |
-| **Rain** | A drizzle is fine and quiets the woods; a downpour ends the sit |
-| **Cloud cover** | Low light stretches the morning window |
-| **Moon** | Included, weighted small, and labelled as such — solunar theory is genuinely contested and the effect is minor next to a front or the rut |
+| **Y** | Measured on *your* ground — traced lanes, your photographs, your logged sits |
+| **A** | Collar or fetal-aging data, peer-reviewed, at this latitude |
+| **B** | Peer-reviewed, but southern latitudes or direction-only |
+| **C** | Extension-service summary of collar work |
+| **D** | Received wisdom with no traceable study — **scores zero** |
+
+| Factor | Tier | Why |
+| --- | --- | --- |
+| **Rut phase** | A | Photoperiod-driven, so the dates barely move. Recalibrated to southwest Wisconsin: 188 collared bucks put the peak rut at **23 Oct – 12 Nov**, best week 5–11 Nov |
+| **Temperature anomaly** | B | Against the seasonal normal, and it moves *which window* is worth sitting rather than whether to go at all |
+| **Cold front** | B | Kept small and labelled contested. Collar studies find **no** movement change across a front |
+| **Wind** | B/C | Scored as *scent management*, about you rather than the deer — collar data has activity **rising** with wind, not falling |
+| **Rain** | B | Heavy rain is a real penalty; drizzle is neutral because two collar studies disagree about it |
+| **Barometric pressure** | D | Reported, **scores nothing**. The famous "active band" traces to logbook compilations |
+| **Moon** | D | Reported, **scores nothing**. Two collar datasets find no lunar pattern at all |
+
+A tier-D factor stays on the screen, visibly contributing zero, rather than
+disappearing without explanation and being proposed again next season.
 
 Out of season the weather cannot rescue a date, so those sits are capped —
 otherwise a flawless August morning outranks a windy day in the rut. The cap
 appears as a printed reason rather than being applied silently.
 
+### The other half: what your own cameras have seen
+
+The planner still answers **when**. `evidence.mjs` answers **where**, from your
+own photographs, and the two are kept apart deliberately — see decision 9 in
+[`docs/design.md`](docs/design.md).
+
+Fitting the planner to one season of sightings is hopeless: there is one rut a
+year, so rut phase, date and "that Tuesday" are perfectly confounded. But that
+objection only touches *time*. "It is blowing north-west this afternoon, which
+stand?" is a comparison **between cameras during the same weather** — every
+camera gets the same wind in the same hour of the same rut phase, so date, rut
+and moon are held constant for free, and the comparison is sound in the first
+season.
+
+So each camera gets a rate **per hundred camera-hours** under conditions
+matching the coming sit, and the denominator is real: it comes from the weather
+table, which is filled for every hour whether or not a photo exists. Conditions
+are tried from narrow to broad — *dusk on a NW wind*, then *any daylight on a NW
+wind*, then *dusk, any wind* — and the first rung with enough matched hours at
+two or more cameras is the one reported, by name, so it is obvious how narrow
+the claim is.
+
+Below ten matched camera-hours nothing is ranked at all. It says so instead.
+
+### And how much to believe it
+
+Every recommendation now carries a **confidence**, assembled from what is
+*known* rather than from what was scored: whether the winds came from lane
+geometry you traced or boxes you ticked, whether your own photographs had
+enough matched hours to count, whether your sits are logged, and whether the
+next stand down is close enough that the order is arbitrary.
+
+A high score on no evidence reads *low confidence*, and lists what would fix
+it. That pairing — `strong` beside `moderate confidence` — is the whole point.
+
 ### What it is not
 
-**It knows nothing about your deer.** It has never seen a photo. It does not
-know which buck uses which trail, where anything beds, or what happened on your
-ground last November. It ranks *when* the weather and calendar favour a sit; you
-still choose *where*, and the wind direction is printed for every sit so you can.
+**The planner still knows nothing about your deer.** It has never seen a photo.
+It ranks *when* the weather and calendar favour a sit. Where your photographs do
+enter, they enter through `evidence.mjs`, per camera, with their counts shown
+and a refusal when there are too few.
 
 Every factor is published whitetail behaviour, not a pattern learned from your
 cameras. Once photos accumulate, those sightings can be scored against these
@@ -723,7 +775,8 @@ is gated on sighting data.
 | --- | --- |
 | Camera locations, status, health | **Working** |
 | Offline map dashboard | **Working** |
-| Hunt planner — weather, rut, moon | **Working**, no sighting data required |
+| Hunt planner — rut, weather, evidence tiers | **Working**, no sighting data required |
+| Stand choice from your own photos | **Working** once photos exist — refuses below 10 matched camera-hours |
 | Photo download and paging | **Working** — first real run 2026-08-29 found and fixed the one path bug |
 | Sighting log — deer per camera per hour | **Working** — the review screen, with the camera's own AI guess offered as a suggestion; only what a person confirms counts |
 | Individual buck identification | **Working, by hand** — name a buck in review and every later tag is one click. Assisted matching stays future work; automated re-identification from trail-camera images is not a solved problem |

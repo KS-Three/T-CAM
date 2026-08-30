@@ -1,4 +1,4 @@
-# State of play — 2026-08-29
+# State of play — 2026-08-30
 
 Written so a fresh session (or a future you) can pick this up cold. What works,
 what does not, what is next, and what is still unverified.
@@ -88,6 +88,11 @@ Rules for anything added from here:
 | **Wind recognition** — each frame fingerprinted in the browser (256-bit dHash, canvas); a visit matching the frames YOU reviewed as empty gets "Looks like wind" with the measured match; previews caption confirmed tags, the camera's claims, and the wind match | Driven end to end on real generated images: the empty burst hashed itself on arrival, N built the baseline, the animal-blob frame was refused wind talk (after the drive caught 9×8 hashing calling it a 97% match — the hash was rebuilt at 17×16), the empty-like visit was called at 100%, and the lightbox captions carried all three kinds of knowing |
 | **LiDAR basemap + shade overlay** — the browsable bare-earth hillshade (USGS 3DEP Gray-Stretch, rendered on demand, cached and offline-saveable like every tile); "LiDAR shade" lays the same rendering over the imagery with an overlay blend | Probed live first: the service refuses custom exaggeration (200-byte error stubs) and its fixed hillshades paint the flat home ground solid white, so Gray-Stretch — which normalises each window to its own relief — is the load-bearing choice, pinned by test; then driven in a real browser against live USGS through the real proxy at z16 and z17 (ditches, knobs and an old road legible on 12-ft-relief ground), the blend chosen from four screenshotted candidates (multiply dimmed dark canopy to mud; overlay kept structure), 117 tiles landing in the offline cache on the way |
 | **Camera GPS: newest fix wins** — status.coordinates is an ARRAY and the sync took [0]; a moved camera carries several and the pin stayed on the old spot. Newest dateTime now decides, and the camera card shows the fix date, flagged when it is much older than the last contact | Reported from the field 2026-08-30. Reproduced from the real document shape (two fixes, old one first), pinned both orders plus the undated cases; 616 tests |
+| **The planner recalibrated against the literature** — every factor carries an evidence tier; tier-D factors are shown scoring zero | A literature pass ([`deer-evidence.md`](deer-evidence.md)) found four scored factors that GPS-collar studies contradict. Cold front 14 → 3, wind's high-speed penalty deleted (activity *rises* with wind), barometer 5 → 0, moon 2 → 0. 20 planner tests rewritten to pin the new decisions with the reasoning in comments |
+| **Rut calendar moved to the Wisconsin data** — peak rut 23 Oct – 12 Nov, best week 5–11 Nov | Hunsaker et al. 2025: 188 collared males in Dane/Iowa/Grant counties, changepoint analysis agreeing across movement rate, range size and conception date. The old calendar scored the last week of October a full tier too low |
+| **The WHERE half, from your own photos** (`evidence.mjs`) — per-camera detections per 100 matched camera-hours, on a condition ladder from narrow to broad | 14 tests. Sunrise/sunset written from the standard sunrise equation (the forecast only reaches forward; photos are historical) and checked against published Madison times — within 4 minutes at the solstice and in November. Driven end to end in a browser against a seeded 48-day season |
+| **Hunting pressure and food scored at last** (`stand-context.mjs`) — both were already in the database and moved nothing | 17 tests. A drive caught the field centroid reading `[lng, lat]` as `[lat, lng]`, which put a Wisconsin field in the Indian Ocean and made food silently never apply; the test now asserts a swapped ring lands nowhere near |
+| **Confidence on every recommendation** — assembled from what is KNOWN, never from what was scored | Driven in a browser, light and dark: a `strong` evening at a stand with ticked winds and no logged sits reads `moderate confidence` and lists exactly what would firm it up |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -115,7 +120,16 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
   one session capture: [`moultrie-capture.md`](moultrie-capture.md).
 - **Phone app** — deliberately last, gated on the rest proving out. The server's
   JSON API is the boundary it would speak to.
-- **Steps 4 and 5** of the build plan: the tagging screen, then analysis.
+- **Step 5 (analysis) is half built.** The WHERE half of design decision 9 now
+  exists as `evidence.mjs` and feeds the stand ranking. What is NOT there: any
+  per-buck analysis (the `bucks` table and `detections.buck_id` are still
+  unused by scoring), and the calibration loop that would check the planner's
+  own ratings against logged sits — `sit-journal.mjs` can do it and correctly
+  refuses until there are a dozen sits with a spread of ratings.
+- **The evidence module has never seen real photographs.** Every number in it
+  came from a seeded season. The shapes are pinned by tests and it was driven
+  in a browser, but the first real run is where the surprises will be — the
+  same way the photo-path bug was.
 
 ## Public GPS collar data — answered 2026-08-28
 
@@ -310,8 +324,10 @@ against nonsense arriving over the API, not enforcing a judgement.
    real visits, name the first bucks, and note any vendor AI word the mapping
    table showed verbatim (`db.mjs` `VENDOR_SPECIES`) so it can be taught the
    ones that are beyond doubt.
-5. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts, on
-   `detectionsWithWeather()`, which now refuses unconfirmed rows by default.
+5. **Watch the evidence module against real photos.** It is wired in and
+   tested, but every camera-hour it has seen so far was seeded. Check that the
+   condition it picks is one you would have picked, and that the rates are not
+   being carried by a handful of hours.
 6. Moultrie, if a capture arrives.
 7. Historical imagery, if a working NAIP endpoint can be found.
 
@@ -479,3 +495,56 @@ Two smaller notes:
   `top: -14.5px`, visibly nowhere — so the script moves it to `body` before
   the fixed styling applies. Anything else made fixed from inside the bar or
   the drawer will repeat this.
+
+## The planner was mostly folk wisdom, and now says what it rests on
+
+Added 2026-08-30. This is the entry most worth reading before changing any
+scoring, because the finding was uncomfortable and the response shaped four
+files.
+
+A literature pass (written up in [`deer-evidence.md`](deer-evidence.md)) went
+looking for effect sizes to replace the planner's hand-picked weights. What it
+found instead was that **GPS-collar studies contradict four of them outright**:
+
+| Was | Evidence | Now |
+| --- | --- | --- |
+| Cold front **+14** — the largest weather number in the program | Penn State Deer-Forest found no difference in movement speed or distance before, during or after a front. Oklahoma collar work (32 deer) found temperature drops produced no movement response | **+3**, labelled contested |
+| Wind above 18 mph **−9** | Deer-Forest measured the **least** movement in dead calm, and steadily more as wind rose. Webb 2010 found no clear relationship either way | **No deer penalty.** Wind is now scored as scent management and labelled as being about the hunter |
+| Barometer in "the active band" **+5** | The band traces to hunting-magazine logbook compilations, not a study | **0**, still displayed |
+| Moon **±2**, "deliberately small" | Penn State and Mississippi State both report no lunar pattern in movement | **0**, still displayed |
+
+Three decisions came out of it, and they matter more than the numbers:
+
+- **Every factor carries an evidence tier**, A to D, plus **Y** for "measured on
+  your own ground". A tier is shown on screen next to the points, so a reason
+  can be weighed instead of believed.
+- **A tier-D factor scores zero but is still reported.** Deleting the moon would
+  have made it look like an oversight and it would have been proposed again next
+  season. Shown contributing nothing, it makes an argument.
+- **Factors say what they are ABOUT.** A `deer` factor is a claim about deer
+  behaviour and needs a citation; a `hunter` factor is craft — where your scent
+  goes — and needs no deer study because it is not making a claim about deer.
+  Wind moved almost entirely into the second category, which is the honest place
+  for it: a steady breeze is good for *you*, not bad for *them*.
+
+**The rut calendar moved too, and this is the change most likely to alter what
+Kent actually does.** Hunsaker et al. 2025 collared 188 males in Dane, Iowa and
+Grant counties — the same latitude, the same crops, the same state — and ran
+changepoint analysis three separate ways, on movement rates, on range sizes and
+on conception dates. All three put the peak rut starting **23–27 October**. The
+old calendar called that week "pre-rut" and scored it 16 against the first week
+of November's 24. It now scores 26, and the best week is 5–11 November at 30.
+
+### Two traps found on the way
+
+- **`node:sqlite` refuses to bind `undefined`.** Seeding a camera with a partial
+  row fails on whichever column happens to be missing, naming it only by
+  parameter number. The real sync always sends every key, so this only ever
+  bites fixtures.
+- **A field's stored points are `[lng, lat]`.** Reading them as `[lat, lng]`
+  put a Wisconsin field in the Indian Ocean, every distance came back as
+  thousands of kilometres, and the only symptom was that the food term silently
+  never applied — no error, no wrong number, just a factor that was never
+  reached. This is the third variant of the same bug in this repo, after the
+  parcel projection and `outSR=4326`. The test now asserts a swapped ring lands
+  nowhere near the stand.

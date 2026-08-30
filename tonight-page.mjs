@@ -122,6 +122,7 @@ async function load() {
   }
   DATA = payload;
   render();
+  loadIndividuals();
   // Anything logged in the woods goes home the next time the server answers.
   // A load that succeeded from the network is exactly that moment.
   if (!CACHED_AT && typeof TRACKER !== 'undefined' && TRACKER.pending()) {
@@ -250,6 +251,18 @@ function verdictCard(sit) {
     c.appendChild(w);
   }
 
+  // Recent pressure, said in a sentence rather than left as two points off a
+  // score nobody can feel. Kent asked for the note specifically: he would
+  // rather be told the ground has been walked and make the call himself than
+  // have a stand quietly demoted for it.
+  if (pick.pressure && pick.pressure.note) {
+    const p = el('div', 'why');
+    p.appendChild(el('span', 'pill warn', 'pressure'));
+    p.appendChild(document.createTextNode(' ' + pick.pressure.note
+      + ' ' + pick.pressure.why.charAt(0).toUpperCase() + pick.pressure.why.slice(1) + '.'));
+    c.appendChild(p);
+  }
+
   // The thermal warning, when the ground has enough slope to make one. This is
   // the case where the forecast wind is fine and the thermal quietly undoes it.
   const thermal = (pick.reasons || []).find(r => r.points < 0 && /thermal/.test(r.why));
@@ -270,8 +283,68 @@ function verdictCard(sit) {
  * point of the whole exercise: a recommendation you can argue with beats one
  * you have to trust, and the evidence tier is what makes arguing possible.
  */
+/**
+ * Whether one of YOUR bucks does something the population does not.
+ *
+ * Fetched after the page has drawn, because the tests behind it walk a season
+ * of weather per buck and this screen is read with boots in hand.
+ *
+ * The framing matters and is deliberate: the population weight for moon and
+ * barometer is zero and stays zero — no collar study supports it. This asks a
+ * narrower question that Kent's own photographs CAN answer, about one named
+ * animal on one property, and it only ever speaks when it has enough of them.
+ */
+async function loadIndividuals() {
+  let data;
+  try {
+    const res = await fetch('/api/individuals');
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (err) { return; }
+  const found = (data.results || []).filter(function (r) {
+    return r.verdict && r.verdict.indexOf('follows') === 0;
+  });
+  if (!found.length) return;
+
+  const sit = (DATA && DATA.sits && DATA.sits[0]) || {};
+  const c = card('Your bucks');
+  found.forEach(function (r) {
+    const row = el('div', 'reason');
+    row.appendChild(el('span', 'pts muted', 'Y'));
+    // Does tonight actually look like what he responds to? That is the only
+    // reason this is on the tonight screen rather than in a report.
+    let tonight = '';
+    const illum = sit.moonIllum, press = sit.pressure;
+    if (r.factor === 'moon' && typeof illum === 'number') {
+      const bright = illum >= 0.6, wantsBright = r.direction === 'bright moons';
+      tonight = ' Tonight is ' + Math.round(illum * 100) + '% lit — '
+        + (bright === wantsBright ? 'his kind of night.' : 'not his kind of night.');
+    } else if (r.factor === 'barometer' && typeof press === 'number') {
+      const high = press >= 30.1, wantsHigh = r.direction === 'high pressure';
+      tonight = ' Tonight is ' + press.toFixed(2) + ' inHg — '
+        + (high === wantsHigh ? 'his kind of evening.' : 'not his kind of evening.');
+    }
+    row.appendChild(document.createTextNode(
+      r.individual + ' ' + r.verdict + ' (' + r.sightings + ' of your pictures).' + tonight));
+    c.appendChild(row);
+  });
+  c.appendChild(el('div', 'note',
+    'The population weight for the moon and the barometer is zero — no collar study '
+    + 'supports it, and that has not changed. This is a different question: whether '
+    + 'THIS animal, on THIS ground, in your own photographs, does something the '
+    + 'population does not. ' + data.tests + ' test'
+    + (data.tests === 1 ? ' was' : 's were') + ' run, and the bar was tightened to '
+    + 'account for that.'));
+  // Next to the reasoning it belongs with. Appended to the end it lands under
+  // the sit-logging form, which is past where anyone reads before leaving.
+  const anchor = document.getElementById('whyCard');
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(c, anchor.nextSibling);
+  else main.appendChild(c);
+}
+
 function whyCard(sit) {
   const c = card('Why');
+  c.id = 'whyCard';
   const pick = sit.pick;
 
   const list = (title, rows, opts) => {

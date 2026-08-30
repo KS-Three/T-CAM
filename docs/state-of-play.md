@@ -93,6 +93,8 @@ Rules for anything added from here:
 | **The WHERE half, from your own photos** (`evidence.mjs`) — per-camera detections per 100 matched camera-hours, on a condition ladder from narrow to broad | 14 tests. Sunrise/sunset written from the standard sunrise equation (the forecast only reaches forward; photos are historical) and checked against published Madison times — within 4 minutes at the solstice and in November. Driven end to end in a browser against a seeded 48-day season |
 | **Hunting pressure and food scored at last** (`stand-context.mjs`) — both were already in the database and moved nothing | 17 tests. A drive caught the field centroid reading `[lng, lat]` as `[lat, lng]`, which put a Wisconsin field in the Indian Ocean and made food silently never apply; the test now asserts a swapped ring lands nowhere near |
 | **Confidence on every recommendation** — assembled from what is KNOWN, never from what was scored | Driven in a browser, light and dark: a `strong` evening at a stand with ticked winds and no logged sits reads `moderate confidence` and lists exactly what would firm it up |
+| **Moon and barometer, per INDIVIDUAL** (`individuals.mjs`) — population weight still zero; a named buck tested against his own pictures | 10 tests. The one that matters plants the time-of-day confound — pressure cycling through the day, a purely nocturnal buck — and asserts the stratified draw does NOT report a barometer effect, while showing the naive comparison would have. Driven live: a seeded moon-following buck found at p 0.0002, his barometer correctly called at p 0.76 |
+| **Pressure reworked to a sentence** — 3-day recovery, penalty halved, "This area has experienced recent pressure." on the card | Kent's call. Exposed a coupling now written down as a trap: shortening the constant silently reclassified "three sits in three days" out of the top band |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -548,3 +550,56 @@ of November's 24. It now scores 26, and the best week is 5–11 November at 30.
   reached. This is the third variant of the same bug in this repo, after the
   parcel projection and `outSR=4326`. The test now asserts a swapped ring lands
   nowhere near the stand.
+
+## "Some individuals follow the moon" — made falsifiable instead of argued about
+
+Added 2026-08-30, from Kent's response to the recalibration above. He accepted
+that there is no population evidence for the moon or the barometer, and then
+made the objection that actually matters:
+
+> No evidence, but some individuals follow the moon and barometer, so take it
+> into consideration.
+
+He is right about the mechanism, and this document's own §5 is why: a population
+average is exactly the thing that hides an individual. Mississippi State found a
+third of their bucks on ranges **fifteen times** the size of the other two
+thirds'. A null at the population level does not rule out a strong effect in one
+animal.
+
+**The resolution is not a compromise weight.** Putting moon back at ±1 "because
+some deer might" would be the worst of both — unsupported at the population level
+where it is applied, and useless for the individual it is supposed to represent.
+The population weight stays **zero**.
+
+Instead the claim is tested where it can be settled: **one named buck, on this
+ground, in Kent's own photographs**. `individuals.mjs` runs a randomization test
+of moon illumination and barometric pressure at a buck's confirmed sightings
+against the hours he could have been photographed in. A finding earns **tier Y**,
+because a season of Kent's own pictures of Split G2 is better evidence about
+Split G2 than any collar study of other deer.
+
+Three things make it a test rather than a dashboard:
+
+- **The comparison sample is stratified by light band.** Pressure has a diurnal
+  cycle and deer are crepuscular; drawing the null from all hours would compare
+  "he moves at dusk" against "pressure differs at dusk" and report a confident,
+  entirely spurious barometer effect. This is the same trap `collar.mjs`
+  documents for temperature, running the same dangerous way — it *invents* a
+  relationship. `test/individuals.test.js` plants exactly this confound and
+  asserts it is not found, and separately asserts the naive comparison would
+  have fallen for it.
+- **The threshold divides by the number of tests run.** Five bucks against two
+  factors is ten chances; at p = 0.05 one of them looks real when nothing is.
+  Adding a buck makes every other buck's finding *harder* to claim.
+- **Nothing below 12 confirmed sightings of an individual** — the same bar
+  `sit-journal.mjs` refuses below, for the same reason.
+
+It has its own endpoint (`/api/individuals`) rather than living in
+`/api/tonight`, because the tests walk a season of weather per buck and
+`/tonight` is the screen read with boots in hand. The page fetches it after it
+has drawn and says nothing at all unless there is something to say.
+
+**Untested against reality, like the rest of the evidence layer**: no buck has
+been named yet, so this has only ever run on a seeded animal with a planted
+effect. What it will do first on real data is refuse, repeatedly, for a season —
+which is correct, and worth expecting so it does not read as broken.

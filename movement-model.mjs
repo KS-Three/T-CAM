@@ -359,6 +359,8 @@ export function scoreSit({ hours = [], rut, moon, tempDropF = 0, pressureTrend =
     windDir: hours.length ? hours[Math.floor(hours.length / 2)].windDir : null,
     rain: wx.rain,
     temp: wx.temp,
+    pressure: wx.pressure === null ? null : Math.round(inHg(wx.pressure) * 100) / 100,
+    moonIllum: moon ? Math.round(moon.illum * 100) / 100 : null,
     // What the score RESTS on, which is not the same as how big it is. A sit
     // carried by the rut calendar is standing on collar data from this state;
     // the same number assembled out of weather terms is standing on much less.

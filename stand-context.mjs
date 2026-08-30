@@ -42,17 +42,30 @@ import { distanceM } from './db.mjs';
  * How fast a sat stand recovers, in days.
  *
  * The collar work has daytime movement back toward normal by the Thursday or
- * Friday after a hunted weekend — four to five days. So sits decay with a
- * five-day time constant, which puts yesterday's sit at nearly full weight and
- * one from a fortnight ago at almost none.
+ * Friday after a hunted weekend, which reads as four or five days — and that is
+ * what this was set to. Kent's call, 2026-08-30: shorter than that on his
+ * ground. Taken, because the literature figure is a population average from
+ * Mississippi and Oklahoma hunting cultures with very different access
+ * patterns, and the person who hunts the property has better information about
+ * how fast it settles than a study of somebody else's does.
+ *
+ * At three days a sit yesterday still counts for most of itself and one from
+ * last weekend counts for very little.
  */
-export const RECOVERY_DAYS = 5;
+export const RECOVERY_DAYS = 3;
 
 /** Sits older than this are not counted at all, however the maths decays. */
 export const PRESSURE_WINDOW_DAYS = 21;
 
-/** The most a burned stand can lose. Deliberately far below the wind term. */
-export const MAX_PRESSURE_PENALTY = 12;
+/**
+ * The most a burned stand can lose. Deliberately far below the wind term.
+ *
+ * Cut from 12 to 6 on Kent's call: what he wants from this is to be TOLD the
+ * ground has been walked recently, not to have a stand quietly demoted out of
+ * the running for it. So the penalty is now a nudge and the `note` below is the
+ * real output — the page shows the sentence whether or not the points moved.
+ */
+export const MAX_PRESSURE_PENALTY = 6;
 
 /**
  * Recency-weighted count of how hard a stand has been hunted lately.
@@ -78,30 +91,48 @@ export function pressureAt(stand, sits = [], { now = Date.now() } = {}) {
   // bands: the honest resolution of "how burned is this stand" from a handful
   // of logged sits is about this, and a decimal would imply precision that is
   // not there.
-  let points = 0, why;
+  //
+  // TRAP: these thresholds are calibrated against RECOVERY_DAYS and do not
+  // survive it changing on their own. Shortening the constant from 5 days to 3
+  // dropped "three sits in three days" from 2.19 to 1.82 and silently moved it
+  // out of the top band — the same hunting pattern, quietly reclassified. If
+  // you change the constant, re-check what each band now means in sits.
+  // At 3 days: ~1.8 is three sits in three days, ~1.2 is two, ~0.4 is one
+  // within the last couple of days.
+  let points = 0, why, note = null;
   if (!mine.length) {
     why = 'no sits logged here — pressure is unknown, not zero. Log your sits and this starts working';
-  } else if (burn >= 2.0) {
+  } else if (burn >= 1.8) {
     points = -MAX_PRESSURE_PENALTY;
+    note = 'This area has experienced recent pressure.';
     why = `hunted hard lately (${scored.length} sits in ${PRESSURE_WINDOW_DAYS} days, last ${fmtDays(lastSit)}) — `
       + 'observations of bucks known to still be present fell 62% by the second weekend in the Mississippi State collar data';
   } else if (burn >= 1.2) {
-    points = -7;
+    points = -4;
+    note = 'This area has experienced recent pressure.';
     why = `sat ${scored.length} time${scored.length === 1 ? '' : 's'} recently, last ${fmtDays(lastSit)} — `
       + 'daytime movement measured down 22-34% across consecutive hunted days';
   } else if (burn >= 0.4) {
-    points = -3;
-    why = `sat ${fmtDays(lastSit)}, and a stand takes about ${RECOVERY_DAYS} days to come back`;
+    points = -2;
+    note = 'This area has experienced recent pressure.';
+    why = `sat ${fmtDays(lastSit)}, and a stand takes about ${RECOVERY_DAYS} days to settle`;
   } else if (lastSit !== null && lastSit >= 10) {
-    points = 3;
+    points = 2;
     why = `rested — nothing logged here for ${Math.round(lastSit)} days`;
   } else {
     points = 0;
-    why = `last sat ${fmtDays(lastSit)}, far enough back to have recovered`;
+    why = `last sat ${fmtDays(lastSit)}, far enough back to have settled`;
   }
 
   return {
-    points, why, burn: Math.round(burn * 100) / 100,
+    points, why,
+    // The sentence Kent asked for, carried separately from the score so the
+    // page can say it whether or not the arithmetic moved. A stand two points
+    // down reads as no different from any other stand; "this area has
+    // experienced recent pressure" reads as the thing he actually wanted to
+    // know, and lets him make the call himself.
+    note,
+    burn: Math.round(burn * 100) / 100,
     sits: scored.length, lastSitDaysAgo: lastSit === null ? null : Math.round(lastSit * 10) / 10,
     known: mine.length > 0,
   };

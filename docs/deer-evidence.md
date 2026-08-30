@@ -245,6 +245,26 @@ be there* is the cleanest statement of it in the literature.
 not modelling it at all**, despite already recording every sit in the `sits`
 table.
 
+**Kent's amendment, 2026-08-30.** The recovery figure above reads as four or
+five days; he says shorter than that on his ground, and that what he wants from
+this is to be *told* the area has been walked rather than have a stand quietly
+demoted for it. Both taken:
+
+- `RECOVERY_DAYS` is **3**, not 5. The literature number is a population average
+  from Mississippi and Oklahoma hunting cultures with very different access
+  patterns, and the person who hunts the property has better information about
+  how fast it settles than a study of somebody else's does.
+- The maximum penalty is **6**, not 12, and the real output is a sentence —
+  *"This area has experienced recent pressure."* — carried separately from the
+  score so the page says it whether or not the arithmetic moved.
+
+Note the coupling this exposed, which is written into the code as a trap:
+shortening the constant dropped "three sits in three days" from 2.19 to 1.82 on
+the decay sum and silently moved it out of the top band — the same hunting
+pattern, reclassified by a change that had nothing to do with it. The band
+thresholds are calibrated against `RECOVERY_DAYS` and do not survive it changing
+on their own.
+
 ---
 
 ## 7. Moon — tested repeatedly, and it is not there
@@ -258,6 +278,44 @@ table.
 "deliberately small". The honest weight is **zero**. It is still displayed,
 because a number the user can see and dismiss is better than one removed without
 explanation — but it contributes nothing.
+
+### The individual objection, and why it is a good one
+
+Kent, 2026-08-30, on both the moon and the barometer: *"No evidence, but some
+individuals follow the moon and barometer, so take it into consideration."*
+
+He is right about the mechanism, and §5 of this document is the reason: a
+population average is exactly the thing that hides an individual. Mississippi
+State found a third of their bucks on ranges **fifteen times** the size of the
+other two thirds'. "The deer here do X" is routinely an average over two
+different animals, and a null result at the population level does not rule out
+a strong effect in one of them.
+
+So the resolution is **not** to put either factor back into the score. The
+population weight stays zero, because that is what the collar data says. Instead
+the claim is tested where it can actually be settled — against **one named buck,
+on this ground, in Kent's own photographs** — by `individuals.mjs`. If a buck's
+pictures really do pile up on bright nights, that is a fact about that buck,
+measurable from data already in the database, and it earns **tier Y**.
+
+Two things govern that test, and both are the difference between a finding and
+an artefact:
+
+- **The comparison sample is matched on time of day.** Barometric pressure has a
+  diurnal cycle and deer are crepuscular, so drawing it from all available hours
+  would compare "this buck moves at dusk" against "pressure is different at
+  dusk" and report a confident, entirely spurious barometer effect. Same trap
+  `collar.mjs` documents for temperature, running in the same dangerous
+  direction: it invents a relationship rather than hiding one. A test in
+  `test/individuals.test.js` plants exactly this confound and asserts it is not
+  found.
+- **The threshold divides by the number of tests run.** Five bucks against two
+  factors is ten chances, and at p = 0.05 you expect one to look real when
+  nothing is. Adding a buck therefore makes every other buck's finding harder to
+  claim, which is correct and the opposite of what a dashboard usually does.
+
+Nothing is reported below **12 confirmed sightings** of an individual — the same
+bar, for the same reason, that `sit-journal.mjs` refuses below.
 
 ---
 
@@ -351,3 +409,5 @@ modelled. The program continues to reason about *the hunter's* scent reaching
 | Hunting pressure: not modelled | modelled from the `sits` table | §6 — largest actionable effect found |
 | Crop state: stored, not scored | scored from crop type and cut date | §8 |
 | Confidence: not reported | reported everywhere, from evidence volume | §9 |
+| Moon and barometer: unanswerable | population weight still 0; testable **per named buck** on your own photos, tier Y | §7, Kent's objection |
+| Stand recovery 5 days, −12 | **3 days, −6**, plus a plain sentence saying the area was walked | §6, Kent's call |

@@ -139,6 +139,23 @@ test('a camera card carries its own latest photos, from what the page already ho
   assert.match(body, /No photos from this camera yet/);
 });
 
+test('a camera moved on the map is mutated, never replaced', async () => {
+  // The pins, the framing and the ground clustering all read one list that is
+  // filtered ONCE at load and holds references to the camera objects. Writing
+  // a fresh object into D.cameras leaves every one of them drawing from the
+  // old copy — the first browser drive of camera placement saved the new
+  // coordinates, survived a reload, and the pin did not move a pixel.
+  const src = await fs.readFile(new URL('../map-view.mjs', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function saveCameraAt'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /Object\.assign\(cam, body\)/);
+  assert.doesNotMatch(body, /D\.cameras\[\w+\] = /, 'never replaced wholesale');
+  // A camera whose GPS never reported is not in that list, so placing it has
+  // to add it — otherwise the one camera most in need of placing gets no pin.
+  assert.match(body, /located\.push\(cam\)/);
+  assert.match(body, /located\.splice\(at, 1\)/);
+});
+
 test('the conditions section never shows a rate without the counts under it', () => {
   // Design.md's evidence bar: with one season most real differences will not
   // clear a formal test, so a bare rate — or worse, a bare verdict — hides

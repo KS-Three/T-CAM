@@ -245,8 +245,14 @@ function scoreSit({ hours, rut, moon, tempDropF, pressureTrend }) {
 
 const OFF_SEASON_CAP = 5;
 
-const RATINGS = [[46, 'PRIME'], [34, 'strong'], [24, 'good'], [14, 'fair'], [-999, 'poor']];
-const rate = n => RATINGS.find(([t]) => n >= t)[1];
+/**
+ * The published scale. Exported because `confidence.mjs` turns a score into a
+ * percentage by remapping these very thresholds — deriving that from a second,
+ * privately held copy of the bands is how the word and the number end up
+ * disagreeing about the same evening.
+ */
+export const RATINGS = [[46, 'PRIME'], [34, 'strong'], [24, 'good'], [14, 'fair'], [-999, 'poor']];
+export const rate = n => RATINGS.find(([t]) => n >= t)[1];
 
 async function loadCameras() {
   if (OPT.lat !== null && OPT.lng !== null) {

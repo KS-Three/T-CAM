@@ -250,6 +250,30 @@ and checked to be inside the photo directory before anything is read. A test
 sends the raw un-normalized bytes down a socket to prove the *server* refuses,
 rather than proving a polite HTTP client rewrote the path first.
 
+## When a camera's pin is in the wrong place
+
+It often is, and it is not your fault. A cellular camera's GPS drifts badly
+under canopy, and some models report the cell tower rather than a satellite
+fix — so the pin can be a couple of hundred metres from the tree the camera is
+strapped to. The sync reads the **newest** fix the camera reports (it used to
+take whichever came first in the list, which pinned a moved camera at its old
+spot), but the newest wrong answer is still wrong.
+
+So you can put a camera where it actually is: **click its pin → Move to where
+it really is → click the spot.** That correction is yours, and:
+
+- **the camera's own fix is kept, not overwritten.** The panel says how far out
+  it is — *"You placed this one. Its own GPS says 93 m away."* A small number
+  means the GPS was fine and something else is off;
+- **the sync never undoes it.** It keeps updating battery, signal, photos and
+  the camera's reported fix; where the camera *is* stays yours;
+- **you can hand it back** with *Use its own GPS*, for when the camera really
+  does move and its fix becomes the right one again.
+
+The weather location follows the camera, because a fix a few hundred metres out
+can round to a different point — and the analysis would then be joining this
+camera's sightings to somewhere else's rain.
+
 ## Stands, tripods and blinds
 
 Cameras tell you where deer are; a stand is where *you* can be, and those are

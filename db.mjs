@@ -564,6 +564,36 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 13,
+    name: 'a camera can be placed by hand',
+    up: db => {
+      // Where the camera ACTUALLY is, when its own GPS is wrong.
+      //
+      // Reported from the field 2026-08-30: pins still in the wrong place after
+      // the newest-fix fix (migration-free, providers/spypoint.mjs). That fix
+      // was right and insufficient — it made the sync read the newest fix the
+      // camera reported, which does nothing when the fix the camera reports is
+      // itself wrong. A cellular camera under canopy routinely returns a poor
+      // fix, and some return the tower rather than a satellite position.
+      //
+      // Nothing could be done about it: stands can be dropped and moved, and
+      // cameras could only ever be where the vendor said. Even a hand-edited
+      // row would be overwritten by the next sync, silently, which is worse
+      // than not being editable at all.
+      //
+      // Hence a SEPARATE pair of columns rather than overwriting lat/lng. The
+      // vendor's fix stays exactly as reported, so the two can be compared and
+      // "the GPS is 300 m out" stays a visible fact rather than being quietly
+      // erased; the sync writes only lat/lng and never touches these; and
+      // clearing the override falls back to the camera's own fix rather than
+      // to nothing. The distinction between what a machine claimed and what a
+      // person established is the same one the detections table makes.
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_lat REAL;');
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_lng REAL;');
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_at TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -726,9 +756,19 @@ export function weatherLocationFor(db, lat, lng) {
  */
 export function upsertCamera(db, row, { provider, accountLabel = null, raw = null } = {}) {
   const id = `${provider}:${row.id}`;
-  const loc = weatherLocationFor(db, row.lat, row.lng);
   const now = nowIso();
-  const existing = db.prepare('SELECT id, first_seen_at, property_id FROM cameras WHERE id = ?').get(id);
+  const existing = db.prepare(
+    'SELECT id, first_seen_at, property_id, placed_lat, placed_lng FROM cameras WHERE id = ?',
+  ).get(id);
+  // A camera placed by hand keeps ITS weather location, not the one the
+  // vendor's fix would resolve to. The sync overwrites lat/lng freely — the
+  // vendor stays authoritative for what it reported — but the derived location
+  // must follow where the camera actually is, or the analysis would join a
+  // sighting to the weather of a point nobody stood at.
+  const placed = existing?.placed_lat != null && existing?.placed_lng != null;
+  const loc = placed
+    ? weatherLocationFor(db, existing.placed_lat, existing.placed_lng)
+    : weatherLocationFor(db, row.lat, row.lng);
 
   db.prepare(`
     INSERT INTO cameras (
@@ -850,11 +890,65 @@ export function upsertWeatherHour(db, locationId, hour, w) {
 // Reads
 // ---------------------------------------------------------------------------
 
+/**
+ * Cameras, with a hand-placed position winning over the vendor's own fix.
+ *
+ * Resolved HERE rather than by each caller, because there are a dozen of them —
+ * the map, the planner, the weather location, the stand ranking, the analysis —
+ * and a caller that forgot would put one pin somewhere the others do not. The
+ * vendor's numbers ride along under `gps_lat` / `gps_lng` so the card can show
+ * how far out the camera's own GPS is, which is the fact that explains the
+ * whole feature.
+ */
 export const allCameras = db => db.prepare(`
-  SELECT c.*, p.name AS property_name
+  SELECT c.*, p.name AS property_name,
+         c.lat AS gps_lat, c.lng AS gps_lng,
+         COALESCE(c.placed_lat, c.lat) AS lat,
+         COALESCE(c.placed_lng, c.lng) AS lng
   FROM cameras c LEFT JOIN properties p ON p.id = c.property_id
   ORDER BY p.name, c.name
 `).all();
+
+/**
+ * Put a camera where it actually is, or hand it back to its own GPS.
+ *
+ * Passing null for either coordinate clears the override — deliberately a
+ * separate outcome from "place it at 0,0", which is why the check is against
+ * null before any conversion. Number(null) is 0 and 0,0 is in the Atlantic;
+ * this is the fourth place in this program where that would have bitten.
+ */
+export function placeCamera(db, id, { lat, lng } = {}) {
+  const row = db.prepare('SELECT id FROM cameras WHERE id = ?').get(id);
+  if (!row) throw new Error(`no camera ${id}`);
+
+  if (lat === null || lng === null || lat === undefined || lng === undefined) {
+    db.prepare(`UPDATE cameras SET placed_lat = NULL, placed_lng = NULL,
+                placed_at = NULL, updated_at = ? WHERE id = ?`).run(nowIso(), id);
+  } else {
+    const la = Number(lat), ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) {
+      throw new Error('a camera needs real coordinates');
+    }
+    if (la < -90 || la > 90 || ln < -180 || ln > 180) {
+      throw new Error(`coordinates out of range: ${la}, ${ln}`);
+    }
+    // The weather location follows the camera. It is keyed on where the camera
+    // IS, and a fix 300 m out can land on the far side of the rounding — which
+    // would leave the analysis joining sightings to another point's weather.
+    const loc = weatherLocationFor(db, la, ln);
+    db.prepare(`UPDATE cameras SET placed_lat = ?, placed_lng = ?, placed_at = ?,
+                weather_location_id = ?, updated_at = ? WHERE id = ?`)
+      .run(la, ln, nowIso(), loc?.id ?? null, nowIso(), id);
+  }
+  return db.prepare(`
+    SELECT c.*, p.name AS property_name,
+           c.lat AS gps_lat, c.lng AS gps_lng,
+           COALESCE(c.placed_lat, c.lat) AS lat,
+           COALESCE(c.placed_lng, c.lng) AS lng
+    FROM cameras c LEFT JOIN properties p ON p.id = c.property_id
+    WHERE c.id = ?
+  `).get(id);
+}
 
 export const photosForCamera = (db, cameraId, limit = 500) =>
   db.prepare('SELECT * FROM photos WHERE camera_id = ? ORDER BY taken_at DESC LIMIT ?')

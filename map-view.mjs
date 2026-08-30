@@ -1696,6 +1696,7 @@ function clearMapModes(keep) {
   if (keep !== 'measure' && measuring) stopMeasuring();
   if (keep !== 'field' && fielding) cancelFielding();
   if (keep !== 'entry' && entryPick) cancelEntryPick();
+  if (keep !== 'campick' && camPick) cancelCamPick();
   // The caller puts it back if it is arming something. Leaving it on is how
   // the map ends up stuck showing a crosshair with no mode behind it.
   mapEl.classList.remove('placing');
@@ -2216,6 +2217,70 @@ if (!D.live) {
 // for nothing else, and it becomes a real route only when saved.
 let SUGWALK = null;      // the proposal on the map, or null
 let entryPick = null;    // { standId } while waiting for the entry click
+let camPick = null;      // { id, name } while waiting for the click that places a camera
+
+/**
+ * Put a camera where it actually is.
+ *
+ * A cellular camera's GPS is often wrong — under canopy it drifts, and some
+ * models report the tower rather than a satellite fix. Teaching the sync to
+ * read the camera's NEWEST fix (2026-08-30) fixed a real bug and did nothing
+ * for this one: the newest wrong answer is still wrong. Until now there was no
+ * way at all to say where a camera really is, and a hand-edited row would have
+ * been overwritten by the next sync without a word.
+ *
+ * The vendor's own fix is kept rather than replaced, so "the GPS is 310 m out"
+ * stays visible and the override can be handed back.
+ */
+function cancelCamPick() {
+  camPick = null;
+  mapEl.classList.remove('placing');
+  routeTip(null);
+}
+
+function moveCameraPick(c) {
+  closeSelPanel();
+  clearMapModes('campick');
+  camPick = { id: c.id, name: c.name };
+  mapEl.classList.add('placing');
+  routeTip('Click where <b>' + c.name + '</b> really hangs. '
+    + 'Its own GPS stays recorded, so you can hand it back. <b>Esc</b> cancels.');
+}
+
+async function saveCameraAt(id, lat, lng) {
+  const res = await fetch('/api/cameras/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(lat === null ? { lat: null, lng: null } : { lat, lng }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'could not move the camera');
+  // Mutated in place, never replaced. The located list — which the pins, the
+  // framing and the ground clustering all read — is filtered once at load and
+  // holds references to these very objects, so assigning a fresh one into
+  // D.cameras leaves every pin drawing from the old copy. The first browser
+  // drive of this caught exactly that: the coordinates saved, survived a
+  // reload, and the pin did not move a pixel. (The ground switcher relabels
+  // properties the same way, for the same reason.)
+  const cam = D.cameras.find(x => x.id === id);
+  if (cam) {
+    Object.assign(cam, body);
+    // A camera whose GPS never reported is not in the located list at all, and
+    // one handed back to a fix it does not have drops out of it.
+    const known = typeof cam.lat === 'number' && typeof cam.lng === 'number';
+    const at = located.indexOf(cam);
+    if (known && at < 0) located.push(cam);
+    else if (!known && at >= 0) located.splice(at, 1);
+  }
+  draw();
+  return body;
+}
+
+addEventListener('keydown', e => {
+  if (!camPick) return;
+  if (isTyping(e.target)) return;
+  if (e.key === 'Escape') { e.preventDefault(); cancelCamPick(); }
+});
 
 function walkPaths(left, top) {
   if (!SUGWALK || !SUGWALK.points || SUGWALK.points.length < 2) return [];
@@ -2835,7 +2900,36 @@ function showCameraPanel(c) {
   // The card the report drawer shows, reused whole — two renderings of one
   // camera is how they end up disagreeing about battery life.
   selPanel.appendChild(cameraCard(c, { withId: false }));
+
+  // How far the camera's own GPS is from where you put it. Stated in metres
+  // rather than implied, because it is the evidence for the whole feature —
+  // and because a small number means the fix was fine and something else is
+  // wrong with your pin.
+  if (c.placedAt && typeof c.gpsLat === 'number' && typeof c.gpsLng === 'number') {
+    const off = Math.round(MEASURE.distanceM(c.lat, c.lng, c.gpsLat, c.gpsLng));
+    selPanel.appendChild(el('div', 'note',
+      'You placed this one. Its own GPS says ' + off + ' m '
+      + (off > 0 ? 'away' : 'the same spot') + '.'));
+  }
+
   const btns = el('div', 'btns');
+  if (D.live) {
+    const move = document.createElement('button');
+    move.type = 'button';
+    move.textContent = c.placedAt ? 'Move again' : 'Move to where it really is';
+    move.onclick = () => moveCameraPick(c);
+    btns.appendChild(move);
+    if (c.placedAt) {
+      // An override you cannot undo is a worse trap than no override: the
+      // camera may be moved for real next season and its own fix become right.
+      const back = document.createElement('button');
+      back.type = 'button'; back.textContent = 'Use its own GPS';
+      back.onclick = () => saveCameraAt(c.id, null, null)
+        .then(() => showCameraPanel(D.cameras.find(x => x.id === c.id)))
+        .catch(err => routeTip('Could not clear it: ' + err.message));
+      btns.appendChild(back);
+    }
+  }
   const more = document.createElement('button');
   more.type = 'button'; more.textContent = 'Show in camp report';
   more.onclick = () => { revealInDrawer('cam-' + c.id); };
@@ -3932,6 +4026,18 @@ mapEl.addEventListener('click', e => {
     fetchWalkIn(pick.standId, at.lat, at.lng, 'where you clicked');
     return;
   }
+  if (camPick) {
+    const rc = mapEl.getBoundingClientRect();
+    const cx2 = e.clientX - rc.left, cy2 = e.clientY - rc.top;
+    if (cx2 < 0 || cy2 < 0 || cx2 > rc.width || cy2 > rc.height) return;
+    const at = pixelToLatLng(cx2, cy2);
+    const pick = camPick;
+    cancelCamPick();
+    saveCameraAt(pick.id, at.lat, at.lng)
+      .then(c => showCameraPanel(D.cameras.find(x => x.id === c.id) ?? c))
+      .catch(err => routeTip('Could not move ' + pick.name + ': ' + err.message));
+    return;
+  }
   if (drawing) {
     const rd = mapEl.getBoundingClientRect();
     const dx = e.clientX - rd.left, dy = e.clientY - rd.top;
@@ -4142,7 +4248,7 @@ mapEl.addEventListener('wheel', e => {
 mapEl.addEventListener('dblclick', e => {
   if (!onMapGround(e.target)) return;
   if (placing || marking || drawing || measuring || identifying || laneEdit
-      || fielding || entryPick) return;
+      || fielding || entryPick || camPick) return;
   e.preventDefault();
   zoomAt(zoom + 1, e.clientX, e.clientY);
 });

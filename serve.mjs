@@ -39,7 +39,7 @@ import {
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
   saveTrack, allTracks, trackById, deleteTrack,
   allFields, createField, updateField, deleteField, CROP_KINDS, CROP_LABELS,
-  saveForecast, cachedForecast,
+  saveForecast, cachedForecast, placeCamera,
 } from './db.mjs';
 import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
 import { cropAt } from './cropscan.mjs';
@@ -117,8 +117,15 @@ export function cameraFromRow(r) {
     property: r.property_name ?? null,
     name: r.name,
     model: r.model,
+    // Where it IS — the hand-placed position if there is one, the vendor's fix
+    // otherwise. `placedAt` and `gpsLat`/`gpsLng` keep the two facts apart, so
+    // the card can say "you placed this, and the camera's own GPS is 310 m
+    // out" rather than quietly presenting one as the other.
     lat: r.lat,
     lng: r.lng,
+    placedAt: r.placed_at ?? null,
+    gpsLat: r.gps_lat ?? null,
+    gpsLng: r.gps_lng ?? null,
     gpsFix: r.gps_fix,
     battery: r.battery,
     batteryLevel: r.battery_level,
@@ -682,6 +689,32 @@ export function createServer({ out = OPT.out } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/cameras') {
         return sendJson(res, 200, allCameras(db).map(cameraFromRow));
+      }
+      // Put a camera where it actually is. Reported from the field 2026-08-30:
+      // pins still wrong after the sync was taught to read the camera's NEWEST
+      // fix — which cannot help when the fix the camera reports is itself
+      // wrong, as a cellular camera's under canopy routinely is.
+      //
+      // The camera id carries a provider prefix and a colon, so it is taken
+      // from the path as an opaque segment rather than matched as digits like
+      // a stand's. Sending {lat: null} hands the camera back to its own GPS —
+      // an override you cannot undo would be a worse trap than none.
+      const camMatch = url.pathname.match(/^\/api\/cameras\/(.+)$/);
+      if (camMatch) {
+        const id = decodeURIComponent(camMatch[1]);
+        if (req.method === 'PATCH' || req.method === 'PUT') {
+          const b = await readJson(req);
+          try {
+            return sendJson(res, 200, cameraFromRow(placeCamera(db, id, {
+              lat: b.lat === null ? null : b.lat,
+              lng: b.lng === null ? null : b.lng,
+            })));
+          } catch (err) {
+            return sendJson(res, /^no camera /.test(err.message) ? 404 : 400,
+              { error: err.message });
+          }
+        }
+        return sendJson(res, 405, { error: 'PATCH to move a camera' });
       }
       if (req.method === 'GET' && url.pathname === '/api/photos') {
         const limit = Math.min(1000, Number(url.searchParams.get('limit')) || 200);

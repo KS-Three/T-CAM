@@ -88,6 +88,7 @@ Rules for anything added from here:
 | **Wind recognition** — each frame fingerprinted in the browser (256-bit dHash, canvas); a visit matching the frames YOU reviewed as empty gets "Looks like wind" with the measured match; previews caption confirmed tags, the camera's claims, and the wind match | Driven end to end on real generated images: the empty burst hashed itself on arrival, N built the baseline, the animal-blob frame was refused wind talk (after the drive caught 9×8 hashing calling it a 97% match — the hash was rebuilt at 17×16), the empty-like visit was called at 100%, and the lightbox captions carried all three kinds of knowing |
 | **LiDAR basemap + shade overlay** — the browsable bare-earth hillshade (USGS 3DEP Gray-Stretch, rendered on demand, cached and offline-saveable like every tile); "LiDAR shade" lays the same rendering over the imagery with an overlay blend | Probed live first: the service refuses custom exaggeration (200-byte error stubs) and its fixed hillshades paint the flat home ground solid white, so Gray-Stretch — which normalises each window to its own relief — is the load-bearing choice, pinned by test; then driven in a real browser against live USGS through the real proxy at z16 and z17 (ditches, knobs and an old road legible on 12-ft-relief ground), the blend chosen from four screenshotted candidates (multiply dimmed dark canopy to mud; overlay kept structure), 117 tiles landing in the offline cache on the way |
 | **Camera GPS: newest fix wins** — status.coordinates is an ARRAY and the sync took [0]; a moved camera carries several and the pin stayed on the old spot. Newest dateTime now decides, and the camera card shows the fix date, flagged when it is much older than the last contact | Reported from the field 2026-08-30. Reproduced from the real document shape (two fixes, old one first), pinned both orders plus the undated cases; 616 tests |
+| **What has produced in these conditions** (step 5, the WHERE half) — pick rain / temperature / wind direction / wind strength / sky / barometer and each camera is ranked by sightings per 100 hours of it, with the raw counts beside every bar and the producing camera's nearest stand named. Runs over the days every compared camera was watching; refuses on untagged photos, under 10 condition-hours, or no overlap | 38 new tests (module + API), the reasoning unit-tested apart from the database and then again through one. Driven in a real browser against a seeded 3-camera, 21-day ground: the drive caught two bugs the tests could not — a box blind **222 m** from the producing camera ranked ahead of a ladder **41 m** from it on an equal rate, and compass labels lowercased into "No ne wind"; a screenshot then showed six empty wind sectors as six identical boxes, now one line. Re-driven after each: highlight lands on the next sit's bucket in both cuts, light and dark |
 
 Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
@@ -115,7 +116,10 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
   one session capture: [`moultrie-capture.md`](moultrie-capture.md).
 - **Phone app** — deliberately last, gated on the rest proving out. The server's
   JSON API is the boundary it would speak to.
-- **Steps 4 and 5** of the build plan: the tagging screen, then analysis.
+- **Steps 4 and 5 of the build plan are both built** — the tagging screen
+  (2026-08-29) and the analysis (2026-08-30). Step 5 is *built and empty*,
+  which is a different thing from working: it has never run on a tagged row,
+  because none exists. Everything it says about real data is still a promise.
 
 ## Public GPS collar data — answered 2026-08-28
 
@@ -176,6 +180,7 @@ Measured 2026-08-27, so the comparison is grounded rather than remembered.
 | Legal shooting hours | onX has a solunar/hours panel | **Yes, with the DNR named as the authority rather than the app** |
 | "Where do I sit tonight" in one screen | Neither does this in one place | **Yes — `/tonight`: stand, walk in, and when to leave** |
 | Where to hang the NEXT stand | Neither, directly | **Yes — terrain plus the winds no stand of yours covers, with the reasoning shown** |
+| Which stand produces in tonight's weather, from your own cameras | Neither — onX has no camera analysis, Spartan Forge predicts from OTHER deer | **Yes — camera-versus-camera during the same weather, over the days they were all watching, with the counts shown and the refusals kept** |
 | A record of what you actually saw | onX has waypoints, not sits | **Yes — and it is used to check this tool's own predictions, including refusing to** |
 | Track recording | onX, core | **Yes — and compared against the route you planned, which onX does not do** |
 | Line of sight / viewshed | onX | No — the elevation grid is already here, so this is buildable |
@@ -310,10 +315,21 @@ against nonsense arriving over the API, not enforcing a judgement.
    real visits, name the first bucks, and note any vendor AI word the mapping
    table showed verbatim (`db.mjs` `VENDOR_SPECIES`) so it can be taught the
    ones that are beyond doubt.
-5. **Analysis** (step 5) — WHEN/WHERE side by side with raw counts, on
-   `detectionsWithWeather()`, which now refuses unconfirmed rows by default.
-6. Moultrie, if a capture arrives.
-7. Historical imagery, if a working NAIP endpoint can be found.
+5. ~~**Analysis** (step 5)~~ **Built 2026-08-30** — `analysis.mjs`, `/api/where`,
+   and the Camp report section. It is empty until step 4 happens: it refuses
+   rather than reporting zeroes, and the refusal names Review. **The first
+   thing to check once a dozen visits are tagged** is whether the ten-hour
+   floor and the photo-day coverage rule behave on real, ragged data — a
+   camera that drops offline for a week is the case no fixture has.
+6. **A daylight cut** is the obvious next condition group and the most useful
+   one on a small dataset — "which camera produces at first light" needs no
+   weather join at all. It is not built because `weather_hours` stores no sun
+   times and every sunrise in this program comes from the forecast API; a
+   fixed clock band would repeat the mistake `wind-history.mjs` explicitly
+   avoids (sunrise moves over an hour across a season). It wants a small
+   tested solar calculator, which is its own piece of work.
+7. Moultrie, if a capture arrives.
+8. Historical imagery, if a working NAIP endpoint can be found.
 
 **Settled 2026-08-28: the sixteen wind tick-boxes are gone.** Kent's call. Two
 inputs for one answer is how they drift apart, and the boxes were the worse of
@@ -328,7 +344,7 @@ was then 2,100 lines of which about 1,300 were the map. The files now are:
 | File | Lines (2026-08-29) | Holds |
 | --- | --- | --- |
 | `spypoint-sync.mjs` | ~430 | the sync, and the files it writes |
-| `dashboard-page.mjs` | ~1,000 | alerts, wind rose, review queue, sit ranking, cards, photos |
+| `dashboard-page.mjs` | ~1,200 | alerts, wind rose, conditions table, review queue, sit ranking, cards, photos |
 | `map-view.mjs` | ~4,500 | the map: layers, pins, markers, routes, fields, lanes, measure, terrain, 3D, weather strip, parcels |
 | `tonight-page.mjs`, `journal-page.mjs`, `review-page.mjs` | ~400–830 each | one screen each |
 

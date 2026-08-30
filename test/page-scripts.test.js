@@ -139,6 +139,40 @@ test('a camera card carries its own latest photos, from what the page already ho
   assert.match(body, /No photos from this camera yet/);
 });
 
+test('the conditions section never shows a rate without the counts under it', () => {
+  // Design.md's evidence bar: with one season most real differences will not
+  // clear a formal test, so a bare rate — or worse, a bare verdict — hides
+  // that it rests on almost nothing. A camera under the floor is listed with
+  // its hours and deliberately not ranked, rather than dropped or scored.
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const script = inlineScript(dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z'));
+  const fn = script.slice(script.indexOf('function whereBars'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /r\.sightings \+ ' in ' \+ r\.hours \+ ' h'/,
+    'the raw counts ride beside every bar');
+  assert.match(body, /for \(const t of bucket\.thin\)/,
+    'and a camera under the hours floor is still listed');
+  assert.match(body, /' h — under ' \+ minHours/,
+    'saying what it is under, rather than showing a rate it has not earned');
+});
+
+test('the conditions section collapses the buckets the window never held', () => {
+  // Eight wind sectors with six of them empty was six identical boxes and a
+  // screen of scrolling. Only a screenshot showed it; the counts were right
+  // the whole time. The bucket tonight falls in is kept even when empty —
+  // "no NE wind here in three weeks" is the answer to the question asked.
+  const rows = [PROVIDERS.spypoint.normalizeCamera(FLEX_M)];
+  const script = inlineScript(dashboardHtml(rows, [], '2026-08-27T12:00:00.000Z'));
+  const fn = script.slice(script.indexOf('function renderWhere'));
+  const body = fn.slice(0, fn.indexOf('\nasync function loadWhere'));
+  assert.match(body, /w\.buckets\.filter\(b => b\.hours > 0 \|\| b\.key === nowBucket\)/);
+  assert.match(body, /'Never in this window: '/);
+  // The window itself is never implicit: it is what makes camera-versus-camera
+  // sound, and the thing most likely to explain a surprising answer.
+  assert.match(body, /Compared over the /);
+  assert.match(body, /were watching, ' \+ w\.common\.from/);
+});
+
 // Every page this program serves goes through the same template-literal
 // hazard, so every page is compiled here rather than only the one that has
 // been bitten. A new page added without a line in this file is a page that can

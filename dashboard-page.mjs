@@ -267,6 +267,29 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
   .windnote { margin-top: 12px; font-size: 13px; color: var(--muted); }
   .windnote b { color: var(--ink); }
   .windnote .gap { color: var(--warn); }
+  /* What has produced, in the conditions you are about to hunt. Same bar
+     vocabulary as the wind coverage above, because it is the same kind of
+     claim — a measured proportion with its raw counts beside it. */
+  .whhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 10px; }
+  .whhead select { font: inherit; font-size: 13px; padding: 4px 8px;
+                   border: 1px solid var(--line); border-radius: 7px;
+                   background: var(--panel); color: var(--ink); }
+  .whask { font-size: 13px; color: var(--muted); }
+  .whwin { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .whwin b { color: var(--ink); }
+  .whbucket { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+              margin-bottom: 8px; background: var(--panel); }
+  .whbucket.now { border-color: var(--accent); }
+  .whbucket h3 { margin: 0 0 8px; font-size: 13px; display: flex; gap: 8px;
+                 align-items: baseline; }
+  .whbucket .tag { font-size: 11px; font-weight: 600; color: var(--accent);
+                   border: 1px solid var(--accent); border-radius: 20px;
+                   padding: 0 7px; }
+  .whbucket .hrs { font-weight: 400; color: var(--muted); margin-left: auto; }
+  .whsays { font-size: 12px; color: var(--muted); }
+  .whsit { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .whsit b { color: var(--ink); }
   .reviewlink { font-size: 12px; font-weight: 400; color: var(--accent);
                 text-decoration: none; margin-left: 10px; }
   .sitplan { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
@@ -398,6 +421,8 @@ ${mapMarkup}
   <div id="planArea"></div>
   <h2 class="section">Which stands earn their keep</h2>
   <div id="windArea"></div>
+  <h2 class="section">What has produced in these conditions</h2>
+  <div id="whereArea"></div>
   <h2 class="section">Review photos <a class="reviewlink" id="reviewLink" href="/review">tag what is in them &rarr;</a></h2>
   <div id="reviewArea"></div>
   <h2 class="section">Where to sit</h2>
@@ -600,6 +625,150 @@ async function loadWindHistory() {
   windArea.appendChild(wrap);
 }
 loadWindHistory();
+// ---- what has produced, in these conditions ---------------------------
+// The WHERE half of the answer. The section above says which stands are worth
+// HAVING, from published weather; this says which one to sit, and it is built
+// from nothing but your own confirmed tags. Neither half feeds the other, so
+// combining them does not contaminate either — see design.md section 9.
+const whereArea = document.getElementById('whereArea');
+let whereGroup = 'rain';
+
+function whereBars(bucket, minHours) {
+  const bars = el('div', 'windbars');
+  const peak = Math.max.apply(null, bucket.ranked.map(r => r.per100).concat([0.0001]));
+  for (const r of bucket.ranked) {
+    const row = el('div', 'wbar');
+    row.appendChild(el('div', 'nm', r.name));
+    const track = el('div', 'track');
+    const fill = el('div', 'fill');
+    fill.style.width = (100 * r.per100 / peak) + '%';
+    track.appendChild(fill);
+    row.appendChild(track);
+    // The raw counts, never the rate alone. With one season most real
+    // differences will not clear a formal test, so the counts are the thing a
+    // person can actually judge — and 1-in-12-hours must not look like 5-in-600.
+    row.appendChild(el('div', 'val', r.sightings + ' in ' + r.hours + ' h'));
+    row.title = r.per100 + ' per 100 hours of this';
+    bars.appendChild(row);
+  }
+  for (const t of bucket.thin) {
+    // Listed, with its count, and deliberately not ranked.
+    const row = el('div', 'wbar unset');
+    row.appendChild(el('div', 'nm', t.name));
+    row.appendChild(el('div'));
+    row.appendChild(el('div', 'val', t.hours + ' h — under ' + minHours));
+    row.title = 'Not enough hours of this condition here yet for a rate to mean anything';
+    bars.appendChild(row);
+  }
+  return bars;
+}
+
+function renderWhere(w) {
+  whereArea.textContent = '';
+
+  const head = el('div', 'whhead');
+  const sel = el('select');
+  sel.id = 'whereGroup';
+  sel.title = 'Which condition to compare your cameras across';
+  for (const g of w.groups) {
+    const o = document.createElement('option');
+    o.value = g.key;
+    o.textContent = g.label;
+    if (g.key === w.group.key) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => { whereGroup = sel.value; loadWhere(); });
+  head.appendChild(sel);
+  head.appendChild(el('span', 'whask', w.group.ask));
+  whereArea.appendChild(head);
+
+  if (w.refusal) {
+    whereArea.appendChild(el('div', 'empty', w.refusal.says));
+    return;
+  }
+
+  // The window is never implicit: it is the thing most likely to explain a
+  // surprising answer, and the comparison is only sound because the cameras
+  // were watching at the same time.
+  const win = el('div', 'whwin');
+  win.appendChild(document.createTextNode('Compared over the '));
+  win.appendChild(el('b', null, plural(w.common.days, 'day')));
+  win.appendChild(document.createTextNode(' all ' + plural(w.cameras.length, 'camera')
+    + ' were watching, ' + w.common.from + ' to ' + w.common.to + '. '
+    + w.cameras.map(c => c.name + ' ' + c.days + ' d').join(' · ') + '.'));
+  if (w.sit) {
+    win.appendChild(document.createElement('br'));
+    win.appendChild(document.createTextNode('Next sit ' + w.sit.date + ' ' + w.sit.window
+      + ', wind ' + w.sit.windFrom + '.'));
+  }
+  whereArea.appendChild(win);
+
+  const nowBucket = w.tonight[w.group.key];
+  // A bucket the window never contained gets a line in a list, not a box of
+  // its own. Eight wind sectors with six of them empty was six identical
+  // boxes and a screen of scrolling — visible only in a screenshot.
+  const shown = w.buckets.filter(b => b.hours > 0 || b.key === nowBucket);
+  const never = w.buckets.filter(b => !shown.includes(b));
+
+  for (const b of shown) {
+    const box = el('div', 'whbucket' + (b.key === nowBucket ? ' now' : ''));
+    const h = el('h3');
+    h.appendChild(el('span', null, b.label));
+    if (b.key === nowBucket) h.appendChild(el('span', 'tag', 'next sit'));
+    h.appendChild(el('span', 'hrs', b.hours + ' h'));
+    box.appendChild(h);
+    if (b.ranked.length) {
+      box.appendChild(whereBars(b, w.minHours));
+      // A camera is not a place to sit. This is the sentence the tool exists
+      // to produce, and it is absent rather than invented where no stand
+      // covers the camera that produced.
+      if (b.stands.length) {
+        const line = el('div', 'whsit');
+        line.appendChild(document.createTextNode('Sit '));
+        line.appendChild(el('b', null, b.stands[0].stand));
+        line.appendChild(document.createTextNode(' — ' + b.stands[0].metres
+          + ' m from ' + b.stands[0].camera + '.'));
+        box.appendChild(line);
+      }
+    } else {
+      box.appendChild(el('div', 'whsays', b.says));
+    }
+    whereArea.appendChild(box);
+  }
+  if (never.length) {
+    whereArea.appendChild(el('div', 'whsays', 'Never in this window: '
+      + never.map(b => b.label).join(', ') + '.'));
+  }
+
+  const note = el('div', 'windnote');
+  note.textContent = 'Only tags you confirmed count — the camera’s own guess is a '
+    + 'claim, not evidence. A rate needs ' + w.minHours + ' hours of the condition behind '
+    + 'it; below that a camera is listed with its count but not ranked.';
+  whereArea.appendChild(note);
+}
+
+async function loadWhere() {
+  if (!D.live) {
+    whereArea.textContent = '';
+    whereArea.appendChild(el('div', 'empty',
+      'This needs the server — it counts your tags against the stored weather.'));
+    return;
+  }
+  whereArea.textContent = '';
+  whereArea.appendChild(el('div', 'empty', 'Counting sightings against the weather…'));
+  let w;
+  try {
+    const res = await fetch('/api/where?group=' + encodeURIComponent(whereGroup));
+    w = await res.json();
+    if (!res.ok) throw new Error(w.error || 'could not compare the cameras');
+  } catch (err) {
+    whereArea.textContent = '';
+    whereArea.appendChild(el('div', 'empty', 'Unavailable: ' + err.message));
+    return;
+  }
+  renderWhere(w);
+}
+loadWhere();
 // ---- review queue -----------------------------------------------------
 // A pointer to the screen where photos become data. Everything downstream —
 // buck identity, movement, the camera term in the stand ranking — waits on

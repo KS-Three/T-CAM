@@ -71,6 +71,9 @@ import {
   slopeAspect, metresToFeet, planGrid, slopeAspectAt, packElevations,
 } from './terrain.mjs';
 import { buildStamp, isStale, stampLine } from './build-stamp.mjs';
+import {
+  GROUPS, groupBy, whereTable, standsForBucket, bucketsForConditions, MIN_HOURS,
+} from './analysis.mjs';
 
 const argv = process.argv.slice(2);
 const has = f => argv.includes(f);
@@ -760,6 +763,55 @@ export function createServer({ out = OPT.out } = {}) {
           return sendJson(res, 502, { error: err.message });
         }
       }
+      // The WHERE half. The planner says which afternoon is worth sitting; this
+      // says which of your cameras has actually produced in those conditions,
+      // and which stand that puts you in.
+      //
+      // It reads nothing but your own confirmed tags — no forecast enters the
+      // scoring — so the two halves can be combined without contaminating each
+      // other. See analysis.mjs and design.md §9.
+      if (req.method === 'GET' && url.pathname === '/api/where') {
+        const group = url.searchParams.get('group') || 'rain';
+        if (!groupBy(group)) {
+          return sendJson(res, 400, {
+            error: `unknown condition group "${group}"`,
+            groups: GROUPS.map(g => ({ key: g.key, label: g.label })),
+          });
+        }
+        // 'any' means every species; anything else is one of them. Deer by
+        // default, because that is the question being asked.
+        const asked = url.searchParams.get('species');
+        const species = asked === 'any' ? null : (asked || 'deer');
+        const table = whereTable(db, { group, species });
+        const stands = allStands(db);
+
+        // Which bucket tonight falls in, so the page can open on the row that
+        // matters. Built from the sit the planner already scored: an hour it
+        // cannot place (the plan carries no cloud or barometer) simply selects
+        // nothing, rather than defaulting to a bucket nobody asked for.
+        const plan = await readPlan(out);
+        const now = Number(url.searchParams.get('now')) || Date.now();
+        const next = nextSits(plan?.sits ?? [], { now, count: 1 }).sits[0] ?? null;
+        const tonight = next ? bucketsForConditions({
+          precip_in: next.rain ?? null,
+          temp_f: next.temp ?? null,
+          wind_dir: next.windDir ?? null,
+          wind_mph: next.wind ?? null,
+        }) : {};
+
+        return sendJson(res, 200, {
+          ...table,
+          groups: GROUPS.map(g => ({ key: g.key, label: g.label, ask: g.ask })),
+          buckets: table.buckets.map(b => ({ ...b, stands: standsForBucket(b, stands) })),
+          minHours: MIN_HOURS,
+          tonight,
+          sit: next ? {
+            date: next.date, window: next.window, rating: next.rating,
+            windFrom: next.windFrom, temp: next.temp, rain: next.rain,
+          } : null,
+        });
+      }
+
       // The hourly forecast the map's weather strip scrubs. Same location
       // default as the wind history: the middle of your own ground.
       if (req.method === 'GET' && url.pathname === '/api/forecast') {

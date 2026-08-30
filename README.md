@@ -524,9 +524,67 @@ ground last November. It ranks *when* the weather and calendar favour a sit; you
 still choose *where*, and the wind direction is printed for every sit so you can.
 
 Every factor is published whitetail behaviour, not a pattern learned from your
-cameras. Once photos accumulate, those sightings can be scored against these
-same factors to find which ones actually predict movement on your ground — and
-at that point the evidence should correct this model, not the reverse.
+cameras. The other half of the answer — which stand, given those conditions —
+is built from your own photos instead, and is described next.
+
+## What has produced in these conditions
+
+The planner answers **when**. This answers **where**, and the two are kept apart
+on purpose.
+
+Open **Camp report → What has produced in these conditions**, pick a cut (rain,
+temperature, wind direction, wind strength, sky, barometer), and each of your
+cameras is listed with what it has actually seen during hours of that condition:
+
+```
+Raining                              84 h
+  North Ridge   ████████████████     21 in 84 h
+  Creek Bottom  ████                  4 in 84 h
+  Field Edge                          0 in 84 h
+  Sit Rain ladder — 41 m from North Ridge.
+```
+
+The last line is the point. A camera is not a place to sit; the stand that
+watches the camera that produced is.
+
+### Why this is sound in the first season, when fitting the planner is not
+
+Scoring the planner's own factors against your sightings is hopeless with one
+season of data: there is one rut, so rut phase, date and the November cold
+fronts are perfectly confounded. Forty sightings on 8 November cannot tell you
+whether that was the front, the rut, or that Tuesday.
+
+But *"it's raining this afternoon, which stand?"* is a comparison **between
+cameras during the same weather**, and every camera on your ground gets the same
+rain at the same moment. Rut phase, date, moon and barometer are held constant
+across the comparison for free. The confounding that wrecks time-based fitting
+does not touch camera-versus-camera at all.
+
+That guarantee has one condition, and it is enforced rather than assumed: **the
+cameras have to have been watching at the same time.** The comparison runs over
+the days every compared camera produced a photo, and the header says which days
+those were and how long each camera has been out. A camera that also ran through
+October does not bring October's deer into November's window.
+
+### What it refuses to do
+
+- **An untagged photo is not evidence.** Only tags you confirmed are counted.
+  The camera's own AI guess is a claim, and claims are excluded — which is why
+  a freshly synced week reads "nothing is tagged yet" rather than "no deer".
+- **A rate needs hours behind it.** Under ten hours of a condition, a camera is
+  listed with its raw count and is *not ranked* — a rate off three hours looks
+  exactly like a rate off three hundred.
+- **No common window, no ranking.** Cameras with no day in common are refused,
+  and the one that shortened the overlap is named.
+- **Counts always ride beside the rate.** With one season most genuine
+  differences will not clear a formal significance test, so applying one would
+  answer "no difference" nearly every time — correct, and useless. You can read
+  21-in-84 against 4-in-84 yourself; a bare verdict would hide how little it
+  rests on.
+
+A burst counts once. Cameras set to multiShot fire a dozen frames at one doe,
+and counting frames would make burst length look like deer activity — the unit
+is the visit, the same unit you tag in Review.
 
 ## The map is the app
 
@@ -727,8 +785,9 @@ is gated on sighting data.
 | Photo download and paging | **Working** — first real run 2026-08-29 found and fixed the one path bug |
 | Sighting log — deer per camera per hour | **Working** — the review screen, with the camera's own AI guess offered as a suggestion; only what a person confirms counts |
 | Individual buck identification | **Working, by hand** — name a buck in review and every later tag is one click. Assisted matching stays future work; automated re-identification from trail-camera images is not a solved problem |
-| Movement vs. weather, learned from your ground | Blocked: needs a season of sightings |
-| Stand recommendations from observed patterns | Blocked: needs all of the above |
+| Which camera produces in which conditions | **Working** — camera-versus-camera during the same weather, over the days they were all watching. Needs your tags, and says so until it has them |
+| Stand recommendations from observed patterns | **Working, as far as the data allows** — the producing camera's nearest stand, with the raw counts. It gets sharper with every evening you tag |
+| Movement vs. weather over time, learned from your ground | Blocked: needs a season of sightings, and one season cannot separate the rut from the fronts that land in it |
 
 ### It writes to the dashboard
 

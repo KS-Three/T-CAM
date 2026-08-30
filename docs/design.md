@@ -248,6 +248,30 @@ contaminating each other:
 
 Together: *"Rain this afternoon — hunt the stand near camera A."*
 
+### The condition the argument above depends on (added 2026-08-30, when it was built)
+
+Re-read the paragraph that makes camera-versus-camera sound: *"every camera
+experiences the same rain at the same moment."* That is only true of cameras
+that were **out at the same time**, and nothing in the original argument said so.
+
+It matters more than it looks. A camera that ran through November and one hung
+last Tuesday differ for reasons that have nothing to do with rain — the first one
+saw the rut. Compared on their own separate windows, the November camera wins
+every cut, and the tool would report a fact about the calendar as a fact about
+the ground. That is precisely the confounding the WHEN/WHERE split exists to
+avoid, arriving through the back door.
+
+So the ranked comparison runs over **the days every compared camera produced a
+photo**, and the header names them. Two consequences worth stating:
+
+- **Coverage is photo-days, not the archive.** A camera is credited only with
+  days it demonstrably watched. Counting every archived hour instead would
+  charge a camera hung last week with a whole autumn of "saw nothing" and it
+  would read as dead ground. The cost is a day the camera was live and triggered
+  nothing at all — which is also a day with no evidence either way.
+- **No overlap is a refusal, and it names the camera that cost it.** "No common
+  window" is not actionable; "Creek Bottom covers 3 days" is.
+
 ### The evidence bar
 
 A recommendation is never given as a bare verdict. Every stand ranking carries its

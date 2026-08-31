@@ -248,6 +248,76 @@ contaminating each other:
 
 Together: *"Rain this afternoon — hunt the stand near camera A."*
 
+### A suggestion has to survive four filters, and three of them drop (settled 2026-08-31)
+
+The suggester's first real outing produced five spots: three standing on a
+state highway, two in somebody's yard, and none of them on the property Kent
+was looking at. Every one of those was a separate hole, and the reasoning
+behind each patch matters more than the patch.
+
+- **"Your ground" is a set of PARCELS, not an owner's name.** The first version
+  took the commonest owner string under your stands and kept anything matching
+  it. That works until it meets a real account: one property deeded to a person
+  and the other to that same person's revocable trust is two owner strings, one
+  vote each, and a tie-break silently decided which of the two properties the
+  tool believed in. Now the anchors' parcels are collected whole — id, owner
+  and boundary — and a candidate is on your ground when it falls *inside* one
+  of those shapes. That answer costs no request and compares no strings; a
+  parcel is a shape on record, and a shape either contains a point or does not.
+  Owner name survives only as a fallback for matching a parcel next door.
+
+- **"No parcel here" is an answer; "the service did not reply" is not.** These
+  were one branch, and both were kept-and-flagged. But the state parcel layer
+  covers the whole state — its gaps are highway right-of-way, rail corridor and
+  open water, which is precisely why three suggestions could stand on Highway
+  21 wearing a note nobody read. The layer *answering* that there is no parcel
+  now drops the spot. The layer *failing to answer* still keeps it and flags
+  it, because dropping on a hiccup would hide good ground silently, and that
+  refusal is the older decision and still the right one.
+
+- **Ownership is not habitability.** One of the two real properties carries property class
+  1 alongside 4/5/5M: it is Kent's ground *and* there is a house on it, so no
+  ownership test can ever exclude the yard. That needs a different question,
+  asked of a different source — OpenStreetMap, for buildings and classified
+  roads (`builtup.mjs`). Two judgement calls in it, both parameters: 120 m off
+  a building, 60 m off a road. And `service`, `track`, `path` and `footway` are
+  deliberately NOT roads — a two-track through the woods is where you want to
+  be, and treating farm lanes as highway would refuse the best ground on an
+  agricultural property. A spot that fails this is dropped, not marked down: a
+  stand eighty metres off the blacktop is not a worse stand, it is not a stand.
+
+- **Anything off the screen is left out.** The endpoint worked a fixed circle
+  around the map centre whatever the zoom, so at hunting zoom most of its
+  answer was beyond the edge and arrived as a pin you had to go looking for.
+  The map now sends its bounds. The clip runs FIRST, before any lookup, so
+  every spot it removes is a parcel query not spent.
+
+- **The boundary is fetched BEFORE generating, not after.** With all four
+  filters in and the generator still working the whole circle, the two real
+  properties came back with one suggestion and zero: a terrain radius is a
+  circle, a property is not, and on a twenty the circle is four-fifths the
+  neighbour's, so the shortlist was spent on ground certain to be thrown away.
+  The parcels under your pins are now resolved once, up front, and the
+  landforms are narrowed to the ones inside them before any wind is paired with
+  anything — same lookups, used twice. It restored the same two requests to
+  five suggestions and three. Two guards on it: an anchor filter that empties
+  the list is *ignored* rather than obeyed, because "no landforms on your
+  ground" and "nothing to say" look identical on a map; and the per-candidate
+  ownership check still runs afterwards, so a parcel you own next door — with
+  no pin on it, therefore not in the boundary set — is still found.
+
+**And the suggester — alone — scopes to one ground.** This is the per-property
+filtering the grounds entry above says is a new decision rather than a default,
+so: it applies to `/api/suggest-stands` and nothing else. The planner and
+/tonight still rank across both lands, because "the best sit tonight is at the
+other place" is a real answer. "Hang a new stand here" is not — it is a
+question about one property, and answering it with every pin you own is what
+let a stand forty kilometres away decide whose ground this one is.
+
+None of this upgrades the caveat. These are still places to go and WALK: OSM is
+incomplete, the parcel layer is a tax record rather than a survey, and nothing
+here knows whether there is a tree.
+
 ### The evidence bar
 
 A recommendation is never given as a bare verdict. Every stand ranking carries its

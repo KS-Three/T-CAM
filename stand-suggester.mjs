@@ -30,6 +30,7 @@
 
 import { bearing, angleBetween, COMPASS, CONE_HALF_ANGLE_DEG, offsetPoint } from './routes.mjs';
 import { distanceM } from './db.mjs';
+import { pointInRings } from './parcels.mjs';
 
 /**
  * How far downwind of the feature to sit.
@@ -146,6 +147,7 @@ export function suggestStands({
   minFromStandM = MIN_FROM_STAND_M,
   limit = 5,
   halfAngleDeg = CONE_HALF_ANGLE_DEG,
+  keepAnchor = null,
 } = {}) {
   const notes = [];
   if (!features) {
@@ -167,11 +169,27 @@ export function suggestStands({
         + 'missing — press "Which stands earn their keep" first for that.');
   }
 
-  const anchors = anchorPoints(features);
+  // Landforms worth pairing with a wind. `keepAnchor` narrows them to ground
+  // the caller already knows is yours — and it is a real fix rather than a
+  // tidy-up: a terrain radius is a circle, a property is not, and on a twenty
+  // the circle is four-fifths somebody else's. Spending the shortlist's places
+  // on ground that the ownership filter is certain to throw away is how a
+  // request for five suggestions came back with one.
+  let anchors = anchorPoints(features);
+  const anchorsFound = anchors.length;
+  if (typeof keepAnchor === 'function') {
+    const near = anchors.filter(a => keepAnchor(a.lat, a.lng));
+    // Only if it leaves something. An anchor filter that empties the list has
+    // told you nothing except that the landforms are off the parcel, and the
+    // unnarrowed answer with its exclusions counted is more use than silence.
+    if (near.length) anchors = near;
+  }
   if (!anchors.length) {
     return {
       candidates: [],
-      note: 'No landforms were found in the loaded terrain. Pan to different ground and load it again.',
+      note: anchorsFound
+        ? 'No landforms were found on your own ground in the loaded terrain.'
+        : 'No landforms were found in the loaded terrain. Pan to different ground and load it again.',
       notes,
     };
   }
@@ -298,26 +316,100 @@ export function suggestStands({
   };
 }
 
+
 /**
- * Filter and annotate suggestions against who actually owns the ground.
+ * Filter and annotate suggestions against the ground you actually hunt.
  *
  * This is the difference between a shortlist of five and a shortlist you would
  * genuinely walk: a spot on the neighbour's side of the line is not a stand
  * site, however good the saddle, and a spot you cannot reach without crossing
  * their ground costs you a conversation before it costs you anything else.
  *
- * "Your ground" is worked out rather than configured: the parcels under your
- * existing stands, and the commonest owner among them is taken to be you. That
- * is an inference and it is labelled as one — a stand on a friend's permission
- * ground would vote for the wrong owner, so the response says whose ground it
- * judged against and every exclusion is counted out loud.
+ * "Your ground" is a set of PARCELS, not a name. The first version took the
+ * commonest owner name under your stands and kept anything whose owner string
+ * matched — which broke the first time it met a real account: two properties
+ * forty kilometres apart, one deeded to a person and the other to that same
+ * person's revocable trust. Two owner strings, one vote each, and a tie-break
+ * decided which property the tool believed in. Half the time it judged one
+ * property against the other one's owner name.
+ *
+ * So the anchors' parcels are collected whole — id, owner AND boundary — and a
+ * candidate is on your ground when it falls inside one of those boundaries.
+ * That answer needs no lookup at all and no name comparison, which is the
+ * point: a parcel is a shape on record, and a shape either contains a point or
+ * does not. A candidate outside every known boundary is still looked up, in
+ * case you own the parcel next door too, and matched by parcel id first and
+ * owner name only as a fallback.
+ *
+ * The two ways of not being on your ground are now told apart, because they
+ * are different facts and only one of them is a service problem:
+ *
+ *   - the lookup FAILED — kept, and flagged. Dropping on a hiccup would
+ *     silently hide good ground every time the service coughs.
+ *   - the lookup SUCCEEDED and there is no parcel — dropped. The parcel layer
+ *     covers the whole state; the gaps in it are highway right-of-way, rail
+ *     corridor and open water. "No parcel here" is a real answer and not a
+ *     fault — parcels.mjs says exactly that about its own return value — and
+ *     treating it as unknown is what put three suggestions on a state highway.
  *
  * `lookup` is parcelAt or a stand-in: on-demand, cached in memory by the
  * parcel module, never written anywhere. This adds a handful of lookups per
  * suggestion run, all on ground you are already asking the tool about.
  */
+
+/**
+ * Two parcels are the same parcel when the county's own id matches. Owner name
+ * is the fallback for a layer, or a stub, that carries no ids — good enough to
+ * group parcels, never good enough to decide ownership on its own.
+ */
+const parcelKey = p => (p?.parcelId ? `id:${p.parcelId}` : (p?.owner ? `owner:${p.owner}` : null));
+
+/**
+ * Which parcels are yours, worked out once.
+ *
+ * Separated from the filtering because the answer is needed BEFORE the
+ * suggestions exist: knowing the boundary is what lets the generator spend its
+ * shortlist on ground you can actually hunt instead of proposing twenty spots
+ * for the ownership filter to throw nineteen of away. One pass of lookups,
+ * used twice.
+ */
+export async function resolveHomeGround({ lookup, stands = [], at = null } = {}) {
+  const empty = { home: [], homeKeys: new Set(), ownerVotes: new Map(), homeOwner: null, sawFailure: false, anchors: [] };
+  if (typeof lookup !== 'function') return empty;
+
+  const tryLookup = async (lat, lng) => {
+    try { return { ok: true, parcel: await lookup(lat, lng) }; }
+    catch { return { ok: false, parcel: null }; }
+  };
+
+  const home = [];
+  const homeKeys = new Set();
+  const ownerVotes = new Map();
+  let sawFailure = false;
+  const anchors = stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  if (!anchors.length && at) anchors.push(at);
+  for (const a of anchors.slice(0, 8)) {
+    const r = await tryLookup(a.lat, a.lng);
+    if (!r.ok) { sawFailure = true; continue; }
+    if (!r.parcel) continue;
+    if (r.parcel.owner) ownerVotes.set(r.parcel.owner, (ownerVotes.get(r.parcel.owner) ?? 0) + 1);
+    const k = parcelKey(r.parcel);
+    if (!k || homeKeys.has(k)) continue;
+    homeKeys.add(k);
+    home.push(r.parcel);
+  }
+  const homeOwner = [...ownerVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return { home, homeKeys, ownerVotes, homeOwner, sawFailure, anchors };
+}
+
+/** A test for "inside a boundary you own" — the answer that costs no request. */
+export function insideGround(ground, lat, lng) {
+  return !!ground?.home?.some(p => pointInRings(p.rings, lng, lat));
+}
+
 export async function onYourGround(result, {
   lookup, stands = [], at = null, limit = 5, accessSamples = [0.25, 0.5, 0.75],
+  ground = null,
 } = {}) {
   if (!result?.candidates?.length || typeof lookup !== 'function') return result;
 
@@ -326,37 +418,56 @@ export async function onYourGround(result, {
     catch { return { ok: false, parcel: null }; }
   };
 
-  // Whose ground is "yours": the parcels under your stands, majority vote,
-  // falling back to the parcel at the search centre when there are no stands.
-  const votes = new Map();
-  let sawFailure = false;
-  const anchors = stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-  if (!anchors.length && at) anchors.push(at);
-  for (const a of anchors.slice(0, 6)) {
-    const r = await tryLookup(a.lat, a.lng);
-    if (!r.ok) { sawFailure = true; continue; }
-    if (r.parcel?.owner) votes.set(r.parcel.owner, (votes.get(r.parcel.owner) ?? 0) + 1);
-  }
-  const home = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  // Whose ground is "yours": every parcel under a pin of yours, kept whole.
+  // Handed in when the caller already worked it out to narrow the generator.
+  const resolved = ground ?? await resolveHomeGround({ lookup, stands, at });
+  const { home, homeKeys, ownerVotes, homeOwner, sawFailure, anchors } = resolved;
 
   const notes = [...(result.notes ?? [])];
-  if (!home) {
+  if (!home.length) {
     notes.push(sawFailure
       ? 'The parcel service did not answer, so nothing here is confirmed to be on '
         + 'your ground — check the boundary before walking any of it.'
       : 'No parcel was found under your stands (outside Wisconsin, or no stands '
         + 'yet), so ownership was not checked.');
-    return { ...result, notes, homeOwner: null };
+    return { ...result, notes, homeOwner: null, homeParcels: [] };
   }
+
+  /** Inside a boundary you already own — the answer that costs nothing. */
+  const insideHome = c => home.some(p => pointInRings(p.rings, c.lng, c.lat));
+
+  /** Is this looked-up parcel one of yours? Id first, owner name as fallback. */
+  const isHomeParcel = p => {
+    const k = parcelKey(p);
+    if (k && homeKeys.has(k)) return true;
+    return !!(p?.owner && ownerVotes.has(p.owner));
+  };
 
   const kept = [];
   let droppedOffGround = 0;
+  let droppedNoParcel = 0;
   for (const c of result.candidates) {
     if (kept.length >= limit) break;
-    const r = await tryLookup(c.lat, c.lng);
-    if (!r.ok || !r.parcel) {
-      // Unknown is not "yours": it is kept, but flagged, because dropping it
-      // would silently hide good ground every time the service hiccups.
+
+    let standing;                                     // true | false | null
+    if (insideHome(c)) {
+      standing = true;
+    } else {
+      const r = await tryLookup(c.lat, c.lng);
+      if (!r.ok) {
+        standing = null;
+      } else if (!r.parcel) {
+        // The layer answered and there is nothing here: right-of-way or water.
+        droppedNoParcel++;
+        continue;
+      } else {
+        standing = isHomeParcel(r.parcel);
+      }
+    }
+
+    if (standing === false) { droppedOffGround++; continue; }
+
+    if (standing === null) {
       kept.push({
         ...c, onYourGround: null,
         reasons: [...c.reasons, {
@@ -367,12 +478,13 @@ export async function onYourGround(result, {
       });
       continue;
     }
-    if (r.parcel.owner && r.parcel.owner !== home) { droppedOffGround++; continue; }
 
     // The walk. A straight line from your nearest stand, sampled at a few
     // points: if any of them is somebody else's, getting there without a
     // detour means crossing the line. A penalty and a named reason rather than
-    // an exclusion, because a longer legal walk usually exists.
+    // an exclusion, because a longer legal walk usually exists. A sample that
+    // lands on no parcel at all is a road, and crossing a road is not the
+    // problem this is looking for.
     const near = anchors.reduce((best, s) => {
       const d = distanceM(c.lat, c.lng, s.lat, s.lng);
       return !best || d < best.d ? { s, d } : best;
@@ -382,9 +494,11 @@ export async function onYourGround(result, {
       for (const t of accessSamples) {
         const lat = near.s.lat + (c.lat - near.s.lat) * t;
         const lng = near.s.lng + (c.lng - near.s.lng) * t;
+        if (insideHome({ lat, lng })) continue;
         const rr = await tryLookup(lat, lng);
-        if (rr.ok && rr.parcel?.owner && rr.parcel.owner !== home) {
-          crossing = rr.parcel.owner;
+        if (!rr.ok || !rr.parcel) continue;
+        if (!isHomeParcel(rr.parcel)) {
+          crossing = rr.parcel.owner ?? 'somebody else';
           break;
         }
       }
@@ -406,11 +520,23 @@ export async function onYourGround(result, {
 
   if (droppedOffGround) {
     notes.push(`${droppedOffGround} spot${droppedOffGround === 1 ? '' : 's'} landed on `
-      + 'ground with a different owner and ' + (droppedOffGround === 1 ? 'was' : 'were')
+      + 'a parcel with a different owner and ' + (droppedOffGround === 1 ? 'was' : 'were')
       + ' dropped.');
   }
-  notes.push(`Ownership judged against the commonest owner under your stands. `
-    + 'If some of your stands are on permission ground, read these with that in mind.');
+  if (droppedNoParcel) {
+    notes.push(`${droppedNoParcel} spot${droppedNoParcel === 1 ? '' : 's'} landed where the `
+      + 'parcel layer has no parcel at all — a road right-of-way, a rail corridor or open '
+      + `water — and ${droppedNoParcel === 1 ? 'was' : 'were'} dropped.`);
+  }
+  notes.push('Your ground was taken to be the parcels under your own pins'
+    + (homeOwner ? ` (${homeOwner})` : '')
+    + '. If some of those are permission ground, read these with that in mind.');
 
-  return { ...result, candidates: kept, notes, homeOwner: home };
+  return {
+    ...result,
+    candidates: kept,
+    notes,
+    homeOwner,
+    homeParcels: home.map(p => ({ parcelId: p.parcelId ?? null, owner: p.owner ?? null })),
+  };
 }

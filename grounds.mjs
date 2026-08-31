@@ -97,6 +97,41 @@ export function groundsFrom(points, { gapM = GROUND_GAP_M } = {}) {
   return grounds;
 }
 
+/**
+ * Which ground a point is on, or null for open country between them.
+ *
+ * The switcher needed this the moment anything else did work "here": a request
+ * that says only where the map is scrolled has no idea which property it is
+ * about, and the parts of this program that reason about YOUR stands — what
+ * winds you are short of, whose ground the neighbour is — get the wrong answer
+ * when they are handed every pin from both places at once.
+ *
+ * Inside a ground's bounds settles it. Otherwise the nearest centre wins, but
+ * only within the same walking-distance gap the clustering uses: pan out to
+ * the county road halfway between two properties and the honest answer is
+ * neither, not whichever happens to be nearer.
+ */
+export function groundAt(grounds, lat, lng, { gapM = GROUND_GAP_M } = {}) {
+  if (!Array.isArray(grounds) || !grounds.length) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const inside = grounds.filter(g => g && g.bounds
+    && lat >= g.bounds.south && lat <= g.bounds.north
+    && lng >= g.bounds.west && lng <= g.bounds.east);
+  const pool = inside.length ? inside : grounds;
+
+  let best = null;
+  for (const g of pool) {
+    const d = distanceM(lat, lng, g.centre.lat, g.centre.lng);
+    if (!best || d < best.d) best = { g, d };
+  }
+  if (!best) return null;
+  // A point inside the bounds is on that ground however far the centre is —
+  // a long skinny property's centre can be several hundred metres from a
+  // corner you are standing in.
+  return inside.length || best.d <= gapM ? best.g : null;
+}
+
 /** What an unnamed ground is called in a list: what is on it, plainly. */
 export function describeGround(g) {
   const parts = [];

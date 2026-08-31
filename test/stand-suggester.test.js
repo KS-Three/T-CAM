@@ -328,3 +328,135 @@ test('with the whole service down, nothing is claimed about ownership at all', a
   assert.equal(r.candidates.length, base.candidates.length, 'nothing was dropped blind');
   assert.ok(r.notes.some(n => /did not answer/.test(n)));
 });
+
+// ---- the ground is a set of parcels, not an owner's name -----------------
+// The failure these pin: a real account with two properties, one deeded to a
+// person and the other to that same person's revocable trust. Two owner
+// strings, one vote each, and a tie-break decided which property the tool
+// believed in — so half the time it judged one property against the other
+// one's owner name and threw away every suggestion on good ground.
+
+/** A closed square ring of about `halfDeg` degrees around a point. */
+const ringAround = (lat, lng, halfDeg = 0.004) => [[
+  [lng - halfDeg, lat - halfDeg], [lng + halfDeg, lat - halfDeg],
+  [lng + halfDeg, lat + halfDeg], [lng - halfDeg, lat + halfDeg],
+  [lng - halfDeg, lat - halfDeg],
+]];
+
+test('two parcels of yours under two owner names are both your ground', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  // West half is deeded to the person, east half to their trust. Every
+  // candidate in the fixture sits inside one or the other.
+  const WEST = { parcelId: 'W1', owner: 'A PERSON', rings: ringAround(44.122, -90.6555, 0.005) };
+  const EAST = { parcelId: 'E1', owner: 'A PERSON REVOCABLE TRUST', rings: ringAround(44.121, -90.6440, 0.005) };
+  const lookup = async (lat, lng) => (lng < -90.650 ? WEST : EAST);
+  const base = groundResult();
+  const r = await onYourGround(base, {
+    lookup,
+    stands: [
+      { id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 },
+      { id: 2, name: 'East oak', lat: 44.120, lng: -90.6445 },
+    ],
+    limit: 8,
+  });
+  assert.equal(r.homeParcels.length, 2, 'both deeds were collected, not voted between');
+  assert.ok(r.candidates.length >= 2, 'ground on both parcels survived');
+  assert.ok(r.candidates.every(c => c.onYourGround === true));
+  assert.ok(!r.notes.some(n => /different owner/.test(n)), 'neither half is the neighbour');
+});
+
+test('a spot inside a boundary you own costs no lookup at all', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  // A parcel is a shape on record: if the point is inside it, no name has to
+  // be compared and no second request has to be made.
+  const HOME = { parcelId: 'H1', owner: 'A PERSON', rings: ringAround(44.1225, -90.652, 0.01) };
+  let calls = 0;
+  const lookup = async () => { calls++; return HOME; };
+  const base = groundResult();
+  const r = await onYourGround(base, {
+    lookup, stands: [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 }], limit: 8,
+  });
+  assert.equal(calls, 1, 'one lookup, for the anchor — the rest were answered by the shape');
+  assert.ok(r.candidates.length >= 1);
+  assert.ok(r.candidates.every(c => c.onYourGround === true));
+});
+
+test('no parcel at all is a highway, and a highway is dropped', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  // The bug this fixes. The parcel layer covers the whole state; its gaps are
+  // right-of-way, rail and water. Reading "no parcel" as "unknown" kept three
+  // suggestions standing on a state highway, flagged with a note nobody read.
+  const HOME = { parcelId: 'H1', owner: 'A PERSON', rings: [] };
+  const lookup = async (lat, lng) => (lng > -90.6500 ? null : HOME);
+  const base = groundResult();
+  assert.ok(base.candidates.some(c => c.lng > -90.6500), 'the fixture has a spot out there');
+  const r = await onYourGround(base, {
+    lookup, stands: [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 }], limit: 8,
+  });
+  assert.ok(r.candidates.every(c => c.lng <= -90.6500), 'nothing survived on the right-of-way');
+  assert.ok(r.notes.some(n => /no parcel at all/.test(n)));
+  assert.ok(r.notes.some(n => /road right-of-way/.test(n)), 'and it says what that means');
+});
+
+test('a failed lookup is still kept — a hiccup must not hide good ground', async () => {
+  const { onYourGround } = await import('../stand-suggester.mjs');
+  // The distinction the fix turns on: the service SAYING there is no parcel is
+  // an answer, the service not answering is not. Only the first one drops.
+  const HOME = { parcelId: 'H1', owner: 'A PERSON', rings: [] };
+  const lookup = async (lat, lng) => {
+    if (lng > -90.6500) throw new Error('service down');
+    return HOME;
+  };
+  const base = groundResult();
+  const r = await onYourGround(base, {
+    lookup, stands: [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 }], limit: 8,
+  });
+  assert.ok(r.candidates.some(c => c.onYourGround === null), 'the unreachable ones stayed');
+  assert.ok(!r.notes.some(n => /no parcel at all/.test(n)), 'and were not counted as right-of-way');
+});
+
+test('the shortlist is spent on ground you own, not on ground about to be dropped', () => {
+  // A terrain radius is a circle and a property is not. Generating into the
+  // whole circle produced twenty candidates for the ownership filter to throw
+  // nineteen of away, and a request for five came back with one.
+  const spread = features({
+    saddles: [saddle(44.120, -90.6520), saddle(44.1235, -90.6560), saddle(44.121, -90.6430)],
+  });
+  const west = (lat, lng) => lng < -90.650;
+  const wide = suggestStands({ features: spread, gaps: [{ point: 'E', pct: 9 }], limit: 5 });
+  const narrowed = suggestStands({
+    features: spread, gaps: [{ point: 'E', pct: 9 }], limit: 5, keepAnchor: west,
+  });
+  assert.ok(wide.candidates.some(c => c.feature.lng >= -90.650),
+    'unnarrowed, the shortlist includes ground over the line');
+  assert.ok(narrowed.candidates.length, 'narrowed still returns a shortlist');
+  assert.ok(narrowed.candidates.every(c => west(c.feature.lat, c.feature.lng)),
+    'every suggestion is now anchored on ground the caller vouched for');
+});
+
+test('an anchor filter that empties the list is ignored, not obeyed', () => {
+  // Silence is worse than the unnarrowed answer with its exclusions counted:
+  // "no landforms on your ground" and "nothing to say" look identical on a map.
+  const spread = features({ saddles: [saddle(44.120, -90.652)] });
+  const nowhere = () => false;
+  const r = suggestStands({
+    features: spread, gaps: [{ point: 'E', pct: 9 }], limit: 5, keepAnchor: nowhere,
+  });
+  assert.ok(r.candidates.length, 'it fell back rather than returning nothing');
+});
+
+test('the home ground is resolved once and reused, not looked up twice', async () => {
+  const { resolveHomeGround, onYourGround, insideGround } = await import('../stand-suggester.mjs');
+  const HOME = { parcelId: 'H1', owner: 'A PERSON', rings: ringAround(44.1225, -90.652, 0.01) };
+  let calls = 0;
+  const lookup = async () => { calls++; return HOME; };
+  const stands = [{ id: 1, name: 'West ladder', lat: 44.127, lng: -90.657 }];
+  const ground = await resolveHomeGround({ lookup, stands });
+  assert.equal(calls, 1);
+  assert.equal(ground.homeOwner, 'A PERSON');
+  assert.ok(insideGround(ground, 44.1225, -90.652), 'the boundary answers without a request');
+  assert.ok(!insideGround(ground, 44.30, -90.652));
+
+  await onYourGround(groundResult(), { lookup, stands, ground, limit: 8 });
+  assert.equal(calls, 1, 'the handed-in ground was not re-fetched');
+});

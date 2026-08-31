@@ -51,7 +51,9 @@ import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.mjs';
 import { evidenceFor } from './evidence.mjs';
 import { individualsFor } from './individuals.mjs';
-import { suggestStands, onYourGround } from './stand-suggester.mjs';
+import { suggestStands, onYourGround, resolveHomeGround, insideGround } from './stand-suggester.mjs';
+import { groundsFrom, groundAt } from './grounds.mjs';
+import { builtUpNear, clearOfBuiltUp, BUILDING_STANDOFF_M } from './builtup.mjs';
 import { windsForStand } from './coverage.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
 import { buildTrack, compareToRoute } from './track.mjs';
@@ -1447,6 +1449,37 @@ export function createServer({ out = OPT.out } = {}) {
         }
         const radiusM = Math.min(1200, Math.max(150, Number(url.searchParams.get('radius')) || 500));
 
+        // What the map can actually see. Without this the answer is a 500 m
+        // circle around the centre whatever the zoom, so half of it is off the
+        // edge of the screen and a suggestion arrives as a pin you have to hunt
+        // for. Optional: a caller that sends no bounds gets the old behaviour.
+        // Number(null) is 0 and Number('') is 0, so a missing edge would become
+        // the equator or the prime meridian and clip everything away — the same
+        // trap the lat/lng fallback above exists to dodge. Absent is absent.
+        const boundsNum = k => {
+          const raw = url.searchParams.get(k);
+          if (raw === null || raw.trim() === '') return null;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : null;
+        };
+        const view = ['north', 'south', 'east', 'west'].every(k => boundsNum(k) !== null)
+          ? { north: boundsNum('north'), south: boundsNum('south'),
+              east: boundsNum('east'), west: boundsNum('west') }
+          : null;
+
+        // WHICH property this is about. Everything below reasons about "your"
+        // stands, and handing it every pin from both places is how a stand
+        // forty kilometres away came to decide whose ground this one is. The
+        // grounds are the same clusters the map's switcher shows.
+        const allPins = [
+          ...cams.map(c => ({ id: c.id, kind: 'camera', lat: c.lat, lng: c.lng, property: c.property ?? null })),
+          ...stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+            .map(s => ({ id: s.id, kind: 'stand', lat: s.lat, lng: s.lng, property: s.property ?? null })),
+        ];
+        const here = groundAt(groundsFrom(allPins), lat, lng);
+        const standIds = here ? new Set(here.ids.stand) : null;
+        const myStands = standIds ? stands.filter(s => standIds.has(s.id)) : stands;
+
         // Terrain is the one slow input, and it is cached forever once fetched
         // because the ground does not move. Everything else is local.
         let terrain = null;
@@ -1484,35 +1517,88 @@ export function createServer({ out = OPT.out } = {}) {
             : { lat, lng };
           clim = windClimatology(db, c.lat, c.lng, SEASON_MONTHS, 7);
         } catch { clim = null; }
-        const coverage = clim ? standCoverage(stands, clim) : null;
+        const coverage = clim ? standCoverage(myStands, clim) : null;
 
         const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5));
-        // Over-generate, because the ownership filter below may drop spots that
-        // landed over the line, and a shortlist that starts at five and loses
-        // three is a shortlist of two for no reason.
+        const checkParcels = url.searchParams.get('parcels') !== 'off';
+
+        // Work out the boundary BEFORE generating, so the shortlist can be
+        // spent on ground you can hunt. A terrain radius is a circle and a
+        // property is not: on a twenty the circle is four-fifths the
+        // neighbour's, and generating into it produced twenty candidates for
+        // the ownership filter to throw nineteen of away.
+        let ground = null;
+        if (checkParcels) {
+          ground = await resolveHomeGround({
+            lookup: (a, b) => parcelAt(a, b),
+            stands: myStands, at: { lat, lng },
+          });
+        }
+        const keepAnchor = ground?.home?.length
+          ? (a, b) => insideGround(ground, a, b)
+          : null;
+
+        // Over-generate anyway, because the checks the boundary cannot make —
+        // the edge of the screen, the house, the blacktop — still take spots
+        // out, and a shortlist that starts at five and loses three is a
+        // shortlist of two for no reason.
         let result = suggestStands({
           features: terrain.features,
-          stands,
+          stands: myStands,
           markers: allMarkers(db),
           gaps: coverage?.gaps ?? [],
           climatology: clim,
-          limit: limit * 3,
+          limit: limit * 4,
+          keepAnchor,
         });
+
+        // Clip to what you are looking at, BEFORE the lookups: every spot
+        // dropped here is a parcel query and a distance sweep not spent.
+        if (view && result.candidates?.length) {
+          const before = result.candidates.length;
+          result.candidates = result.candidates.filter(c =>
+            c.lat >= view.south && c.lat <= view.north
+            && c.lng >= view.west && c.lng <= view.east);
+          const gone = before - result.candidates.length;
+          if (gone) {
+            result.notes = [...(result.notes ?? []),
+              `${gone} spot${gone === 1 ? '' : 's'} came out beyond the edge of the map `
+              + `and ${gone === 1 ? 'was' : 'were'} left out — zoom out and press it again `
+              + 'to see the whole property.'];
+          }
+        }
+
         // Keep suggestions on ground you can actually hunt. On-demand lookups
         // through the same in-memory parcel cache the map's card uses — nothing
         // is written anywhere. ?parcels=off skips it (outside Wisconsin, or the
         // service is down and you just want the terrain answer).
-        if (url.searchParams.get('parcels') !== 'off') {
+        if (checkParcels) {
           result = await onYourGround(result, {
             lookup: (a, b) => parcelAt(a, b),
-            stands, at: { lat, lng }, limit,
+            stands: myStands, at: { lat, lng }, limit: limit * 2,
+            ground,
           });
-        } else {
-          result.candidates = result.candidates.slice(0, limit);
         }
+
+        // And off the blacktop and out of the yard. Last, because it is the
+        // one filter that goes to a service the rest of the program does not
+        // use, and a failure here must cost a note rather than the answer.
+        if (url.searchParams.get('builtup') !== 'off') {
+          let built = null, unavailable = null;
+          try {
+            built = await builtUpNear(lat, lng, radiusM + BUILDING_STANDOFF_M);
+          } catch (err) {
+            unavailable = err.message;
+          }
+          result = clearOfBuiltUp(result, { built, unavailable });
+        }
+        result.candidates = (result.candidates ?? []).slice(0, limit);
+
         return sendJson(res, 200, {
           ...result,
           at: { lat, lng, radiusM },
+          view,
+          ground: here ? { name: here.name, counts: here.counts } : null,
           windHistoryLoaded: !!clim,
         });
       }

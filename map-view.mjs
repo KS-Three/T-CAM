@@ -2164,7 +2164,13 @@ async function loadSuggestions() {
   suggestBtn.textContent = 'Thinking\u2026';
   terrainNote('Reading the ground and your wind history\u2026');
   try {
-    const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6);
+    // The bounds go with the centre so the server can leave out what you
+    // cannot see. A suggestion off the edge of the screen is a pin you have to
+    // go hunting for, and it reads as the tool ignoring where you are looking.
+    const vb = visibleBounds();
+    const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6)
+      + '&north=' + vb.north.toFixed(6) + '&south=' + vb.south.toFixed(6)
+      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6);
     const res = await fetch('/api/suggest-stands' + q);
     const body = await res.json();
     // The endpoint says WHY it could not answer — no stands yet, no LiDAR

@@ -32,6 +32,7 @@ import {
   allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
+  setCameraView,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
   upsertProperty, allProperties, assignPropertyMembers, setPhotoPhash, emptyBaseline,
   saveWindClimatology, windClimatology,
@@ -61,6 +62,7 @@ import { nextSits, resolveSit, whenLabel, departure } from './tonight.mjs';
 import { WISCONSIN_DEER } from './legal-light.mjs';
 import { isHash, windMatch } from './phash.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
+import { parseView, cameraView, facingLine, CAMERA_SPREAD_DEG } from './camera-view.mjs';
 import { reviewHtml } from './review-page.mjs';
 import { tonightHtml } from './tonight-page.mjs';
 import { journalHtml } from './journal-page.mjs';
@@ -135,7 +137,16 @@ export function cameraFromRow(r) {
     plan: r.plan,
     photoCount: r.photo_count,
     photoLimit: r.photo_limit,
+    cycleStart: r.cycle_start ?? null,
+    cycleEnd: r.cycle_end ?? null,
     lastSeen: r.last_seen,
+    // Which way it looks, and what that works out to. The derivation travels
+    // with the camera for the same reason a stand's lane winds do: the map,
+    // the card and the API re-deriving a bearing separately is how they start
+    // quoting different numbers for one cone.
+    view: parseView(r.view),
+    facing: cameraView({ lat: r.lat, lng: r.lng, view: r.view }),
+    facingLine: facingLine({ lat: r.lat, lng: r.lng, view: r.view }),
   };
 }
 
@@ -695,6 +706,40 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/cameras') {
         return sendJson(res, 200, allCameras(db).map(cameraFromRow));
       }
+      // Point a camera, or unpoint it. PATCH rather than PUT: everything else
+      // on a camera belongs to the provider and is overwritten by the next
+      // sync, and this one field is the owner's.
+      const camMatch = url.pathname.match(/^\/api\/cameras\/(.+)$/);
+      if (camMatch && (req.method === 'PATCH' || req.method === 'PUT')) {
+        const id = decodeURIComponent(camMatch[1]);
+        const b = await readJson(req);
+        if (!('view' in b)) {
+          return sendJson(res, 400, { error: 'only "view" can be set on a camera' });
+        }
+        // null clears it. Anything else must parse as a cone, or it is a
+        // mistake worth reporting rather than a facing worth storing.
+        let view = null;
+        if (b.view !== null && b.view !== undefined) {
+          view = parseView(b.view);
+          if (!view) {
+            return sendJson(res, 400,
+              { error: 'view must be {"to":[lng,lat]} with an optional spread in degrees' });
+          }
+          // Normalised on write, so the stored cone always carries its own
+          // width. The browser draws from the stored spread and falls back to
+          // the LANE default (10 deg) when there is none — which is not the
+          // camera default (21) — so leaving it out meant the drawn cone and
+          // the reported width disagreed about the same camera. One definition,
+          // written down once, at the point the value enters the store.
+          if (!Number.isFinite(view.spread)) view.spread = CAMERA_SPREAD_DEG;
+        }
+        try {
+          return sendJson(res, 200, cameraFromRow(setCameraView(db, id, view)));
+        } catch (err) {
+          return sendJson(res, 404, { error: err.message });
+        }
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/photos') {
         const limit = Math.min(1000, Number(url.searchParams.get('limit')) || 200);
         return sendJson(res, 200, recentPhotos(db, limit));

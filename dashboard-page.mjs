@@ -28,6 +28,7 @@
  * cards below are unaffected.
  */
 
+import { quotaOf } from './quota.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { mapStyles, mapMarkup, mapScript } from './map-view.mjs';
 import { registerSnippet } from './offline.mjs';
@@ -56,7 +57,7 @@ const STALE_DAYS = 30;
 const RANK = { ok: 0, warn: 1, bad: 2 };
 const worst = (a, b) => (RANK[b] > RANK[a] ? b : a);
 
-function healthOf(r) {
+function healthOf(r, now = Date.now()) {
   let level = 'ok';
   const notes = [];
   const age = daysSince(r.lastSeen);
@@ -68,7 +69,17 @@ function healthOf(r) {
     if (r.battery <= 10) { level = worst(level, 'bad'); notes.push(`battery ${r.battery}%`); }
     else if (r.battery <= 30) { level = worst(level, 'warn'); notes.push(`battery ${r.battery}%`); }
   }
-  return { level, notes, age };
+
+  // A camera out of transmission quota is as dark as one with a dead battery,
+  // and far quieter about it: it keeps reporting battery, signal and GPS while
+  // sending no more photos until the cycle turns over. Folding it in here is
+  // what puts it on the card, the map pin and the alert list at once.
+  const quota = quotaOf(r, now);
+  if (quota.level !== 'ok' && quota.note) {
+    level = worst(level, quota.level);
+    notes.push(quota.note);
+  }
+  return { level, notes, age, quota };
 }
 
 // Embedding JSON in a <script> block: the only sequence that can break out is
@@ -156,6 +167,9 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
            justify-content: space-between; margin-bottom: 20px; }
   h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 13px; }
+  .qnote { font-size: 12px; color: var(--muted); margin: -2px 0 8px; }
+  .qwarn { color: var(--warn); }
+  .qbad { color: var(--bad); font-weight: 600; }
   .alert { border-left: 3px solid var(--bad); background: var(--panel);
            padding: 12px 16px; border-radius: 0 8px 8px 0; margin-bottom: 20px; }
   .alert h2 { margin: 0 0 6px; font-size: 14px; }
@@ -427,9 +441,34 @@ const daysBetween = (a, b) => {
 document.getElementById('sub').textContent =
   D.cameras.length + ' camera' + (D.cameras.length === 1 ? '' : 's') +
   ' \u00b7 synced ' + new Date(D.generatedAt).toLocaleString();
-const planned = D.cameras.find(c => c.plan);
-if (planned) document.getElementById('plan').textContent =
-  planned.plan + ' plan \u00b7 ' + planned.photoCount + '/' + planned.photoLimit + ' photos this cycle';
+// Photo quota is metered PER CAMERA. This line used to print whichever
+// camera came back first and label it "the plan", which is precisely
+// backwards: the camera worth naming is the one that has stopped sending,
+// and that was the one the line hid. Total the metered cameras, then say
+// which ones are in trouble.
+const metered = D.cameras.filter(c => c.health.quota.limit !== null);
+if (metered.length) {
+  const used = metered.reduce((n, c) => n + c.health.quota.used, 0);
+  const cap = metered.reduce((n, c) => n + c.health.quota.limit, 0);
+  const dry = metered.filter(c => c.health.quota.level === 'bad');
+  const low = metered.filter(c => c.health.quota.level === 'warn');
+  const planEl = document.getElementById('plan');
+  planEl.textContent = (metered[0].plan || 'Unknown') + ' plan \u00b7 '
+    + used + '/' + cap + ' photos this cycle';
+  // Counts, not names. The banner shares one line with the map toolbar and
+  // is ellipsised at the header edge - spelling out a camera name pushed
+  // the words that matter ('out of quota') off the end, which was worse
+  // than saying nothing. The names are in the alert list below, at full
+  // width, and both counts are shown: a camera already dry must not hide
+  // the two behind it that are about to be.
+  const bits = [];
+  if (dry.length) bits.push(dry.length + ' out of quota');
+  if (low.length) bits.push(low.length + ' running low');
+  if (bits.length) {
+    planEl.appendChild(el('span', dry.length ? 'qbad' : 'qwarn',
+      ' \u00b7 ' + bits.join(', ')));
+  }
+}
 
 // ---- the report drawer -------------------------------------------------
 // The old page, on demand. Open it, find your card, close it, and the map is
@@ -834,6 +873,29 @@ function cameraCard(c, { withId = true } = {}) {
     card.appendChild(line('Temperature', c.tempValue + '\u00b0' + (c.tempUnit || '')));
   if (typeof c.memUsed === 'number' && typeof c.memSize === 'number')
     card.appendChild(line('SD card', c.memUsed + ' / ' + c.memSize + ' MB'));
+
+  // Transmission quota, drawn like the battery because it fails the same
+  // way: reach the end and the camera goes dark without announcing it. The
+  // SD card line directly above is the consolation - the pictures are still
+  // being taken, they are just no longer being sent.
+  const q = c.health.quota;
+  if (q.limit !== null) {
+    card.appendChild(line('Photo quota',
+      q.used + ' / ' + q.limit + (q.plan ? ' (' + q.plan + ')' : '')));
+    card.appendChild(meter(q.pct * 100,
+      q.level === 'bad' ? 'var(--bad)' : q.level === 'warn' ? 'var(--warn)' : 'var(--ok)'));
+    if (q.note) {
+      const n = el('div', 'qnote'
+        + (q.level === 'bad' ? ' qbad' : q.level === 'warn' ? ' qwarn' : ''), q.note);
+      if (q.cycleEnd) n.title = 'Allowance resets ' + fmtDate(q.cycleEnd);
+      card.appendChild(n);
+    }
+  }
+  // Which way it looks. Absent rather than guessed when nobody has said: a
+  // camera defaulted to north would put a measured bearing and an assumed one
+  // in the same row, and everything downstream would believe both equally.
+  if (c.facingLine) card.appendChild(line('Facing', c.facingLine));
+
   card.appendChild(line('Last contact', fmtDate(c.lastSeen) +
     (c.health.age !== null ? ' (' + c.health.age + 'd)' : '')));
 

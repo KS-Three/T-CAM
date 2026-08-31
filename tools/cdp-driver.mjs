@@ -31,6 +31,8 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 function findChromium() {
@@ -38,6 +40,9 @@ function findChromium() {
   const fixed = [
     '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   ];
   for (const p of fixed) if (existsSync(p)) return p;
   // Claude's cloud environment ships Playwright's build under /opt/pw-browsers.
@@ -62,7 +67,10 @@ export async function launch(port = 9333, { width = 1200, height = 900 } = {}) {
   const proc = spawn(findChromium(), [
     '--headless=new', '--remote-debugging-port=' + port, '--no-sandbox',
     '--disable-gpu', '--hide-scrollbars', `--window-size=${width},${height}`,
-    '--user-data-dir=/tmp/cdp-profile-' + port, 'about:blank',
+    // os.tmpdir(), not a hardcoded /tmp: on Windows that path does not exist,
+    // Chrome exits before it opens the debugging port, and the only symptom is
+    // "chromium never answered" sixty times a quarter-second apart.
+    '--user-data-dir=' + path.join(os.tmpdir(), 'cdp-profile-' + port), 'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
   let ws = null;

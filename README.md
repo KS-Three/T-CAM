@@ -366,6 +366,43 @@ Updates are partial, so a rename cannot silently clear the winds — a real risk
 since that would quietly turn a known-good stand into one the tool refuses to
 recommend.
 
+## Which way a camera looks
+
+Select a camera on the map, press **Set facing**, and click the ground it
+watches. That one click fixes both the bearing and the reach, and the cone is
+drawn from the same geometry as a shooting lane — because a camera's detection
+zone *is* a lane: a wedge from a point, out to a distance, this wide. The card
+then reads `Facing NE 45° · 43 m`, and the cone shows whenever that camera is
+selected, the same way a stand's lanes do.
+
+Defaults are a 21° half-angle (the FLEX-M's detection zone is quoted at about
+42° across) and 25 m of reach. Both are starting points to drag, not facts
+about your camera: mounting height and undergrowth change what it really sees,
+and the photos are the evidence.
+
+**An unset facing stays unset.** A camera nobody has pointed shows no Facing row
+and no cone, rather than defaulting to north — a guessed bearing drawn in the
+same ink as a measured one is worse than none, because nothing downstream can
+then tell them apart. **Clear facing** exists for the same reason: a bearing
+recorded before the camera was moved is worse than no bearing, and removing it
+is the only honest correction.
+
+The facing is **yours**, not SpyPoint's, so `upsertCamera` leaves it alone —
+every other column on a camera is overwritten each sync, and a facing in that
+list would silently unpoint every camera every hour. A test pins it.
+
+### What this cannot tell you on its own
+
+Knowing a camera faces north tells you which ground it photographs. It does
+**not** tell you which way a deer in that photograph was walking. A deer in a
+north-facing frame may be heading east, west, toward the camera or away from
+it, and the bearing alone cannot separate those four.
+
+What separates them is where the animal sits from frame to frame across a
+burst — left-to-right across a north-facing frame is eastward, right-to-left is
+westward, growing larger is toward the camera. This is half of a direction,
+deliberately, and it refuses to imply the other half.
+
 ## Who owns this ground
 
 Press **Who owns this?** on the map and click anywhere: owner name, acreage,
@@ -445,7 +482,8 @@ clear". These remain places to go and **walk**.
 ```
 spypoint-data/
   dashboard.html      map + camera cards + photo grid, opens offline
-  cameras.csv         location, battery, signal, temperature, memory, plan, last seen
+  cameras.csv         location, battery, signal, temperature, memory, plan,
+                      photo quota and its billing cycle, last seen
   cameras.raw.json    the untouched camera documents
   photos.jsonl        one line per photo (id, camera, date, species tags, url)
   photos/<camera>/<YYYY-MM>/<photoId>.jpg
@@ -511,12 +549,59 @@ public.
 - **Photos are the transmitted versions** — the compressed cellular uploads.
   Full-resolution originals stay on the camera's SD card; HD retrieval still
   goes through the SpyPoint app and your plan.
+- **The plan's photo cap is not something this can lift.** It applies to what
+  the camera transmits, so the cloud never holds more than the allowance and
+  neither can any client. What this does instead is see the wall coming, and
+  keep every photo that *was* transmitted, permanently, on your own disk. See
+  [Photo quota](#photo-quota).
 - **A camera only has photos while it's transmitting.** Cameras silent for more
   than 30 days are flagged before the sync runs, because an empty result from a
   dormant camera is the expected outcome, not a failure.
 - **Be gentle.** Requests are paced (~250 ms between API calls, ~150 ms between
   downloads) with no retry storms. Hourly is plenty — cameras only upload a few
   times a day on their own schedule.
+
+## Photo quota
+
+A SpyPoint plan meters **transmission**, per camera, per billing cycle — 100
+photos a month on the free plan. Spend the allowance and the camera carries on
+taking pictures and quietly stops sending them. Nothing fails, nothing is
+reported, and the only symptom is a photo grid that stops growing. Cameras have
+gone dark for a fortnight this way.
+
+So every sync now reads each camera's own allowance and says where it stands:
+
+```
+Photo quota this billing cycle:
+  Fremont South  [#---------] 10/100   0.3/day - lasts the cycle
+  Fremont North  [##########] 100/100  quota spent, 14 days left in cycle
+  East Side      [######----] 60/100   3.6/day - quota dry 2026-09-11, 2 days before the cycle ends
+  South Side     [#########-] 88/100   only 12 photos left, 14 days of cycle to go
+
+QUOTA: 3 of 4 camera(s) are at or near their limit:
+```
+
+Two rules raise a flag, and the second is the one worth having:
+
+- **80% of the allowance spent** — the obvious one, and on its own it arrives
+  too late to do anything about.
+- **The burn rate will not last the cycle.** Photos so far, divided by days
+  elapsed, against what is left. East Side above is only 60% spent and still in
+  trouble; a camera on a field edge during a corn harvest can spend a month's
+  allowance in four days. This fires while there is still time to move it,
+  slow its trigger down, or decide it is worth paying for.
+
+Both are per camera. There is no account-wide number that means anything here —
+one camera at 100/100 and three at 10/100 average out to "fine".
+
+Quota also colours the camera card, its map pin and the Needs attention list on
+the dashboard, the same way a flat battery does, because it is the same kind of
+failure: the camera is up, reporting, and sending nothing.
+
+**None of this raises the cap.** The limit is enforced at transmission, before
+any of this can see it — no client can download a photo that was never sent.
+The full-resolution originals of everything, including whatever was never
+transmitted, are on the camera's SD card.
 
 ## Hunt planner
 

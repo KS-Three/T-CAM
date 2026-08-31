@@ -564,6 +564,41 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 13,
+    name: 'billing cycle bounds for the photo quota',
+    up: db => {
+      // photo_count / photo_limit have been stored since the first migration,
+      // but a fraction with no cycle behind it cannot say anything useful. The
+      // camera that has spent 60% of its allowance is fine on day 25 and in
+      // trouble on day 6, and only these two dates tell the difference.
+      //
+      // Both are nullable and stay null for any provider that does not meter
+      // photos at all. A null must read as "no limit known", never as a limit
+      // of zero — quota.mjs refuses to alarm on either of these being absent.
+      db.exec('ALTER TABLE cameras ADD COLUMN cycle_start TEXT;');
+      db.exec('ALTER TABLE cameras ADD COLUMN cycle_end   TEXT;');
+    },
+  },
+  {
+    version: 14,
+    name: 'which way a camera is pointed',
+    up: db => {
+      // One shooting lane, as JSON: {"to":[lng,lat],"spread":deg}. A camera's
+      // detection zone IS a cone from a point out to a distance, which is what
+      // a lane already is, so the geometry, the drag handles and the drawing
+      // are the ones that already exist rather than a second copy.
+      //
+      // NULL means nobody has said which way it looks, and must keep meaning
+      // that. A camera defaulted to north would draw a measured bearing and a
+      // guessed one in the same ink.
+      //
+      // The provider never supplies this - it is the owner's knowledge, not
+      // SpyPoint's - so upsertCamera leaves it alone on conflict, the same way
+      // it leaves property_id alone. A sync must not unpoint every camera.
+      db.exec('ALTER TABLE cameras ADD COLUMN view TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -728,16 +763,17 @@ export function upsertCamera(db, row, { provider, accountLabel = null, raw = nul
   const id = `${provider}:${row.id}`;
   const loc = weatherLocationFor(db, row.lat, row.lng);
   const now = nowIso();
-  const existing = db.prepare('SELECT id, first_seen_at, property_id FROM cameras WHERE id = ?').get(id);
+  const existing = db.prepare(
+    'SELECT id, first_seen_at, property_id, view FROM cameras WHERE id = ?').get(id);
 
   db.prepare(`
     INSERT INTO cameras (
       id, provider, account_label, native_id, property_id, weather_location_id,
       name, model, lat, lng, gps_fix, battery, battery_level, battery_source,
       signal, signal_bars, signal_level, signal_type, temp_value, temp_unit,
-      mem_used, mem_size, plan, photo_count, photo_limit, last_seen, raw,
-      first_seen_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      mem_used, mem_size, plan, photo_count, photo_limit, cycle_start, cycle_end,
+      last_seen, raw, view, first_seen_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       account_label = excluded.account_label,
       weather_location_id = excluded.weather_location_id,
@@ -750,19 +786,40 @@ export function upsertCamera(db, row, { provider, accountLabel = null, raw = nul
       temp_value = excluded.temp_value, temp_unit = excluded.temp_unit,
       mem_used = excluded.mem_used, mem_size = excluded.mem_size,
       plan = excluded.plan, photo_count = excluded.photo_count,
-      photo_limit = excluded.photo_limit, last_seen = excluded.last_seen,
+      photo_limit = excluded.photo_limit,
+      cycle_start = excluded.cycle_start, cycle_end = excluded.cycle_end,
+      last_seen = excluded.last_seen,
       raw = excluded.raw, updated_at = excluded.updated_at
+      -- view is NOT here on purpose: it is the owner's knowledge, and a sync
+      -- that overwrote it would unpoint every camera every hour.
   `).run(
     id, provider, accountLabel, String(row.id), existing?.property_id ?? null,
     loc?.id ?? null, row.name, row.model, row.lat, row.lng, row.gpsFix,
     row.battery, row.batteryLevel, row.batterySource,
     row.signal, row.signalBars, row.signalLevel, row.signalType,
     row.tempValue, row.tempUnit, row.memUsed, row.memSize,
-    row.plan, row.photoCount, row.photoLimit, row.lastSeen,
-    raw ? JSON.stringify(raw) : null,
+    row.plan, row.photoCount, row.photoLimit,
+    row.cycleStart ?? null, row.cycleEnd ?? null, row.lastSeen,
+    raw ? JSON.stringify(raw) : null, existing?.view ?? null,
     existing?.first_seen_at ?? now, now);
 
   return db.prepare('SELECT * FROM cameras WHERE id = ?').get(id);
+}
+
+/**
+ * Point a camera, or unpoint it.
+ *
+ * `view` is stored as given after the caller has validated it; passing null
+ * clears the facing back to "nobody has said", which has to stay reachable —
+ * a bearing recorded from a camera that has since been moved is worse than
+ * none, and the only honest fix is to remove it.
+ */
+export function setCameraView(db, id, view) {
+  const r = db.prepare(
+    'UPDATE cameras SET view = ?, updated_at = ? WHERE id = ? RETURNING *')
+    .get(view === null || view === undefined ? null : JSON.stringify(view), nowIso(), id);
+  if (!r) throw new Error(`no camera ${id}`);
+  return r;
 }
 
 export function upsertPhoto(db, { provider, cameraId, nativeId, takenAt,

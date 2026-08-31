@@ -337,6 +337,35 @@ test('a caller that brought its own abort signal is not folded in', async () => 
   assert.equal(slow.calls.length, 2);
 });
 
+test('two concurrent writers of one tile both finish, and the tile is whole', async () => {
+  // Undeduplicated concurrent fetches of the SAME tile in ONE process are a
+  // supported state — a caller with its own signal is deliberately not folded
+  // in — so the part file cannot be named per process alone. It was, and the
+  // second rename found the file the first had already moved: ENOENT, and the
+  // caller got no tile. The pid keeps processes apart; a counter keeps calls
+  // apart.
+  const out = tmp();
+  const slow = gatedTiles([7, 7, 7, 7]);
+  const runs = [
+    getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl }),
+    getTile(out, 'satellite', 14, 4066, 5949,
+      { fetchImpl: slow.impl, signal: new AbortController().signal }),
+    getTile(out, 'satellite', 14, 4066, 5949,
+      { fetchImpl: slow.impl, signal: new AbortController().signal }),
+  ];
+  await until(() => slow.calls.length === 3, 'all three to reach upstream');
+  slow.release();
+  const settled = await Promise.allSettled(runs);
+  const failed = settled.filter(r => r.status === 'rejected');
+  assert.deepEqual(failed.map(r => String(r.reason)), [], 'none may fail');
+
+  // And exactly one whole tile is left on disk, with no part files beside it.
+  const dir = path.join(tileDir(out), 'satellite', '14', '4066');
+  const left = fs.readdirSync(dir);
+  assert.deepEqual(left, ['5949.png'], 'one finished tile, no leftovers');
+  assert.deepEqual([...fs.readFileSync(path.join(dir, '5949.png'))], [7, 7, 7, 7]);
+});
+
 test('saving a view for offline waits for real bytes, stale is not good enough', async () => {
   // Everywhere else an old tile is fine to draw with. Here it is not: the point
   // is to come back with bytes that will still be there in the woods.

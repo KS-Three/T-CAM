@@ -28,6 +28,16 @@
  * concern and are converted at the edge, not stored.
  */
 
+// Do not "upgrade" this to the Wisconsin DNR service, however tempting it
+// looks — and it looks tempting. It is genuinely better data (Waushara is 2 ft
+// against 3DEP's 1 m, and its getSamples answers at 0.6 m), and since
+// 2026-08-31 tile-sources.mjs draws the LiDAR basemap from that very service
+// for exactly that reason. But its point sampling is unusable, measured the
+// same day: 10 points in 13.5 s, 100 in 29.2 s, and a timeout before 300 —
+// against 0.8–1.1 s for 300 points here. A grid is thousands of points in
+// batches of 900, so one grid would take hours. Their image pyramid is quick;
+// their point sampler is not. The same goes for pointing
+// TRAILCAM_ELEVATION_URL at it: that override exists for tests and mirrors.
 const DEFAULT_ENDPOINT =
   'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples';
 

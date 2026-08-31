@@ -882,7 +882,8 @@ remembered per browser.
 | **Hybrid** | Esri imagery + place/boundary labels | 19 |
 | **Map** | OpenStreetMap | 19 |
 | **Terrain** | USGS Topo | 17 |
-| **LiDAR** | USGS 3DEP bare-earth hillshade, rendered on demand | 17 |
+| **LiDAR** | Wisconsin DNR bare-earth hillshade, rendered on demand | 18 |
+| **LiDAR (US)** | USGS 3DEP bare-earth hillshade, rendered on demand | 17 |
 
 Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
 staring at blank tiles past its coverage.
@@ -950,22 +951,39 @@ press back to your ground.
 
 ### LiDAR
 
-The **LiDAR** layer is the bare-earth hillshade the paid apps sell, from the
-same free USGS 3DEP the Terrain button already reads — but browsable: pan
-anywhere and the ground texture is simply there, no button to press. On it a
-two-foot ditch, an old logging road, a knob a deer beds behind all read at a
-glance, under canopy the satellite cannot see through. **LiDAR shade** in the
-overlays list is the same rendering laid over the imagery instead of replacing
-it, so the draw and the standing corn read together.
+The **LiDAR** layer is the bare-earth hillshade the paid apps sell, free and
+browsable: pan anywhere and the ground texture is simply there, no button to
+press. On it a two-foot ditch, an old logging road, a knob a deer beds behind
+all read at a glance, under canopy the satellite cannot see through. **LiDAR
+shade** in the overlays list is the same rendering laid over the imagery
+instead of replacing it, so the draw and the standing corn read together.
 
-Three honest notes. The shading is **stretched to each rendered window's own
-relief** — that is why flat sand country shows its two-foot draws at all
-(a fixed hillshade paints it solid white; measured) — so grey levels are
-relative: compare shapes within a view, not brightness across views, and
-expect a faint tone step at the odd tile edge. Tiles are **rendered on
-demand by USGS**, so the first look at new ground takes seconds; every tile
-is then cached like the rest, offline included. And it needs 3DEP coverage,
-which most of the country has and not every corner does.
+It comes from **Wisconsin's own DEM** rather than the federal one, because on
+this ground it is better in every way that was measured (2026-08-31). The state
+mosaic is county-flown: Waushara is 2017 at a **2-foot** DEM against 3DEP's
+1 m. More importantly the DNR service accepts a **hillshade rule of our own**,
+where USGS refuses custom parameters and leaves you picking from its fixed
+menu. That exaggeration was chosen by eye on flat Waushara sand — too little
+and it washes out, too much and raster noise becomes texture that is not on the
+ground. It is also the *fastest* of the options tried, at roughly half the
+per-tile time of the federal layer.
+
+Three honest notes. Wisconsin's DEM is a **patchwork of county flights**, so
+resolution and relief character can change at a county line — Waupaca next door
+is 3 m data from 2005. Tiles are **rendered on demand**, so the first look at
+new ground takes a moment; every tile is then cached like the rest, offline
+included. And it stops at the state line: outside Wisconsin the layer is simply
+blank.
+
+**LiDAR (US)** is USGS 3DEP, kept for exactly that reason — it is national. Its
+shading is **stretched to each rendered window's own relief**, which is what
+lets flat sand country show its two-foot draws at all (a fixed federal
+hillshade paints it solid white; measured), at the cost of grey levels being
+relative: compare shapes within a view, not brightness across views. **LiDAR
+shade (US)** is its over-imagery twin. The two LiDAR layers are deliberately
+separate map layers rather than one switched in place — tiles are cached per
+layer for 90 days, so sharing a name would have quietly served a mixture of
+both renderings of the same ground.
 
 This layer is for *scanning* ground by eye. The **Terrain** button is still
 the analysis: it fetches the actual elevations and finds the draws, ridges,

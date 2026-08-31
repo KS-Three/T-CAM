@@ -439,6 +439,44 @@ owned. ArcGIS makes this easy to get wrong: it reports its own errors *inside*
 a 200 response, so checking the status code alone would turn a broken service
 into "no parcel here". A test pins that.
 
+### What "Suggest a stand" will not suggest
+
+The first real run of the suggester returned five spots: three on a state
+highway, two in a yard, and none of them on the property that was on screen.
+Each was its own hole, and each is now closed.
+
+- **Somebody else's ground.** Your ground is worked out as the *parcels* under
+  your own pins — the boundary, not the owner's name. Names looked fine until
+  two properties turned up deeded to a person and to that same person's trust:
+  two names, and the tool picked one and threw away every suggestion on the
+  other property. A shape either contains a point or it does not.
+- **Ground that is not a parcel at all.** The state layer covers the whole
+  state; its gaps are highway right-of-way, rail corridor and open water. That
+  is where three of the five were standing. The layer *saying* there is no
+  parcel now drops the spot. The service *failing to answer* still keeps it,
+  flagged — a bad afternoon at ArcGIS should not quietly hide good ground.
+- **The yard and the blacktop.** Owning the ground does not make it huntable:
+  a forty with a farmhouse on it is your ground and the yard is still the yard,
+  so ownership can never catch that one. Buildings and classified roads come
+  from OpenStreetMap — 120 m off a building, 60 m off a road, both adjustable.
+  Field roads, two-tracks and footpaths are deliberately *not* roads; that is
+  where you want to be.
+- **Anything off the screen.** The map sends what it can see and the answer is
+  clipped to it, so a suggestion is a pin you can find.
+- **The other property.** The suggester alone works on the ground under the map
+  centre. The planner and `/tonight` still rank across both places, because
+  "the best sit tonight is at the other place" is a useful answer — but "hang a
+  new stand here" is a question about one property.
+
+Every drop is counted out loud in the notes under the button. `?parcels=off`
+and `?builtup=off` skip the two external checks.
+
+**The honest limit:** OSM's building coverage is per-place. One of the two real
+properties has 28 buildings mapped within 1.2 km; the other has *none* within
+1.5 km, though there is certainly a house on it. So the answer says when OSM
+had nothing to check against, rather than letting "unmapped" read as "all
+clear". These remain places to go and **walk**.
+
 ## Output
 
 ```

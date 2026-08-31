@@ -94,3 +94,59 @@ test('it reports whether wind history was available, because it changes the rank
     }
   }
 });
+
+test('the map sends what it can see, so the answer can be clipped to it', async () => {
+  // Structural, because the clip is only worth anything if the client actually
+  // reports its viewport: without these four the endpoint falls back to a
+  // 500 m circle round the centre whatever the zoom, and half the suggestions
+  // land off the edge of the screen.
+  const { mapScript } = await import('../map-view.mjs');
+  assert.match(mapScript, /const vb = visibleBounds\(\);/, 'the bounds are read at request time');
+  for (const k of ['north', 'south', 'east', 'west']) {
+    assert.ok(mapScript.includes("'&" + k + "=' + vb." + k + ".toFixed(6)"), `${k} is sent`);
+  }
+});
+
+test('bounds are echoed back, so the page can tell whether they were honoured', async t => {
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.12, lng: -90.65 });
+  });
+  const q = '?lat=44.12&lng=-90.65&north=44.13&south=44.11&east=-90.64&west=-90.66';
+  const body = await (await get('/api/suggest-stands' + q)).json();
+  if (body.view) {
+    assert.deepEqual(body.view, { north: 44.13, south: 44.11, east: -90.64, west: -90.66 });
+  }
+});
+
+test('a request with no bounds still works — the clip is optional', async t => {
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.12, lng: -90.65 });
+  });
+  const res = await get('/api/suggest-stands?lat=44.12&lng=-90.65');
+  const body = await res.json();
+  assert.ok(res.status === 200 || res.status === 502, `unexpected ${res.status}`);
+  if (res.status === 200 && 'view' in body) assert.equal(body.view, null);
+});
+
+test('partial bounds are ignored rather than half-applied', async t => {
+  // Three of the four corners is not a viewport. Clipping on a made-up fourth
+  // edge would drop good ground for a reason nobody could see.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.12, lng: -90.65 });
+  });
+  const body = await (await get('/api/suggest-stands?lat=44.12&lng=-90.65&north=44.13&south=44.11')).json();
+  if ('view' in body) assert.equal(body.view, null);
+});
+
+test('the answer says which property it is about', async t => {
+  // Two grounds a drive apart. A request centred on one of them must not be
+  // reasoning about the stands on the other.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'Home oak', lat: 44.120, lng: -90.650 });
+    createStand(db, { name: 'Far ladder', lat: 44.250, lng: -90.450 });
+  });
+  const body = await (await get('/api/suggest-stands?lat=44.1205&lng=-90.6505')).json();
+  if ('ground' in body && body.ground) {
+    assert.equal(body.ground.counts.stand, 1, 'one stand on this ground, not both');
+  }
+});

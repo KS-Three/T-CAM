@@ -13,7 +13,7 @@ import vm from 'node:vm';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { groundsFrom, describeGround, browserSource, GROUND_GAP_M } from '../grounds.mjs';
+import { groundsFrom, groundAt, describeGround, browserSource, GROUND_GAP_M } from '../grounds.mjs';
 import {
   openDb, upsertCamera, createStand, createMarker, allMarkers, allProperties,
 } from '../db.mjs';
@@ -201,4 +201,38 @@ test('the served page carries the switcher, and the script drives it', async t =
     'the select leaves the filtered bar before fixed positioning applies');
   assert.match(html, /max-width: 560px[\s\S]{0,200}#groundSel/,
     'and the phone styling that needs it is present');
+});
+
+// ---- which ground a request is about --------------------------------------
+// Anything that reasons about YOUR stands has to know which property is meant.
+// Handed every pin from both places at once, the stand suggester decided whose
+// ground one property was by majority vote across the other one's deeds.
+
+test('a point over a property is on that property, not the biggest one', () => {
+  const g = groundsFrom([...HOME, ...FAR]);
+  assert.equal(groundAt(g, 44.251, -90.449).ids.stand[0], 3, 'the far cluster, though it is smaller');
+  assert.ok(groundAt(g, 44.124, -90.652).ids.stand.includes(1), 'and the home cluster from over it');
+});
+
+test('open country between two properties belongs to neither', () => {
+  // Halfway is a defensible "I do not know", and the caller falls back to
+  // every stand rather than being told a wrong one confidently.
+  const g = groundsFrom([...HOME, ...FAR]);
+  assert.equal(groundAt(g, 44.19, -90.55), null);
+});
+
+test('a corner of a long property still counts as being on it', () => {
+  // A skinny eighty's centre can be several hundred metres from the corner you
+  // are standing in, so inside the bounds settles it before distance does.
+  const strip = [
+    { id: 1, kind: 'stand', lat: 44.120, lng: -90.660, property: null },
+    { id: 2, kind: 'stand', lat: 44.120, lng: -90.640, property: null },
+  ];
+  const g = groundsFrom(strip);
+  assert.ok(groundAt(g, 44.120, -90.6405), 'the far corner is still the same ground');
+});
+
+test('nothing placed anywhere is null, not a guess', () => {
+  assert.equal(groundAt([], 44.12, -90.65), null);
+  assert.equal(groundAt(groundsFrom(HOME), NaN, -90.65), null);
 });

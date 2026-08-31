@@ -62,7 +62,8 @@ Rules for anything added from here:
 | **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
 | **Stand suggester** — where to hang the next one, and which side of it | Live against USGS terrain at the property; wind geometry cross-checked against `routes.mjs` on every candidate × all 16 winds |
 | **Sit journal** (`/journal`) — what actually happened, and what it may claim | 29 tests, most of them about refusing to answer; the whole loop driven in a browser |
-| **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Tested against stub owners; `?parcels=off` for outside Wisconsin |
+| **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Judged against the PARCELS under your own pins, not an owner's name; live parcel service confirmed answering at both real properties; `?parcels=off` for outside Wisconsin |
+| **Suggestions stay on the property, on the screen, and off the blacktop** — the boundary is resolved before generating, so the shortlist is spent on ground you own; the ground under the map centre decides which property is meant; candidates are clipped to the visible bounds; anything on no parcel at all (right-of-way, water) or within 120 m of a building / 60 m of a classified road is dropped | 27 suggester tests + 11 for `builtup.mjs` + 4 for `groundAt` + 5 over HTTP. Driven end to end against a copy of the real database at both properties: 5 suggestions and 3 (was 1 and 0 before the boundary was hoisted ahead of generation), every survivor then re-checked one at a time straight against the parcel service — right deed, inside the viewport, all 8. Two spots dropped on the northern property for being inside 60 m of a road. `?builtup=off` skips the map service |
 | **Offline** — /tonight, the map and sit logging with no server reachable | Driven end to end: server killed, page served by the worker, sit queued, server restarted, sit arrived |
 | **Track recording** — record the walk in off the phone's GPS, judged against the route you drew | Driven in a browser with real geolocation and with a scripted 3-minute walk: 180 fixes, teleport and bad fix both rejected, 275 m, compared to the route on save |
 | **Shooting lanes** — mark where you can shoot; the winds are derived from the shape, not ticked | Cross-checked against `routes.mjs`, which computes scent independently, on every lane bearing × all 16 winds; the browser copy compiled in a vm and compared to Node's on the same lanes |
@@ -105,6 +106,22 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 `http://127.0.0.1:8787` and prints a LAN address for a phone on the same Wi-Fi.
 
 ## Not working / not built
+
+- **The building check has a hole on the northern property, and it is OSM's, 2026-08-31** —
+  the built-up filter drops suggestions near a mapped building, and
+  OpenStreetMap has **nothing** built mapped within 1.5 km of the northern
+  property: no footprints, no address nodes. (The other property has 28
+  buildings inside 1.2 km, so this is per-place coverage, not a broken query.)
+  The parcel layer knows there is a residence there — the deed carries property
+  class 1 alongside 4/5/5M — but a class is not a location, so it cannot say
+  *where* the house is. The road standoff still fires there (6 classified
+  roads inside 620 m), and the answer now says out loud when OSM had nothing to
+  check against rather than letting "unmapped" read as "all clear". FEMA's USA
+  Structures layer is the obvious second source and was tried: its ArcGIS view
+  refuses point and envelope queries with "Invalid query parameters" whatever
+  the outFields, `where` or geometry form — worth another hour by someone who
+  knows that service, and the parcel layer's own field-name trap says the
+  answer is probably one wrong parameter name.
 
 - **Real photos arrived 2026-08-29** — the cameras came back to life after
   nine silent months: 4 cameras transmitting, 30 photos the first day. The

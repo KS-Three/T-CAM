@@ -724,6 +724,57 @@ remembered per browser.
 Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
 staring at blank tiles past its coverage.
 
+### Ground you have already seen never waits
+
+The layers are not equally quick, and it is not close. Cold, six tiles each,
+into an empty cache, measured twice on separate runs:
+
+| Layer | First look at new ground |
+| --- | --- |
+| Map (OSM) | ~30 ms a tile |
+| LiDAR shade | ~40 ms |
+| Hybrid | ~45 ms |
+| VPA public access | ~55 ms |
+| Satellite | ~120 ms |
+| Terrain (USGS Topo) | ~300 ms |
+| **LiDAR** | **1.5-2.7 s** |
+| **CWD areas** | **2.5-3.7 s** |
+
+Those last two are ArcGIS services rendering each image on demand, and there is
+nothing to be done about the first look. What *was* worth fixing is the second:
+a cached tile used to be refetched once it passed 90 days, and the map would sit
+there for three seconds redrawing ground already on the disk — to replace aerial
+imagery that gets re-flown in years.
+
+**An expired tile is now served immediately and refreshed behind you.** Measured
+on the same tiles and the same services, with the cache aged past its 90 days:
+
+```
+layer        before (blocks on the refresh)   after
+cwd                  4049 ms                     2 ms
+satellite              60 ms                     3 ms
+lidar                  57 ms                     3 ms
+topo                   40 ms                     3 ms
+```
+
+The bytes you get are at most one view out of date, and the next view has the
+new ones. Two exceptions, both deliberate:
+
+- **Save offline** still waits for real bytes. Everywhere else an old tile is
+  good enough to draw with; there it is not, because the whole point is coming
+  back with tiles that will still be there in the woods.
+- **When upstream is unreachable** the old tile is still served, exactly as
+  before — that is what the cache is for.
+
+Asking for one tile twice at the same time — a pan that crosses a boundary and
+comes back, a zoom redrawing the level it just left — now makes **one** upstream
+request rather than two. On the fast layers nobody would notice. On CWD it was
+two three-second requests for one picture.
+
+`x-tile-cache` on every tile response says which happened: `hit` (fresh, from
+disk), `revalidating` (old bytes now, refresh running behind), `stale` (old
+bytes, upstream unreachable), `miss` (fetched just now).
+
 Zooming is built to stay under control (2026-08-29, after the map kept ending
 up on the whole hemisphere). The wheel **accumulates** — a light trackpad
 flick used to be one whole level per event, dozens per flick — and every zoom

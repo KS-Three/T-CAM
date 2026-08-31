@@ -9,6 +9,7 @@ import {
 } from '../tile-sources.mjs';
 import {
   getTile, prefetch, cacheStats, clearCache, tilesForBounds, tileDir, PREFETCH_MAX_TILES,
+  MAX_AGE_MS,
 } from '../tile-cache.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trailcam-tiles-'));
@@ -27,6 +28,49 @@ function fakeTiles({ fail = false, throws = false } = {}) {
     };
   };
   return { impl, calls };
+}
+
+/** A stand-in that answers only when the test says so, and says what it sent. */
+function gatedTiles(bytes = [1, 2, 3, 4]) {
+  const calls = [];
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const impl = async (url) => {
+    calls.push(url);
+    await gate;
+    return {
+      ok: true,
+      headers: { get: () => 'image/png' },
+      arrayBuffer: async () => new Uint8Array(bytes).buffer,
+    };
+  };
+  return { impl, calls, release: () => release() };
+}
+
+/**
+ * Wait until `fn()` is true. The concurrency tests need the FIRST request to be
+ * genuinely in flight before the second is issued: start both at once and, on a
+ * loaded machine, the first can finish and write the tile before the second
+ * even looks in the cache - at which point the second is an ordinary cache hit
+ * and the test is measuring nothing. The gate stays shut throughout, so the
+ * first cannot complete until the test says so.
+ */
+async function until(fn, what = 'condition', ms = 2000) {
+  const stop = Date.now() + ms;
+  while (Date.now() < stop) {
+    if (fn()) return;
+    await new Promise(r => setTimeout(r, 5));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** Backdate a cached tile so it counts as past MAX_AGE_MS. */
+async function age(out, key, z, x, y, ms = MAX_AGE_MS + 60_000) {
+  const dir = path.join(tileDir(out), key, String(z), String(x));
+  const [file] = await fsp.readdir(dir);
+  const when = new Date(Date.now() - ms);
+  await fsp.utimes(path.join(dir, file), when, when);
+  return path.join(dir, file);
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +222,136 @@ test('nonsense coordinates and unknown sources are refused', async () => {
   await assert.rejects(() => getTile(out, 'satellite', -1, 0, 0, { fetchImpl: impl }), /out of range/);
   await assert.rejects(() => getTile(out, 'satellite', 14, 1.5, 1, { fetchImpl: impl }), /out of range/);
   assert.equal(calls.length, 0, 'nothing was fetched');
+});
+
+// ---------------------------------------------------------------------------
+// Never waiting on ground already on disk
+// ---------------------------------------------------------------------------
+
+test('an expired tile is served from disk without waiting for the refresh', async () => {
+  // The reason this exists: measured cold, a DNR CWD tile takes 2.5-3.7 s and a
+  // LiDAR tile 1.5-2.7 s. Blocking a redraw of ground already on disk for that
+  // long, to replace imagery re-flown in years, is not a trade worth making.
+  const out = tmp();
+  await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fakeTiles().impl });
+  await age(out, 'satellite', 14, 4066, 5949);
+
+  const slow = gatedTiles([9, 9, 9, 9]);   // upstream that never answers on its own
+  const t0 = Date.now();
+  const tile = await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  const waited = Date.now() - t0;
+
+  assert.equal(tile.cached, true);
+  assert.equal(tile.stale, true, 'and it says the bytes are old');
+  assert.ok(tile.body.length > 0);
+  assert.ok(waited < 500, `answered in ${waited} ms without waiting on upstream`);
+  assert.equal(slow.calls.length, 1, 'the refresh did start');
+
+  slow.release();
+  assert.equal(await tile.revalidating, true);
+});
+
+test('the background refresh actually replaces the bytes', async () => {
+  const out = tmp();
+  await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fakeTiles().impl });
+  const file = await age(out, 'satellite', 14, 4066, 5949);
+  const before = await fsp.readFile(file);
+
+  const fresh = gatedTiles([42, 42, 42, 42]);
+  const stale = await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fresh.impl });
+  assert.deepEqual(Buffer.from(stale.body), before, 'the caller got the OLD bytes');
+
+  fresh.release();
+  await stale.revalidating;
+
+  const next = await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fakeTiles().impl });
+  assert.deepEqual([...next.body], [42, 42, 42, 42], 'the next caller gets the new ones');
+  assert.equal(next.stale, undefined, 'and it is fresh again');
+});
+
+test('a refresh that fails leaves the old tile in place and reports it', async () => {
+  // Offline, on ground last seen four months ago. The map must still draw.
+  const out = tmp();
+  await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fakeTiles().impl });
+  await age(out, 'satellite', 14, 4066, 5949);
+
+  const tile = await getTile(out, 'satellite', 14, 4066, 5949,
+    { fetchImpl: fakeTiles({ throws: true }).impl });
+  assert.equal(tile.cached, true);
+  assert.equal(tile.stale, true);
+  assert.equal(await tile.revalidating, false, 'the failure is caught, not thrown');
+
+  const again = await getTile(out, 'satellite', 14, 4066, 5949,
+    { fetchImpl: fakeTiles({ throws: true }).impl });
+  assert.ok(again.body.length > 0, 'the old tile survived the failed refresh');
+});
+
+test('two requests for the same uncached tile make one upstream fetch', async () => {
+  // A pan that crosses a tile boundary and comes back asks twice. On CWD that
+  // was two three-second requests for one picture.
+  const out = tmp();
+  const slow = gatedTiles();
+  const first = getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  await until(() => slow.calls.length === 1, 'the first request to reach upstream');
+  const second = getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  slow.release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(slow.calls.length, 1, 'asked upstream once');
+  assert.deepEqual([...a.body], [...b.body], 'both callers got the tile');
+  assert.equal(a.cached, false);
+  assert.equal(b.cached, false);
+});
+
+test('different tiles are not folded into one another', async () => {
+  const out = tmp();
+  const slow = gatedTiles();
+  const first = getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  await until(() => slow.calls.length === 1, 'the first request to reach upstream');
+  const second = getTile(out, 'satellite', 14, 4067, 5949, { fetchImpl: slow.impl });
+  slow.release();
+  await Promise.all([first, second]);
+  assert.equal(slow.calls.length, 2);
+});
+
+test('two stores are two caches and do not answer for each other', async () => {
+  const a = tmp(), b = tmp();
+  const slow = gatedTiles();
+  const first = getTile(a, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  await until(() => slow.calls.length === 1, 'the first request to reach upstream');
+  const second = getTile(b, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  slow.release();
+  await Promise.all([first, second]);
+  assert.equal(slow.calls.length, 2, 'each store fetched its own copy');
+});
+
+test('a caller that brought its own abort signal is not folded in', async () => {
+  // Deduplicating it would hand it somebody else's request to cancel.
+  const out = tmp();
+  const slow = gatedTiles();
+  const first = getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: slow.impl });
+  await until(() => slow.calls.length === 1, 'the first request to reach upstream');
+  const second = getTile(out, 'satellite', 14, 4066, 5949,
+    { fetchImpl: slow.impl, signal: new AbortController().signal });
+  slow.release();
+  await Promise.all([first, second]);
+  assert.equal(slow.calls.length, 2);
+});
+
+test('saving a view for offline waits for real bytes, stale is not good enough', async () => {
+  // Everywhere else an old tile is fine to draw with. Here it is not: the point
+  // is to come back with bytes that will still be there in the woods.
+  const out = tmp();
+  await getTile(out, 'satellite', 14, 4066, 5949, { fetchImpl: fakeTiles().impl });
+  const file = await age(out, 'satellite', 14, 4066, 5949);
+
+  const { impl, calls } = fakeTiles();
+  const r = await prefetch(out, {
+    bounds, zooms: [14], sources: ['satellite'], fetchImpl: impl,
+  });
+  assert.ok(calls.length > 0, 'the expired tile was actually refetched');
+  assert.ok(r.saved > 0);
+  const stat = await fsp.stat(file);
+  assert.ok(Date.now() - stat.mtimeMs < 60_000, 'and rewritten before it reported success');
 });
 
 test('a partly written tile never becomes a cached one', async () => {

@@ -37,6 +37,22 @@ import { sourceByKey, expandTile } from './tile-sources.mjs';
 // but not forever, so a cached tile is refreshed after this long.
 export const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
+/**
+ * Tiles currently being fetched, keyed by the cache slot they will fill.
+ *
+ * Two things ask for the same tile at the same time more often than it sounds:
+ * a pan that crosses a tile boundary and comes back, a zoom that redraws the
+ * level it just left, two panels showing the same ground. Each was a separate
+ * upstream request. On the fast layers nobody notices; on the DNR CWD service,
+ * measured at 2.5-3.7 s a tile, it is two of those instead of one.
+ *
+ * Keyed by output directory as well as coordinates, because two stores are two
+ * caches and must not answer for each other.
+ */
+const inFlight = new Map();
+
+const slotKey = (out, key, z, x, y) => `${out}|${key}|${z}/${x}/${y}`;
+
 // A ceiling on one "save this view" request. Four zoom levels of a screenful is
 // a few hundred tiles; anything far past that is someone trying to download a
 // county, which is the thing the tile policies forbid.
@@ -66,12 +82,27 @@ const contentTypeFor = ext =>
   ext === 'jpg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
 
 /**
- * A tile, from disk if we have a fresh copy and from upstream otherwise.
+ * A tile, from disk if we have a copy and from upstream otherwise.
  *
  * Returns the bytes plus where they came from, because "was this cached" is the
  * whole question when someone asks whether the map will work in the woods.
+ *
+ * **A cached tile is never waited on.** Past MAX_AGE_MS the old bytes are
+ * served immediately and the refresh runs behind the caller, rather than the
+ * map stalling on a service that may take seconds. Measured cold, per tile:
+ * satellite 120 ms, LiDAR 1.5-2.7 s, DNR CWD 2.5-3.7 s. Blocking a redraw of
+ * ground already on disk for three seconds — to replace aerial imagery that is
+ * re-flown in years — was never a trade worth making. The bytes are at most one
+ * view out of date, and the next view has the new ones.
+ *
+ * `revalidating` is the background refresh, already caught so it can never
+ * become an unhandled rejection. Callers may ignore it; tests await it. Pass
+ * `staleWhileRevalidate: false` to get the old blocking behaviour, which is
+ * what "save this view for offline" wants — see prefetch().
  */
-export async function getTile(out, key, z, x, y, { fetchImpl = globalThis.fetch, signal } = {}) {
+export async function getTile(out, key, z, x, y, {
+  fetchImpl = globalThis.fetch, signal, staleWhileRevalidate = true,
+} = {}) {
   const source = sourceByKey(key);
   if (!source) throw new Error(`unknown tile source "${key}"`);
   if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)
@@ -79,38 +110,61 @@ export async function getTile(out, key, z, x, y, { fetchImpl = globalThis.fetch,
     throw new Error('tile coordinates are out of range');
   }
 
+  const fromDisk = async h => ({
+    body: await fsp.readFile(h.path),
+    contentType: contentTypeFor(h.ext),
+    cached: true,
+  });
+
   const hit = await findCached(out, key, z, x, y);
-  if (hit && Date.now() - hit.stat.mtimeMs < MAX_AGE_MS) {
-    return {
-      body: await fsp.readFile(hit.path),
-      contentType: contentTypeFor(hit.ext),
-      cached: true,
-    };
+  if (hit && Date.now() - hit.stat.mtimeMs < MAX_AGE_MS) return fromDisk(hit);
+
+  if (hit && staleWhileRevalidate) {
+    // Old, but on disk. Answer with it now; replace it behind the caller.
+    const revalidating = fetchOnce(out, source, key, z, x, y, fetchImpl, signal)
+      .then(() => true, () => false);
+    return { ...await fromDisk(hit), stale: true, revalidating };
   }
 
-  let res;
   try {
-    res = await fetchImpl(expandTile(source, z, x, y), {
-      signal,
-      // Tile services ask for a real identifying agent, and OSM's policy
-      // requires one. Saying what this is, honestly, is the price of using
-      // somebody's donated bandwidth.
-      headers: { 'user-agent': 'TrailCam/1.0 (personal trail-camera tool)' },
-    });
+    return { ...await fetchOnce(out, source, key, z, x, y, fetchImpl, signal), cached: false };
   } catch (err) {
-    // No network. If there is a stale copy, a stale map beats no map — this is
-    // precisely the situation the cache exists for.
-    if (hit) {
-      return { body: await fsp.readFile(hit.path), contentType: contentTypeFor(hit.ext), cached: true, stale: true };
-    }
+    // No network, or the service said no. If there is an old copy, an old map
+    // beats no map — this is precisely the situation the cache exists for.
+    if (hit) return { ...await fromDisk(hit), stale: true };
     throw err;
   }
-  if (!res.ok) {
-    if (hit) {
-      return { body: await fsp.readFile(hit.path), contentType: contentTypeFor(hit.ext), cached: true, stale: true };
-    }
-    throw new Error(`tile server returned HTTP ${res.status}`);
-  }
+}
+
+/**
+ * Fetch a tile and store it, but only once at a time per tile.
+ *
+ * A second caller for a tile already in flight waits on the first rather than
+ * opening its own request. It therefore inherits the first caller's abort
+ * signal, so a caller that brought its own `signal` is deliberately NOT
+ * deduplicated — it asked to be able to cancel, and cancelling somebody else's
+ * request is not that.
+ */
+function fetchOnce(out, source, key, z, x, y, fetchImpl, signal) {
+  if (signal) return fetchAndStore(out, source, key, z, x, y, fetchImpl, signal);
+  const id = slotKey(out, key, z, x, y);
+  const running = inFlight.get(id);
+  if (running) return running;
+  const p = fetchAndStore(out, source, key, z, x, y, fetchImpl, undefined)
+    .finally(() => { inFlight.delete(id); });
+  inFlight.set(id, p);
+  return p;
+}
+
+async function fetchAndStore(out, source, key, z, x, y, fetchImpl, signal) {
+  const res = await fetchImpl(expandTile(source, z, x, y), {
+    signal,
+    // Tile services ask for a real identifying agent, and OSM's policy
+    // requires one. Saying what this is, honestly, is the price of using
+    // somebody's donated bandwidth.
+    headers: { 'user-agent': 'TrailCam/1.0 (personal trail-camera tool)' },
+  });
+  if (!res.ok) throw new Error(`tile server returned HTTP ${res.status}`);
 
   const contentType = (res.headers.get('content-type') || 'image/png').split(';')[0].trim();
   const body = Buffer.from(await res.arrayBuffer());
@@ -118,11 +172,12 @@ export async function getTile(out, key, z, x, y, { fetchImpl = globalThis.fetch,
   const dest = tilePath(out, key, z, x, y, ext);
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   // Written via a temporary file and renamed, so a tile interrupted halfway
-  // never becomes a truncated image that the cache then serves forever.
+  // never becomes a truncated image that the cache then serves forever. The
+  // pid keeps two processes sharing one store off each other's part file.
   const tmp = `${dest}.${process.pid}.part`;
   await fsp.writeFile(tmp, body);
   await fsp.rename(tmp, dest);
-  return { body, contentType, cached: false };
+  return { body, contentType };
 }
 
 /** Which tiles cover a bounding box at one zoom level. */
@@ -181,7 +236,13 @@ export async function prefetch(out, { bounds, zooms, sources, fetchImpl = global
       if (i >= todo.length) return;
       const t = todo[i];
       try {
-        const r = await getTile(out, t.key, t.z, t.x, t.y, { fetchImpl });
+        // staleWhileRevalidate is OFF here on purpose. Everywhere else an old
+        // tile is good enough to draw with; "save this view" is the one place
+        // it is not, because the whole point is to come back with bytes that
+        // will still be there in the woods. Reporting a tile saved while its
+        // refresh was still in the air is how someone ends up short a tile.
+        const r = await getTile(out, t.key, t.z, t.x, t.y,
+          { fetchImpl, staleWhileRevalidate: false });
         if (r.cached) alreadyHad++; else saved++;
       } catch {
         failed++;

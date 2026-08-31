@@ -221,4 +221,4 @@ export default {
   photoTags: p => p?.tag ?? p?.tags ?? [],
 };
 
-export { walk, findFirst, cameraSummary };
+export { walk, findFirst, cameraSummary, newestBy };

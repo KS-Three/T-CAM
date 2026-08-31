@@ -1212,19 +1212,54 @@ const SCAN_WORDS = {
   unknown: 'not readable',
 };
 
+// Server-side reasons are written as lowercase fragments so they read inside a
+// sentence ("could not be scanned — <reason>"); standing alone in the form they
+// need to look like sentences.
+function asSentence(t) {
+  if (!t) return t;
+  const s = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(s) ? s : s + '.';
+}
+
 function scanWords(r) {
-  if (!r || r.scanned === false) return r && r.why ? r.why : 'Not checked yet.';
-  const bits = ['Looks ' + (SCAN_WORDS[r.state] || r.state)];
-  if (r.state === 'cut' && r.state_since) bits.push('since ' + r.state_since);
-  if (r.latest_date) bits.push('(clearest recent look ' + r.latest_date + ')');
-  let out = bits.join(' ') + '.';
-  if (r.verdict) out += ' The greenness curve looks like ' + (CROP_LABELS[r.verdict] || r.verdict) + '.';
-  else if (r.verdict_why) out += ' Crop not identified: ' + r.verdict_why + '.';
+  if (!r || r.scanned === false) {
+    return r && r.why ? asSentence(r.why) : 'Not checked yet.';
+  }
+
+  let out = 'Looks ' + (SCAN_WORDS[r.state] || r.state);
+  if (r.state === 'cut' && r.state_since) out += ', since ' + r.state_since;
+  out += '.';
+
+  // How old the reading is, in words rather than a date the reader has to do
+  // arithmetic on. Cloud hides a field for weeks at a time, and a crop can come
+  // off in a morning, so a stale answer has to say so where it is read — not
+  // only in the stored reason nobody sees.
+  if (r.latest_date) {
+    const age = Math.round((Date.now() - Date.parse(r.latest_date)) / 86400000);
+    if (age > 10) {
+      out += ' But the clearest look was ' + r.latest_date + ', ' + age
+        + ' days ago — that describes then, not now.';
+    } else {
+      out += ' Clearest look ' + r.latest_date
+        + (age <= 1 ? ' (today).' : ' (' + age + ' days ago).');
+    }
+  }
+
+  if (r.verdict) {
+    out += ' The greenness curve looks like '
+      + (CROP_LABELS[r.verdict] || r.verdict) + '.';
+  } else if (r.verdict_why && !/not attempted/.test(r.verdict_why)) {
+    // "Not attempted" is the normal case and says nothing worth reading; a
+    // real refusal ("not enough known ground nearby") does.
+    out += ' Crop not identified: ' + r.verdict_why + '.';
+  }
+
   if (r.disagreement && r.disagreement.length) {
     out += ' Worth a look: ' + r.disagreement.join('; ') + '.';
   }
   return out;
 }
+
 
 async function refreshFields() {
   FIELDS = await (await fetch('/api/fields')).json();

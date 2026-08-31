@@ -32,7 +32,8 @@ import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
 import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits,
-  recordCameraDay } from './db.mjs';
+  recordCameraDay, allFields, fieldsDueForScan, saveFieldScan } from './db.mjs';
+import { scanField, disagreement } from './cropseason.mjs';
 import { cameraDayRow } from './camera-days.mjs';
 import { updateVisitHeadings } from './travel.mjs';
 import { quotaOf, quotaLine } from './quota.mjs';
@@ -448,6 +449,36 @@ async function main() {
       const h = updateVisitHeadings(db);
       log(`Direction: ${h.crossings} of ${h.of} visit(s) crossed the frame`
         + (h.noBearing ? `, ${h.noBearing} at camera(s) with no facing set` : ''));
+    }
+
+    // What the fields are doing this season, from satellite. Only fields whose
+    // reading has gone stale, and only in the growing season — Sentinel-2 comes
+    // round about every five days, so scanning more often re-fetches identical
+    // pixels, and there is nothing to watch in January.
+    //
+    // Crop identification is NOT attempted here: it costs a second season of
+    // imagery per field and on most ground refuses anyway. It stays a button.
+    //
+    // A satellite having a bad day must never fail a sync that has already
+    // downloaded photos, so each field is caught on its own and the run
+    // continues.
+    if (!OPT.dryRun) {
+      const due = fieldsDueForScan(db);
+      if (due.length) {
+        log(`Fields: scanning ${due.length} of ${allFields(db).length} — the rest are current.`);
+        for (const f of due) {
+          const label = f.name || `field ${f.id}`;
+          try {
+            const scan = await scanField(f.points);
+            const saved = saveFieldScan(db, f.id, scan.season, scan);
+            const notes = disagreement(f, saved);
+            log(`  ${label}: ${scan.state}${scan.stateWhy ? ` — ${scan.stateWhy}` : ''}`);
+            if (notes) for (const n of notes) log(`    worth a look: ${n}`);
+          } catch (err) {
+            log(`  ${label}: could not be scanned — ${err.message}`);
+          }
+        }
+      }
     }
 
     const c = counts(db);

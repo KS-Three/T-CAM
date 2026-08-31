@@ -127,6 +127,33 @@ test('the suggested walk in is fetched, drawn dashed, and saved only on request'
     'the caveat ships with the card, not just the PR description');
 });
 
+test('shooting lanes are drawn for the selected stand and no other', () => {
+  // Every stand's cones at once was a wash of overlapping wedges over the
+  // ground they describe. Driven in a browser on both grounds: nothing selected
+  // 0 cones, North East Point 1 (its one lane), West Ladder 3 (its three),
+  // closed again 0.
+  const fn = mapScript.slice(mapScript.indexOf('function lanePaths'));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+
+  assert.match(body, /selected && selected\.kind === 'stand' && selected\.id === st\.id/,
+    'a saved stand contributes its lanes only while it is the selected one');
+
+  // The open form is exempt, and must stay exempt: you cannot edit a lane you
+  // cannot see, and the form's copy is the array the handles mutate.
+  const editLine = body.slice(0, body.indexOf('for (const st of STANDS)'));
+  assert.match(editLine, /if \(laneForm\) sets\.push\(/,
+    'the lanes being edited are drawn whether or not anything is selected');
+
+  // Selection changes what is on the map, so both panels must repaint. Without
+  // this the cones appear only on the NEXT redraw - a pan, a zoom, anything.
+  for (const opener of ['function showStandReport', 'function showCameraPanel']) {
+    const f = mapScript.slice(mapScript.indexOf(opener));
+    const end = f.indexOf('\n}');
+    assert.match(f.slice(0, end).slice(-120), /draw\(\);/,
+      opener + ' repaints, so the lanes follow the selection immediately');
+  }
+});
+
 test('all of it still compiles as one page script', () => {
   const html = dashboardHtml([], [], '2026-08-29T12:00:00.000Z', null, [], true, []);
   const blocks = [...html.matchAll(

@@ -787,7 +787,12 @@ else overlays it or slides in over it.
   actually use for where it is from, and the sky in one word. Tap it and it
   opens into the hourly forecast with a scrubber across the coming week: drag
   forward and watch the wind swing and the front arrive, because the wind
-  three days out is what decides which stand gets hunted Saturday. The
+  three days out is what decides which stand gets hunted Saturday. Behind the
+  scrubber the week's rain is drawn, one bar an hour, each as tall as the
+  chance of it — the darker bars are the hours with rain actually falling,
+  because a 30% that comes to nothing and a 30% you sit through are not the
+  same evening. A tick marks now, which sits *inside* the week rather than at
+  its left edge: the forecast starts at midnight this morning. The
   forecast comes through the server and is cached, so in the truck the strip
   shows the last fetch **and says how old it is** rather than passing Tuesday
   off as live. Everything stays in the property's own clock — the times are

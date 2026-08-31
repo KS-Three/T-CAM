@@ -77,6 +77,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `node serve.mjs` | Serves everything from the database at http://127.0.0.1:8787 |
 | `node serve.mjs --open` | The same, and opens a browser |
 | `node serve.mjs --host 0.0.0.0` | Also reachable from a phone on the same Wi-Fi |
+| `node gps-doctor.mjs --camera "NAME"` | A camera's pin is in the wrong place — says which of the API, the sync or the database is lying |
 | `node spypoint-sync.mjs --provider <id>` | Sync a different camera brand |
 
 ### The pages

@@ -30,6 +30,7 @@ node --test test/coverage.test.js    # one file
 node serve.mjs --out DIR --port 8787 # serve a dashboard from DIR's trailcam.db
 node spypoint-sync.mjs               # sync (needs SPYPOINT_EMAIL / SPYPOINT_PASSWORD env; --dry-run, --inspect for schema dumps)
 node hunt-planner.mjs --days 14      # rank the coming sits
+node gps-doctor.mjs --camera NAME     # a camera's pin is wrong: which side is lying?
 ```
 
 Kent runs it via `start-trailcam.cmd` (Windows), which is sync → plan → serve.

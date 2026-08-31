@@ -1992,6 +1992,15 @@ function lanePaths(left, top) {
   if (laneForm) sets.push({ from: laneForm.stand, lanes: laneForm.lanes, key: 'edit', live: true });
   for (const st of STANDS) {
     if (laneForm && laneForm.standId && st.id === laneForm.standId) continue;
+    // One stand's lanes at a time: the selected one. Every stand's cones drawn
+    // at once is a wash of overlapping wedges over the ground they are meant
+    // to describe, and on a property with several stands it hid the imagery
+    // underneath them - which is the thing you are actually reading. Selection
+    // is the question "what does THIS stand see", and that is when the answer
+    // is worth drawing.
+    //
+    // The open form is exempt above: you cannot edit a lane you cannot see.
+    if (!(selected && selected.kind === 'stand' && selected.id === st.id)) continue;
     if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes, key: 's' + st.id });
   }
   for (const { from, lanes, key, live } of sets) {

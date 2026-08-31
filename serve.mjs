@@ -40,7 +40,7 @@ import {
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
   saveTrack, allTracks, trackById, deleteTrack,
   allFields, createField, updateField, deleteField, CROP_KINDS, CROP_LABELS,
-  saveForecast, cachedForecast,
+  saveForecast, cachedForecast, distanceM,
 } from './db.mjs';
 import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
 import { cropAt } from './cropscan.mjs';
@@ -53,7 +53,7 @@ import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.
 import { evidenceFor } from './evidence.mjs';
 import { individualsFor } from './individuals.mjs';
 import { suggestStands, onYourGround, resolveHomeGround, insideGround } from './stand-suggester.mjs';
-import { groundsFrom, groundAt } from './grounds.mjs';
+import { groundsFrom, groundAt, describeGround } from './grounds.mjs';
 import { builtUpNear, clearOfBuiltUp, BUILDING_STANDOFF_M } from './builtup.mjs';
 import { windsForStand } from './coverage.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
@@ -646,6 +646,29 @@ function readJson(req) {
     });
     req.on('error', reject);
   });
+}
+
+/**
+ * What to call an unnamed property in a list of them.
+ *
+ * describeGround says what is ON a ground ("2 cameras, 1 stand"), which is
+ * honest and, for a picker, useless: two properties hunted the same way
+ * describe identically, and the list comes out as the same row twice. The deed
+ * is what tells them apart — acreage and county — so use that where there is
+ * one, and fall back to the contents where there is not.
+ */
+function propertyLabel(g, home) {
+  const acres = (home ?? []).reduce((a, p) => a + (p.acres ?? p.deedAcres ?? 0), 0);
+  const county = (home ?? []).map(p => p.county).find(Boolean);
+  const bits = [];
+  if (acres) bits.push(Math.round(acres) + ' acres');
+  if (county) {
+    // The layer shouts its county names ("GREEN LAKE"); a picker row should not.
+    const nice = county.replace(/\s+county$/i, '').toLowerCase()
+      .replace(/(^|[\s-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    bits.push(nice + ' County');
+  }
+  return bits.length ? bits.join(', ') : describeGround(g);
 }
 
 export function createServer({ out = OPT.out } = {}) {
@@ -1512,139 +1535,266 @@ export function createServer({ out = OPT.out } = {}) {
               east: boundsNum('east'), west: boundsNum('west') }
           : null;
 
-        // WHICH property this is about. Everything below reasons about "your"
-        // stands, and handing it every pin from both places is how a stand
-        // forty kilometres away came to decide whose ground this one is. The
-        // grounds are the same clusters the map's switcher shows.
+        // WHICH property this is about.
+        //
+        // Asked, not inferred. The map centre was the old answer and it is a
+        // bad one: opened on the view that frames everything, the centre sits
+        // in open country between two properties, and the honest answer to
+        // "whose ground is this" is *neither* — at which point the code was
+        // falling back to every stand you own and letting an owner-name vote
+        // pick a deed forty kilometres away. `?properties=g0,g1` is the page
+        // saying which grounds you ticked, and it is the only thing that
+        // decides scope when it is present.
         const allPins = [
           ...cams.map(c => ({ id: c.id, kind: 'camera', lat: c.lat, lng: c.lng, property: c.property ?? null })),
           ...stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng))
             .map(s => ({ id: s.id, kind: 'stand', lat: s.lat, lng: s.lng, property: s.property ?? null })),
         ];
-        const here = groundAt(groundsFrom(allPins), lat, lng);
-        const standIds = here ? new Set(here.ids.stand) : null;
-        const myStands = standIds ? stands.filter(s => standIds.has(s.id)) : stands;
-
-        // Terrain is the one slow input, and it is cached forever once fetched
-        // because the ground does not move. Everything else is local.
-        let terrain = null;
-        try {
-          terrain = await terrainFor(db, { lat, lng, radiusM });
-        } catch (err) {
-          return sendJson(res, 502, { error: `terrain could not be read: ${err.message}` });
+        // The key is the index in the sorted list, which is stable on purpose:
+        // groundsFrom orders biggest-first with west as the tiebreak, so "g1"
+        // means the same ground on the next request and in /api/my-properties.
+        const allGrounds = groundsFrom(allPins).map((g, i) => ({ ...g, key: 'g' + i }));
+        const asked = (url.searchParams.get('properties') ?? '')
+          .split(',').map(s => s.trim()).filter(Boolean);
+        let chosen = null;
+        if (asked.length) {
+          chosen = asked
+            .map(k => (/^g\d+$/.test(k) ? allGrounds[Number(k.slice(1))] : null))
+            .filter(Boolean);
+          if (!chosen.length) {
+            return sendJson(res, 400, {
+              error: `no property matches ${asked.join(', ')} — ask /api/my-properties `
+                + 'for the list',
+            });
+          }
         }
-        if (!terrain?.covered) {
+        // Nothing asked for: fall back to the ground under the map centre, and
+        // when the centre is over nothing, say so instead of guessing.
+        const here = chosen ? null : groundAt(allGrounds, lat, lng);
+        if (!chosen && !here && allGrounds.length > 1) {
           return sendJson(res, 200, {
             candidates: [],
-            note: terrain?.why ?? 'No LiDAR coverage on this ground, so there are no '
-              + 'landforms to work from.',
+            properties: allGrounds.map(g => ({ key: g.key, label: g.name ?? describeGround(g) })),
+            needsProperty: true,
+            note: 'The map is not over one of your properties, so there is nothing '
+              + 'to judge ownership against. Pick which ground to suggest for.',
           });
         }
-
-        // Wind coverage only if it is already cached — this endpoint must not
-        // block on a seven-year archive pull. Without it the suggester ranks on
-        // ground and sign alone, and says so rather than quietly changing what
-        // its numbers mean.
-        //
-        // Looked up at the SAME centroid /api/wind-history caches it under —
-        // the average of your cameras and stands — not at the map centre.
-        // The cache key rounds to a hundredth of a degree, so pointing this at
-        // the viewport meant any pan of a few hundred metres missed the cache,
-        // the gap ranking silently disappeared, and the page advised loading
-        // wind history that was already sitting in the database. Which winds
-        // you are short of is a fact about the property, not about where the
-        // map happens to be scrolled.
-        let clim = null;
-        try {
-          const c = spots.length
-            ? { lat: spots.reduce((a, x) => a + x.lat, 0) / spots.length,
-                lng: spots.reduce((a, x) => a + x.lng, 0) / spots.length }
-            : { lat, lng };
-          clim = windClimatology(db, c.lat, c.lng, SEASON_MONTHS, 7);
-        } catch { clim = null; }
-        const coverage = clim ? standCoverage(myStands, clim) : null;
+        const scope = chosen ?? (here ? [here] : allGrounds);
 
         const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 5));
         const checkParcels = url.searchParams.get('parcels') !== 'off';
+        const askedRadius = Number(url.searchParams.get('radius')) || null;
 
-        // Work out the boundary BEFORE generating, so the shortlist can be
-        // spent on ground you can hunt. A terrain radius is a circle and a
-        // property is not: on a twenty the circle is four-fifths the
-        // neighbour's, and generating into it produced twenty candidates for
-        // the ownership filter to throw nineteen of away.
-        let ground = null;
-        if (checkParcels) {
-          ground = await resolveHomeGround({
-            lookup: (a, b) => parcelAt(a, b),
-            stands: myStands, at: { lat, lng },
-          });
-        }
-        const keepAnchor = ground?.home?.length
-          ? (a, b) => insideGround(ground, a, b)
-          : null;
-
-        // Over-generate anyway, because the checks the boundary cannot make —
-        // the edge of the screen, the house, the blacktop — still take spots
-        // out, and a shortlist that starts at five and loses three is a
-        // shortlist of two for no reason.
-        let result = suggestStands({
-          features: terrain.features,
-          stands: myStands,
-          markers: allMarkers(db),
-          gaps: coverage?.gaps ?? [],
-          climatology: clim,
-          limit: limit * 4,
-          keepAnchor,
-        });
-
-        // Clip to what you are looking at, BEFORE the lookups: every spot
-        // dropped here is a parcel query and a distance sweep not spent.
-        if (view && result.candidates?.length) {
-          const before = result.candidates.length;
-          result.candidates = result.candidates.filter(c =>
-            c.lat >= view.south && c.lat <= view.north
-            && c.lng >= view.west && c.lng <= view.east);
-          const gone = before - result.candidates.length;
-          if (gone) {
-            result.notes = [...(result.notes ?? []),
-              `${gone} spot${gone === 1 ? '' : 's'} came out beyond the edge of the map `
-              + `and ${gone === 1 ? 'was' : 'were'} left out — zoom out and press it again `
-              + 'to see the whole property.'];
+        /**
+         * The circle to search for ONE property.
+         *
+         * The parcel boundary when there is one, the pins' own extent when
+         * there is not — never the map centre with a fixed radius, which is
+         * what made the answer depend on the zoom. A property is the unit of
+         * the question, so it is the unit of the search.
+         */
+        const circleFor = (g, home) => {
+          let north = g.bounds.north, south = g.bounds.south;
+          let east = g.bounds.east, west = g.bounds.west;
+          for (const p of home ?? []) {
+            for (const ring of p.rings ?? []) {
+              for (const [x, y] of ring) {
+                if (y > north) north = y;
+                if (y < south) south = y;
+                if (x > east) east = x;
+                if (x < west) west = x;
+              }
+            }
           }
-        }
+          const centre = { lat: (north + south) / 2, lng: (east + west) / 2 };
+          // Half the diagonal, plus room for the setback to land outside a
+          // landform sitting right on the line.
+          const half = distanceM(south, west, north, east) / 2;
+          return {
+            centre,
+            radiusM: Math.min(1200, Math.max(150, askedRadius ?? Math.round(half + 120))),
+          };
+        };
 
-        // Keep suggestions on ground you can actually hunt. On-demand lookups
-        // through the same in-memory parcel cache the map's card uses — nothing
-        // is written anywhere. ?parcels=off skips it (outside Wisconsin, or the
-        // service is down and you just want the terrain answer).
-        if (checkParcels) {
-          result = await onYourGround(result, {
-            lookup: (a, b) => parcelAt(a, b),
-            stands: myStands, at: { lat, lng }, limit: limit * 2,
-            ground,
-          });
-        }
+        const markers = allMarkers(db);
+        const perGround = [];
+        const notes = [];
+        let anyTerrain = false;
+        let terrainWhy = null;
+        let windLoaded = false;
 
-        // And off the blacktop and out of the yard. Last, because it is the
-        // one filter that goes to a service the rest of the program does not
-        // use, and a failure here must cost a note rather than the answer.
-        if (url.searchParams.get('builtup') !== 'off') {
-          let built = null, unavailable = null;
+        for (const g of scope) {
+          const gStands = stands.filter(s => new Set(g.ids.stand).has(s.id));
+          const gCams = cams.filter(c => new Set(g.ids.camera).has(c.id));
+          const gPins = [...gStands, ...gCams];
+
+          // Work out the boundary BEFORE generating, so the shortlist can be
+          // spent on ground you can hunt. A terrain radius is a circle and a
+          // property is not: on a twenty the circle is four-fifths the
+          // neighbour's, and generating into it produced twenty candidates for
+          // the ownership filter to throw nineteen of away.
+          let ground = null;
+          if (checkParcels) {
+            ground = await resolveHomeGround({
+              lookup: (a, b) => parcelAt(a, b),
+              stands: gPins, at: g.centre,
+            });
+          }
+          const circle = circleFor(g, ground?.home);
+          // Named from the deed once it is known, so a note about one of two
+          // properties says which — "2 cameras, 1 stand" describes both.
+          const gLabel = g.name ?? propertyLabel(g, ground?.home);
+
+          let terrain = null;
           try {
-            built = await builtUpNear(lat, lng, radiusM + BUILDING_STANDOFF_M);
+            terrain = await terrainFor(db, { ...circle.centre, radiusM: circle.radiusM });
           } catch (err) {
-            unavailable = err.message;
+            notes.push(`${gLabel}: terrain could not be read — ${err.message}`);
+            continue;
           }
-          result = clearOfBuiltUp(result, { built, unavailable });
-        }
-        result.candidates = (result.candidates ?? []).slice(0, limit);
+          if (!terrain?.covered) {
+            terrainWhy = terrain?.why ?? terrainWhy;
+            notes.push(`${gLabel}: ${terrain?.why ?? 'no LiDAR coverage, so there are no '
+              + 'landforms to work from'}.`);
+            continue;
+          }
+          anyTerrain = true;
 
+          // Wind coverage only if it is already cached — this endpoint must not
+          // block on a seven-year archive pull. Without it the suggester ranks
+          // on ground and sign alone, and says so rather than quietly changing
+          // what its numbers mean.
+          //
+          // TWO centroids, in this order, and the order is the whole point.
+          // This property's own pins first, because which winds you are short
+          // of is a fact about a property. Then the average of EVERY pin you
+          // own, because that is the key /api/wind-history actually caches
+          // under — and the cache key rounds to a hundredth of a degree, so
+          // asking only at the per-property centroid misses it and the gap
+          // ranking silently disappears. Measured: the top suggestion fell
+          // from 66 points to 26 when this was per-property only, because the
+          // gap bonus is the single biggest term in the score.
+          let clim = null;
+          // A stand with no coordinates is skipped, not averaged: one null in
+          // the list makes the whole centroid NaN, and a NaN centroid misses
+          // every cache silently rather than failing.
+          const centroid = pts => {
+            const ok = (pts ?? []).filter(p => Number.isFinite(p?.lat) && Number.isFinite(p?.lng));
+            return ok.length
+              ? { lat: ok.reduce((a, x) => a + x.lat, 0) / ok.length,
+                  lng: ok.reduce((a, x) => a + x.lng, 0) / ok.length }
+              : null;
+          };
+          for (const c of [centroid(gPins), centroid(spots), g.centre]) {
+            if (!c || clim) continue;
+            try { clim = windClimatology(db, c.lat, c.lng, SEASON_MONTHS, 7); }
+            catch { clim = null; }
+          }
+          if (clim) windLoaded = true;
+          const coverage = clim ? standCoverage(gStands, clim) : null;
+
+          const keepAnchor = ground?.home?.length
+            ? (a, b) => insideGround(ground, a, b)
+            : null;
+
+          // Over-generate anyway, because the checks the boundary cannot make —
+          // the house, the blacktop — still take spots out, and a shortlist
+          // that starts at five and loses three is a shortlist of two for no
+          // reason.
+          let result = suggestStands({
+            features: terrain.features,
+            stands: gStands,
+            markers,
+            gaps: coverage?.gaps ?? [],
+            climatology: clim,
+            limit: limit * 4,
+            keepAnchor,
+          });
+
+          if (checkParcels) {
+            result = await onYourGround(result, {
+              lookup: (a, b) => parcelAt(a, b),
+              stands: gPins, at: g.centre, limit: limit * 2,
+              ground,
+            });
+          }
+
+          // And off the blacktop and out of the yard. Last, because it is the
+          // one filter that goes to a service the rest of the program does not
+          // use, and a failure here must cost a note rather than the answer.
+          if (url.searchParams.get('builtup') !== 'off') {
+            let built = null, unavailable = null;
+            try {
+              built = await builtUpNear(
+                circle.centre.lat, circle.centre.lng, circle.radiusM + BUILDING_STANDOFF_M);
+            } catch (err) {
+              unavailable = err.message;
+            }
+            result = clearOfBuiltUp(result, { built, unavailable });
+          }
+
+          for (const c of result.candidates ?? []) c.property = { key: g.key, label: gLabel };
+          for (const n of result.notes ?? []) {
+            notes.push(scope.length > 1 ? `${gLabel}: ${n}` : n);
+          }
+          if (result.note) notes.push(scope.length > 1 ? `${gLabel}: ${result.note}` : result.note);
+          perGround.push({ ground: g, label: gLabel, result, circle });
+        }
+
+        if (!anyTerrain && !perGround.length) {
+          return sendJson(res, 200, {
+            candidates: [],
+            notes,
+            note: terrainWhy ?? 'No landforms could be read for the ground you picked.',
+          });
+        }
+
+        // Merge, best first. Interleaving by score rather than by property is
+        // right: you want the best places to walk, and which of your two
+        // pieces they are on is a label on the card, not a ranking.
+        let candidates = perGround.flatMap(p => p.result.candidates ?? [])
+          .sort((a, b) => b.score - a.score);
+
+        // How many are off the edge of the screen. NOT a filter any more —
+        // you said which property you meant, and a suggestion on it is on it
+        // whatever the zoom happens to be — but worth saying, because a pin
+        // you cannot see reads as the tool having ignored you.
+        let offScreen = 0;
+        if (view) {
+          offScreen = candidates.filter(c => !(c.lat >= view.south && c.lat <= view.north
+            && c.lng >= view.west && c.lng <= view.east)).length;
+        }
+        candidates = candidates.slice(0, limit);
+        if (view) {
+          const hidden = candidates.filter(c => !(c.lat >= view.south && c.lat <= view.north
+            && c.lng >= view.west && c.lng <= view.east)).length;
+          if (hidden) {
+            notes.push(`${hidden} of these ${hidden === 1 ? 'is' : 'are'} outside the `
+              + 'current view — zoom out, or use "Fit" on the property, to see '
+              + (hidden === 1 ? 'it' : 'them') + '.');
+          }
+        }
+
+        const caveat = perGround.find(p => p.result.caveat)?.result.caveat ?? null;
         return sendJson(res, 200, {
-          ...result,
+          candidates,
+          notes,
+          caveat,
+          note: candidates.length ? null
+            : 'Nothing worth suggesting on the ground you picked.',
+          homeOwner: perGround.length === 1 ? perGround[0].result.homeOwner ?? null : null,
+          properties: perGround.map(p => ({
+            key: p.ground.key, label: p.label,
+            owner: p.result.homeOwner ?? null,
+            at: p.circle.centre, radiusM: p.circle.radiusM,
+            found: (p.result.candidates ?? []).length,
+          })),
+          offScreen,
           at: { lat, lng, radiusM },
           view,
           ground: here ? { name: here.name, counts: here.counts } : null,
-          windHistoryLoaded: !!clim,
+          windHistoryLoaded: windLoaded,
         });
       }
       // The suggested walk in: from an entry point to a stand, shaped by the
@@ -1779,6 +1929,85 @@ export function createServer({ out = OPT.out } = {}) {
         } catch (err) {
           return sendJson(res, 502, { error: err.message });
         }
+      }
+
+      // The properties you hunt, as PARCELS you can point at.
+      //
+      // Everything else in this program works out which ground you mean by
+      // where the map happens to be scrolled, and the stand suggester showed
+      // why that is not good enough: opened on its default "Everything" view
+      // the centre lands in open country between two properties, so the
+      // question "whose ground is this" has no honest answer and the old code
+      // guessed by voting across every deed it could see.
+      //
+      // A property here is not configured either. It is a ground (the same
+      // proximity cluster the map's switcher shows) plus the real parcels
+      // underneath its pins — owner, acreage and boundary, straight off the
+      // state layer. That gives the page something a person can tick and see
+      // drawn, instead of a coordinate it has to infer intent from.
+      if (req.method === 'GET' && url.pathname === '/api/my-properties') {
+        const stands = allStands(db).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+        const cams = allCameras(db).filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng));
+        const pins = [
+          ...cams.map(c => ({ id: c.id, kind: 'camera', lat: c.lat, lng: c.lng, property: c.property ?? null })),
+          ...stands.map(s => ({ id: s.id, kind: 'stand', lat: s.lat, lng: s.lng, property: s.property ?? null })),
+        ];
+        if (!pins.length) {
+          return sendJson(res, 200, {
+            properties: [],
+            note: 'Nothing is placed yet, so there is no ground to look up. Drop a '
+              + 'stand or sync a camera first.',
+          });
+        }
+
+        const grounds = groundsFrom(pins);
+        const out = [];
+        let sawFailure = false;
+        for (let i = 0; i < grounds.length; i++) {
+          const g = grounds[i];
+          const ids = new Set(g.ids.stand);
+          const camIds = new Set(g.ids.camera);
+          const mine = [
+            ...stands.filter(s => ids.has(s.id)),
+            ...cams.filter(c => camIds.has(c.id)),
+          ];
+          const resolved = await resolveHomeGround({
+            lookup: (a, b) => parcelAt(a, b), stands: mine, at: g.centre,
+          });
+          if (resolved.sawFailure) sawFailure = true;
+          out.push({
+            key: 'g' + i,
+            name: g.name,
+            // A name you gave it wins. Failing that, describe it by the things
+            // that actually differ between two properties — acreage and county
+            // off the deed — because "2 cameras, 1 stand" is what BOTH of a
+            // typical pair look like, and a picker whose two rows read the
+            // same is not a picker.
+            label: g.name ?? propertyLabel(g, resolved.home),
+            counts: g.counts,
+            centre: g.centre,
+            bounds: g.bounds,
+            owner: resolved.homeOwner,
+            // The boundary is the point of this endpoint — the page draws it,
+            // and the suggester clips to it. Rings are public record and
+            // already in memory from the lookup above.
+            parcels: resolved.home.map(p => ({
+              parcelId: p.parcelId ?? null,
+              owner: p.owner ?? null,
+              acres: p.acres ?? p.deedAcres ?? null,
+              county: p.county ?? null,
+              propClassName: p.propClassName ?? null,
+              rings: p.rings ?? null,
+            })),
+          });
+        }
+        return sendJson(res, 200, {
+          properties: out,
+          note: sawFailure
+            ? 'The parcel service did not answer for some of your ground, so a '
+              + 'boundary may be missing below.'
+            : null,
+        });
       }
 
       if (req.method === 'GET' && url.pathname === '/api/health') {

@@ -4,7 +4,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parcelAt, parcelFromFeature, describeClass, clearParcelCache } from '../parcels.mjs';
+import {
+  parcelAt, parcelFromFeature, describeClass, clearParcelCache,
+  parcelsByOwner, ownerTerm, ownerWhere, ringsCentre,
+} from '../parcels.mjs';
 import { createServer } from '../serve.mjs';
 import { openDb } from '../db.mjs';
 
@@ -183,4 +186,160 @@ test('missing coordinates are a 400', async t => {
   // quietly become a query about it.
   assert.equal((await get('/api/parcel?lat=&lng=')).status, 400);
   assert.equal((await get('/api/parcel?lat=999&lng=-89')).status, 400, 'out of range');
+});
+
+// ---------------------------------------------------------------------------
+// Search by owner name
+// ---------------------------------------------------------------------------
+
+const RINGS = [[[-90.652, 44.125], [-90.650, 44.125], [-90.650, 44.127],
+  [-90.652, 44.127], [-90.652, 44.125]]];
+
+const named = (owner, acres, rings = RINGS) => ({
+  attributes: { ...FEATURE.attributes, OWNERNME1: owner, GISACRES: acres },
+  geometry: { rings },
+});
+
+test('a name is cleaned before it ever reaches a WHERE clause', () => {
+  assert.equal(ownerTerm('  smith  '), 'SMITH', 'upper-cased and trimmed');
+  assert.equal(ownerTerm("o'brien"), "O'BRIEN", 'apostrophes are part of names');
+  assert.equal(ownerTerm('Smith & Sons, Inc.'), 'SMITH & SONS, INC.');
+  // Injection dies twice over, and only the second half is this function's
+  // job: everything outside a name's alphabet is dropped (the = here), and the
+  // apostrophe that would end the string literal is doubled by ownerWhere.
+  // Hyphens are kept either way, because Smith-Jones is a name.
+  assert.equal(ownerTerm("x' OR 1=1 --"), "X' OR 1 1 --");
+  assert.match(ownerWhere(ownerTerm("x' OR 1=1 --")), /LIKE '%X'' OR 1 1 --%'/,
+    'the quote is doubled, so the payload stays inside the literal and is inert');
+  // The LIKE wildcards go too — typed by accident they turn a search for a
+  // person into a scan of the whole state.
+  assert.equal(ownerTerm('%'), '', 'a bare wildcard is not a search');
+  assert.equal(ownerTerm('sm_th'), 'SM TH', 'the single-character wildcard goes too');
+});
+
+test('the WHERE clause looks at both owner columns, with quotes doubled', () => {
+  const w = ownerWhere(ownerTerm("o'brien"));
+  assert.match(w, /UPPER\(OWNERNME1\) LIKE '%O''BRIEN%'/,
+    'the apostrophe is escaped rather than left to end the string');
+  assert.match(w, /UPPER\(OWNERNME2\) LIKE '%O''BRIEN%'/,
+    'a name is as often the second owner as the first');
+});
+
+test('a centre is derived from the boundary, for framing', () => {
+  const c = ringsCentre(RINGS);
+  assert.equal(Math.round(c.lat * 1000) / 1000, 44.126);
+  assert.equal(Math.round(c.lng * 1000) / 1000, -90.651);
+  assert.equal(ringsCentre(null), null, 'a record with no geometry has no centre');
+  assert.equal(ringsCentre([]), null);
+});
+
+test('a search finds parcels by owner, largest first', async t => {
+  const { server, calls } = await fakeArcgis(() => ({
+    features: [named('SMITH FARMS LLC', 640), named('SMITH, JOHN A', 40.2)],
+  }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+
+  const found = await parcelsByOwner('smith');
+  assert.equal(found.term, 'SMITH');
+  assert.equal(found.parcels.length, 2);
+  assert.equal(found.parcels[0].owner, 'SMITH FARMS LLC');
+  assert.equal(found.parcels[0].acres, 640);
+  assert.ok(found.parcels[0].rings, 'the boundary rides with the row, so a click draws it');
+  assert.equal(Math.round(found.parcels[0].centre.lat * 1000) / 1000, 44.126);
+  assert.equal(found.truncated, false);
+
+  const asked = decodeURIComponent(calls[0]);
+  assert.match(asked, /orderByFields=GISACRES\+DESC/,
+    'acreage is what makes a row worth reading');
+  assert.match(asked, /resultRecordCount=51/,
+    'one more than the cap is asked for, so truncation is known rather than guessed');
+});
+
+test('more matches than the cap are reported as truncated, not silently cut', async t => {
+  // The failure this guards: a list that stops at the cap with no note reads
+  // as "these are all of them", which for a common surname is a lie.
+  const { server } = await fakeArcgis(() => ({
+    features: Array.from({ length: 4 }, (_, i) => named('SMITH ' + i, 100 - i)),
+  }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+
+  const found = await parcelsByOwner('smith', { limit: 3 });
+  assert.equal(found.parcels.length, 3, 'the cap is honoured');
+  assert.equal(found.truncated, true, 'and the extra row is counted, not shown');
+});
+
+test('a limit above the maximum cannot be talked upwards', async t => {
+  const { server, calls } = await fakeArcgis(() => ({ features: [] }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+  await parcelsByOwner('smith', { limit: 5000 });
+  assert.match(decodeURIComponent(calls[0]), /resultRecordCount=51/,
+    'the cap is part of the feature — no bulk download through a query string');
+});
+
+test('too short a name is refused before any request', async t => {
+  const { server, calls } = await fakeArcgis(() => ({ features: [] }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+  await assert.rejects(() => parcelsByOwner('sm'), /at least 3 characters/);
+  await assert.rejects(() => parcelsByOwner('%%'), /at least 3 characters/);
+  assert.equal(calls.length, 0, 'two letters of a surname is not a query worth making');
+});
+
+test('a repeated search is served from memory', async t => {
+  const { server, calls } = await fakeArcgis(() => ({ features: [named('SMITH', 10)] }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+  await parcelsByOwner('smith');
+  await parcelsByOwner('  Smith ');
+  assert.equal(calls.length, 1, 'the same name twice, however typed, is one request');
+  await parcelsByOwner('jones');
+  assert.equal(calls.length, 2);
+});
+
+test('an ArcGIS error inside a 200 throws for a search too', async t => {
+  const { server } = await fakeArcgis(() => ({ error: { message: 'Invalid query parameters' } }));
+  t.after(() => { server.close(); delete process.env.TRAILCAM_PARCEL_URL; });
+  await assert.rejects(() => parcelsByOwner('smith'),
+    /parcel service error: Invalid query parameters/);
+});
+
+test('the API searches by owner name', async t => {
+  const { get } = await serving(t, () => ({
+    features: [named('SMITH FARMS LLC', 640), named('SMITH, JOHN A', 40.2)],
+  }));
+  const res = await get('/api/parcels/search?name=smith');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.term, 'SMITH');
+  assert.equal(body.count, 2);
+  assert.equal(body.truncated, false);
+  assert.equal(body.max, 50);
+  assert.equal(body.parcels[0].owner, 'SMITH FARMS LLC');
+  assert.equal(body.parcels[0].propClassName, 'undeveloped, productive forest');
+});
+
+test('a name nobody owns is an empty list, not an error', async t => {
+  const { get } = await serving(t, () => ({ features: [] }));
+  const res = await get('/api/parcels/search?name=nobodyhere');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.parcels, []);
+  assert.equal(body.count, 0);
+});
+
+test('a too-short or missing name is a 400 that says what is needed', async t => {
+  const { get } = await serving(t, () => ({ features: [] }));
+  assert.equal((await get('/api/parcels/search')).status, 400);
+  assert.equal((await get('/api/parcels/search?name=')).status, 400);
+  assert.equal((await get('/api/parcels/search?name=sm')).status, 400);
+  const body = await (await get('/api/parcels/search?name=%25')).json();
+  assert.match(body.error, /at least 3 letters/,
+    'the message asks for more of the name rather than reporting a fault');
+  assert.equal((await get('/api/parcels/search?name=smith&limit=0')).status, 400);
+  assert.equal((await get('/api/parcels/search?name=smith&limit=abc')).status, 400);
+});
+
+test('a broken service during a search is a 502', async t => {
+  const { get } = await serving(t, () => ({ error: { message: 'service unavailable' } }));
+  const res = await get('/api/parcels/search?name=smith');
+  assert.equal(res.status, 502);
+  assert.match((await res.json()).error, /service unavailable/);
 });

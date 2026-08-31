@@ -90,6 +90,24 @@ export const mapStyles = `
              background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
   #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
                           stroke-dasharray: none; }
+  /* Your own ground, ticked for suggestions. Deliberately not the red of a
+     looked-up parcel: that one is "here is who owns this", this one is "here
+     is the ground I am about to search", and they are often on screen at once. */
+  #contours path.myprop { stroke: rgba(120,235,150,.95); stroke-width: 2.4;
+                          fill: rgba(120,235,150,.08); stroke-dasharray: 9 5; }
+  .propcard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 268px;
+              max-width: calc(100vw - 20px); padding: 12px 14px; border-radius: 10px;
+              background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+              box-shadow: 0 6px 22px rgba(0,0,0,.35); font-size: 13px; }
+  .propcard h4 { margin: 0 0 4px; font-size: 14px; }
+  .propcard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                     border: 0; background: none; color: var(--muted); font-size: 18px; }
+  .propcard label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+                    padding: 6px 0; border-top: 1px solid var(--line); }
+  .propcard label input { margin-top: 2px; }
+  .propcard .who { color: var(--muted); font-size: 11.5px; display: block; }
+  .propcard .go { width: 100%; margin-top: 10px; }
+  .propcard .hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
   #contours path.route.draft { stroke-dasharray: 6 5; }
   .measurebox .big { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
   #contours path.measure { stroke: rgba(255,235,120,.95); stroke-width: 2.6; fill: none;
@@ -195,9 +213,12 @@ export const mapStyles = `
                      color: var(--muted); border-radius: 5px; padding: 4px 9px;
                      font: inherit; font-size: 12px; cursor: pointer; }
   .oldwinds button:hover { color: var(--bad); border-color: var(--bad); }
-  .parcelcard .row { display: flex; justify-content: space-between; gap: 12px;
-                     padding: 3px 0; color: var(--muted); }
-  .parcelcard .row b { color: var(--ink); font-weight: 600; text-align: right; }
+  /* One row style for both: a parcel read off the map and a parcel picked out
+     of a name search are the same facts, and must not look like two things. */
+  .parcelcard .row, .ownersearch .row { display: flex; justify-content: space-between;
+                     gap: 12px; padding: 3px 0; color: var(--muted); }
+  .parcelcard .row b, .ownersearch .row b { color: var(--ink); font-weight: 600;
+                     text-align: right; }
   .layers.open .layermenu { display: flex; }
   .layers.open .swatch { visibility: hidden; }
   .layermenu button.on { border-color: var(--accent); }
@@ -462,6 +483,38 @@ export const mapStyles = `
                 width: min(300px, calc(100% - 20px)); background: var(--panel);
                 border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
                 box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  /* The owner search takes the SAME corner as the parcel card, and the two are
+     never open together — a card describing one parcel beside a list of fifty
+     others is two answers to one question. Opening either closes the other. */
+  .ownersearch { position: absolute; right: 10px; bottom: 10px; z-index: 6;
+                 width: min(330px, calc(100% - 20px)); max-height: calc(100% - 20px);
+                 display: flex; flex-direction: column;
+                 background: var(--panel); border: 1px solid var(--line);
+                 border-radius: 10px; padding: 13px 15px;
+                 box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  .ownersearch h4 { margin: 0 0 8px; font-size: 14px; }
+  .ownersearch .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                        background: none; border: 0; color: var(--muted); font-size: 16px;
+                        line-height: 1; padding: 2px 4px; }
+  .ownersearch form { display: flex; gap: 6px; }
+  .ownersearch input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px;
+                       border: 1px solid var(--line); background: var(--bg);
+                       color: var(--ink); font: 13px ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch form button { padding: 6px 10px; border-radius: 6px; cursor: pointer;
+                             border: 1px solid var(--accent); background: var(--accent);
+                             color: #fff; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch .hint { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  /* The list scrolls, the box does not grow: fifty rows must not push the map
+     off the screen on a laptop. */
+  .ownersearch .hits { margin-top: 8px; overflow-y: auto; min-height: 0; }
+  .ownersearch .hit { width: 100%; text-align: left; cursor: pointer; display: block;
+                      padding: 6px 8px; border: 0; border-radius: 6px; background: none;
+                      color: var(--ink); font: 13px ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch .hit:hover { background: var(--bg); }
+  .ownersearch .hit.on { background: var(--bg); outline: 1px solid var(--accent); }
+  .ownersearch .hit .where { display: block; font-size: 11px; color: var(--muted); }
+  /* The picked row's facts, indented under it rather than in a second card. */
+  .ownersearch .detail { padding: 2px 8px 8px; }
   /* Map-type control, positioned like Google's: a thumbnail in the lower-left
      showing what you would switch TO, with the full list on hover or tap. */
   .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
@@ -589,31 +642,110 @@ export const mapStyles = `
   /* The weather strip: a chip at the bottom-centre that opens into the
      timeline. Bottom-centre is the one clear edge — the layer swatch owns the
      left corner, attribution the right — and it is where a thumb already is. */
+  /* Both the chip and the bar float ON the map, so they are drawn as glass
+     rather than as panels: a translucent fill over a blur, a hairline edge,
+     and the shadow doing the lifting. The solid var(--panel) is declared
+     first on purpose — it is the fallback wherever color-mix does not land,
+     and a control that ends up merely opaque is plain, not broken. */
   .wxchip { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
-            z-index: 4; display: flex; align-items: center; gap: 7px; padding: 7px 12px;
-            border-radius: 999px; background: var(--panel); border: 1px solid var(--line);
-            color: var(--ink); font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
-            cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.3); white-space: nowrap; }
+            z-index: 4; display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+            border-radius: 999px;
+            background: var(--panel);
+            background: color-mix(in srgb, var(--panel) 84%, transparent);
+            backdrop-filter: blur(12px) saturate(1.3);
+            -webkit-backdrop-filter: blur(12px) saturate(1.3);
+            border: 1px solid var(--line);
+            border-color: color-mix(in srgb, var(--line) 65%, transparent);
+            color: var(--ink); font: 600 12.5px/1 ui-sans-serif, system-ui, sans-serif;
+            font-variant-numeric: tabular-nums;
+            cursor: pointer; white-space: nowrap;
+            box-shadow: 0 2px 12px rgba(0,0,0,.2);
+            transition: transform .15s ease, box-shadow .15s ease; }
+  .wxchip:hover { transform: translateX(-50%) translateY(-1px);
+                  box-shadow: 0 5px 18px rgba(0,0,0,.26); }
   .wxchip .muted { color: var(--muted); font-weight: 500; }
   .wxarrow { display: inline-block; font-size: 13px; line-height: 1; }
   .wxbar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
-           z-index: 6; width: min(560px, calc(100% - 20px)); background: var(--panel);
-           border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 8px;
-           box-shadow: 0 4px 18px rgba(0,0,0,.35); }
-  .wxbar .now { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-                font-size: 13px; color: var(--ink); }
-  .wxbar .now b { font-size: 15px; }
-  .wxbar .when { color: var(--muted); font-size: 12px; margin-left: auto; }
-  .wxbar input[type=range] { width: 100%; margin: 9px 0 2px; }
-  .wxbar .scale { display: flex; font-size: 10px; color: var(--muted); }
-  .wxbar .scale span { flex: 1; text-align: center; border-left: 1px solid var(--line);
-                       overflow: hidden; }
-  .wxbar .scale span:first-child { border-left: 0; }
-  .wxbar .foot { display: flex; gap: 8px; margin-top: 7px; align-items: center; }
-  .wxbar .foot button { border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-                        border-radius: 6px; padding: 4px 10px; cursor: pointer;
-                        font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; }
-  .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 5px; }
+           z-index: 6; width: min(600px, calc(100% - 20px));
+           background: var(--panel);
+           background: color-mix(in srgb, var(--panel) 90%, transparent);
+           backdrop-filter: blur(18px) saturate(1.3);
+           -webkit-backdrop-filter: blur(18px) saturate(1.3);
+           border: 1px solid var(--line);
+           border-color: color-mix(in srgb, var(--line) 65%, transparent);
+           border-radius: 16px; padding: 12px 14px 10px;
+           box-shadow: 0 10px 34px rgba(0,0,0,.26); }
+  .wxbar .now { display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+                font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .wxbar .now b { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+  .wxbar .when { color: var(--muted); font-size: 10.5px; margin-left: auto;
+                 text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+  /* The timeline is three layers in one box: the rain profile drawn behind,
+     the groove, and a native range input stretched over the lot with its own
+     chrome removed. The input stays because it already knows how to be
+     dragged by a thumb, arrowed by a keyboard and announced to a screen
+     reader — all of which a bare div would have to reimplement, badly. */
+  .wxplot { position: relative; height: 46px; margin: 10px 0 0; }
+  /* No gap between the bars, and no rounded caps. A week is 168 of these in
+     about 570px, so each is three pixels wide: spaced and capped they read as
+     static rather than as weather (screenshots in the PR). Butted together
+     they make one continuous profile, which is what a front looks like. */
+  .wxspark { position: absolute; left: 0; right: 0; top: 0; bottom: 20px;
+             display: flex; align-items: flex-end; gap: 0; pointer-events: none; }
+  .wxspark i { flex: 1 1 0; min-width: 0; min-height: 1px;
+               background: var(--accent); opacity: .3; }
+  /* An hour with rain actually falling reads darker than one that merely
+     might: the bar heights are probability, and probability alone never says
+     which side of the front you are standing on. */
+  .wxspark i.wet { opacity: .62; }
+  .wxgroove { position: absolute; left: 0; right: 0; bottom: 8px; height: 4px;
+              border-radius: 999px; background: var(--line); pointer-events: none; }
+  /* Where "now" falls on a track that starts at midnight this morning. */
+  .wxnowtick { position: absolute; bottom: 4px; width: 2px; height: 12px;
+               border-radius: 1px; background: var(--muted); opacity: .55;
+               transform: translateX(-1px); pointer-events: none; }
+  .wxbar input[type=range] { -webkit-appearance: none; appearance: none;
+        position: absolute; left: 0; bottom: 0; width: 100%; height: 20px;
+        margin: 0; padding: 0; background: transparent; cursor: pointer; }
+  .wxbar input[type=range]:focus { outline: 0; }
+  .wxbar input[type=range]::-webkit-slider-runnable-track { height: 20px; background: transparent; }
+  .wxbar input[type=range]::-moz-range-track { height: 20px; background: transparent; }
+  .wxbar input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+        width: 14px; height: 14px; margin-top: 3px; border-radius: 50%;
+        background: var(--accent); border: 2px solid var(--panel);
+        box-shadow: 0 1px 5px rgba(0,0,0,.4); }
+  .wxbar input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%;
+        background: var(--accent); border: 2px solid var(--panel);
+        box-shadow: 0 1px 5px rgba(0,0,0,.4); }
+  .wxbar input[type=range]:focus-visible::-webkit-slider-thumb {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .wxbar input[type=range]:focus-visible::-moz-range-thumb {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent); }
+  /* Day names sit under their own hours. Tick marks rather than full
+     dividers: the old cell borders drew a grid the data does not have. */
+  .wxbar .scale { display: flex; margin-top: 5px;
+                  font: 700 9.5px/1 ui-sans-serif, system-ui, sans-serif;
+                  color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .wxbar .scale span { flex: 1 1 0; min-width: 0; text-align: center; position: relative;
+                       overflow: hidden; white-space: nowrap; }
+  .wxbar .scale span::before { content: ''; position: absolute; left: 0; top: -7px;
+                               width: 1px; height: 4px; background: var(--line); }
+  .wxbar .scale span:first-child::before { display: none; }
+  .wxbar .foot { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+  .wxbar .foot button { border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
+                        background: color-mix(in srgb, var(--ink) 9%, transparent);
+                        color: var(--ink);
+                        font: 600 11.5px/1 ui-sans-serif, system-ui, sans-serif;
+                        transition: background .12s ease; }
+  .wxbar .foot button:hover { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+  .wxbar .foot button.primary { background: var(--accent); color: var(--panel); }
+  .wxbar .foot button.primary:hover { filter: brightness(1.1); }
+  .wxbar .foot .hint { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 8px; line-height: 1.35; }
+  @media (prefers-reduced-motion: reduce) {
+    .wxchip, .wxbar .foot button { transition: none; }
+    .wxchip:hover { transform: translateX(-50%); }
+  }
   /* On a phone the attribution wraps to a full-width pill along the very
      bottom edge and sat straight on the chip (measured at 390px). The strip
      steps above it; the ground switcher steps above the strip in the
@@ -651,6 +783,7 @@ export const mapMarkup = String.raw`
             <button id="view3dBtn" type="button">3D view</button>
             <button id="measureBtn" type="button">Measure</button>
             <button id="whoOwns" type="button">Who owns this?</button>
+            <button id="findOwner" type="button">Find an owner</button>
           </div>
         </div>
         <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
@@ -1165,6 +1298,31 @@ const CROP_STYLE = {
 
 const fieldWord = f => CROP_LABELS[f.crop] || f.crop;
 
+// How a stored scan reads in the field form. Every branch says how old the
+// reading is, because "standing" from a fortnight ago is a different claim
+// from "standing" on Tuesday, and cloud routinely hides a field for weeks.
+const SCAN_WORDS = {
+  standing: 'still standing',
+  senescing: 'going off — past its peak but not yet bare',
+  cut: 'cut',
+  'cut-or-senesced': 'either cut or dried down — the passes are too far apart to say which',
+  unknown: 'not readable',
+};
+
+function scanWords(r) {
+  if (!r || r.scanned === false) return r && r.why ? r.why : 'Not checked yet.';
+  const bits = ['Looks ' + (SCAN_WORDS[r.state] || r.state)];
+  if (r.state === 'cut' && r.state_since) bits.push('since ' + r.state_since);
+  if (r.latest_date) bits.push('(clearest recent look ' + r.latest_date + ')');
+  let out = bits.join(' ') + '.';
+  if (r.verdict) out += ' The greenness curve looks like ' + (CROP_LABELS[r.verdict] || r.verdict) + '.';
+  else if (r.verdict_why) out += ' Crop not identified: ' + r.verdict_why + '.';
+  if (r.disagreement && r.disagreement.length) {
+    out += ' Worth a look: ' + r.disagreement.join('; ') + '.';
+  }
+  return out;
+}
+
 async function refreshFields() {
   FIELDS = await (await fetch('/api/fields')).json();
   draw();
@@ -1323,6 +1481,37 @@ function openFieldForm(field) {
   standing.onclick = () => { cut.value = ''; };
   cutRow.append(cutToday, standing);
   form.appendChild(cutRow);
+
+  // What the satellite says the field is doing THIS season, as against the
+  // CDL's year-old answer above. Read from storage, so opening a field costs
+  // nothing and works with no signal; only the button goes to the network. It
+  // never writes to the crop or cut boxes — it reports and the person decides,
+  // the same rule the USDA pre-selection follows.
+  const season = el('div', 'hint', '');
+  if (!isNew) {
+    form.append(el('label', null, 'This season, from satellite'), season);
+    const scanRow = el('div', 'formrow');
+    const scanBtn = el('button', null, 'Check this season');
+    scanBtn.type = 'button';
+    scanBtn.onclick = () => {
+      scanBtn.disabled = true;
+      season.textContent = 'Reading about a dozen satellite passes — this takes a minute…';
+      fetch('/api/fields/' + field.id + '/scan', { method: 'POST' })
+        .then(r => r.json())
+        .then(r => { season.textContent = scanWords(r); refreshFields(); })
+        .catch(() => { season.textContent = 'The scan could not be run just now.'; })
+        .then(() => { scanBtn.disabled = false; });
+    };
+    scanRow.appendChild(scanBtn);
+    form.appendChild(scanRow);
+
+    if (D.live) {
+      fetch('/api/fields/' + field.id + '/scan')
+        .then(r => r.json())
+        .then(r => { season.textContent = scanWords(r); })
+        .catch(() => { season.textContent = ''; });
+    }
+  }
 
   const notes = document.createElement('textarea');
   notes.rows = 2;
@@ -2138,7 +2327,10 @@ function showSuggestion(c) {
     + c.facing + ' at a ' + c.feature.kind));
   card.appendChild(el('div', 'meta',
     c.setbackM + ' m back \u00b7 huntable on ' + c.winds.length + ' of 16 winds'
-    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')));
+    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')
+    // Which ground it is on, but only when you asked about more than one \u2014
+    // on a single property it is the same line under every card.
+    + (SELECTED_PROPS.size > 1 && c.property ? ' \u00b7 ' + c.property.label : '')));
 
   const ul = el('ul');
   for (const r of c.reasons) {
@@ -2181,24 +2373,118 @@ function showSuggestion(c) {
 
 let SUGGEST_CAVEAT = null;
 
+function removePropCard() { document.querySelector('.propcard')?.remove(); }
+
+/**
+ * Which property (or properties) is this about?
+ *
+ * Asked once and remembered, rather than inferred from where the map is
+ * scrolled. Ticking one outlines it on the map, so what the tool is about to
+ * search is a shape you can see before you press the button \u2014 the whole
+ * complaint that started this was suggestions landing on ground the person
+ * had no interest in.
+ */
+async function loadMyProperties() {
+  if (PROPS_LOADED) return MY_PROPERTIES;
+  const res = await fetch('/api/my-properties');
+  const body = await res.json();
+  if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  MY_PROPERTIES = body.properties || [];
+  PROPS_LOADED = true;
+  // Drop remembered keys that no longer exist \u2014 a property is an index into a
+  // clustering, and dropping the last pin on one renumbers the rest.
+  const live = new Set(MY_PROPERTIES.map(p => p.key));
+  for (const k of [...SELECTED_PROPS]) if (!live.has(k)) SELECTED_PROPS.delete(k);
+  return MY_PROPERTIES;
+}
+
+function showPropertyPicker(onGo) {
+  removePropCard();
+  const card = el('div', 'propcard');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
+  x.onclick = () => { removePropCard(); };
+  card.appendChild(x);
+  card.appendChild(el('h4', null, 'Suggest a stand where?'));
+  card.appendChild(el('div', 'who', 'Tick the ground to search. The boundary is drawn as you tick.'));
+
+  if (!MY_PROPERTIES.length) {
+    card.appendChild(el('div', 'hint', 'No parcel was found under anything you have '
+      + 'placed. Outside Wisconsin the parcel layer has nothing to say, so press '
+      + '"Suggest a stand" again and it will work from the map instead.'));
+    mapEl.appendChild(card);
+    return;
+  }
+
+  for (const p of MY_PROPERTIES) {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = SELECTED_PROPS.has(p.key);
+    cb.onchange = () => {
+      if (cb.checked) SELECTED_PROPS.add(p.key); else SELECTED_PROPS.delete(p.key);
+      saveSelectedProps();
+      draw();
+    };
+    const acres = (p.parcels || []).reduce((a, q) => a + (q.acres || 0), 0);
+    const text = document.createElement('span');
+    text.append(el('span', null, p.label));
+    const bits = [];
+    if (p.owner) bits.push(p.owner);
+    if (acres) bits.push(Math.round(acres) + ' acres');
+    if ((p.parcels || []).length > 1) bits.push((p.parcels || []).length + ' parcels');
+    if (bits.length) text.append(el('span', 'who', bits.join(' \u00b7 ')));
+    lab.append(cb, text);
+    card.appendChild(lab);
+  }
+
+  const go = document.createElement('button');
+  go.className = 'primary go';
+  go.textContent = 'Suggest for these';
+  go.onclick = () => {
+    if (!SELECTED_PROPS.size) {
+      terrainNote('Tick at least one property first.');
+      return;
+    }
+    removePropCard();
+    onGo();
+  };
+  card.appendChild(go);
+  card.appendChild(el('div', 'hint', 'Boundaries are public record from the Wisconsin '
+    + 'statewide parcel map, looked up from the pins you have placed.'));
+  mapEl.appendChild(card);
+}
+
 async function loadSuggestions() {
   suggestBtn.disabled = true;
   suggestBtn.textContent = 'Thinking\u2026';
   terrainNote('Reading the ground and your wind history\u2026');
   try {
-    // The bounds go with the centre so the server can leave out what you
-    // cannot see. A suggestion off the edge of the screen is a pin you have to
-    // go hunting for, and it reads as the tool ignoring where you are looking.
+    // The properties you ticked decide the scope. The viewport still goes
+    // along, but only so the answer can SAY how many spots are off the edge \u2014
+    // it no longer throws them away, because you already said which ground you
+    // meant and a spot on it is on it whatever the zoom happens to be.
     const vb = visibleBounds();
     const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6)
       + '&north=' + vb.north.toFixed(6) + '&south=' + vb.south.toFixed(6)
-      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6);
+      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6)
+      + (SELECTED_PROPS.size ? '&properties=' + [...SELECTED_PROPS].join(',') : '');
     const res = await fetch('/api/suggest-stands' + q);
     const body = await res.json();
     // The endpoint says WHY it could not answer — no stands yet, no LiDAR
     // coverage, the terrain service down. Without this check all three came
     // out as the blandest possible lie: "Nothing to suggest here."
     if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+    // The server can only refuse to guess. When the map is over open country
+    // between two properties there IS no right answer to infer, so it hands
+    // back the list and the page asks.
+    if (body.needsProperty) {
+      terrainNote(body.note || 'Pick which property to suggest for.');
+      await loadMyProperties();
+      draw();
+      showPropertyPicker(() => loadSuggestions());
+      return;
+    }
     SUGGESTIONS = body.candidates || [];
     SUGGEST_CAVEAT = body.caveat || null;
     const lines = [];
@@ -2207,6 +2493,11 @@ async function loadSuggestions() {
         + (SUGGESTIONS.length === 1 ? '' : 's') + ' worth walking.</b> Tap one for why.');
     }
     if (body.note) lines.push(body.note);
+    // Which ground each answer came from, when you asked about more than one.
+    if ((body.properties || []).length > 1) {
+      lines.push('Searched ' + body.properties.map(p =>
+        p.label + ' (' + p.found + ')').join(' and ') + '.');
+    }
     for (const n of body.notes || []) lines.push(n);
     if (!body.windHistoryLoaded && SUGGESTIONS.length) {
       lines.push('No wind history cached yet \u2014 load "Which stands earn their keep" '
@@ -2223,21 +2514,47 @@ async function loadSuggestions() {
   }
 }
 
-suggestBtn.onclick = ev => {
+suggestBtn.onclick = async ev => {
   ev.stopPropagation();
   if (!D.live) return;
   if (SUGGESTIONS.length) {
     SUGGESTIONS = [];
     suggestSel = null;
     closeSuggestCard();
+    removePropCard();
     suggestBtn.classList.remove('on');
     suggestBtn.textContent = 'Suggest a stand';
     terrainNote(null);
     draw();
     return;
   }
+  // Ask which ground before searching it. Once you have answered, the answer
+  // sticks and the button goes straight to work — the picker is a decision to
+  // make once, not a dialog to dismiss every time. Shift-click reopens it.
+  if (!SELECTED_PROPS.size || ev.shiftKey) {
+    suggestBtn.disabled = true;
+    try {
+      await loadMyProperties();
+    } catch (err) {
+      terrainNote('Could not read your property boundaries: ' + err.message
+        + ' — suggesting from the map instead.');
+      suggestBtn.disabled = false;
+      loadSuggestions();
+      return;
+    }
+    suggestBtn.disabled = false;
+    if (MY_PROPERTIES.length > 1 || !SELECTED_PROPS.size) {
+      draw();
+      showPropertyPicker(() => loadSuggestions());
+      return;
+    }
+  }
   loadSuggestions();
 };
+
+// Re-opening the picker without clearing what is on the map: the ground you
+// searched last time is not always the ground you want next.
+suggestBtn.title = 'Suggest a stand — shift-click to choose which property';
 if (!D.live) {
   suggestBtn.disabled = true;
   suggestBtn.title = 'Suggestions need the server';
@@ -2396,6 +2713,26 @@ function showWalkCard(s, fromLabel) {
 const terrainCanvas = document.getElementById('terrain');
 const contoursEl = document.getElementById('contours');
 let PARCEL_RINGS = null;     // boundary of the parcel last looked up
+
+// The properties you hunt, straight off the state parcel layer, and which of
+// them the next "Suggest a stand" is about. Asked rather than inferred: the
+// map centre used to decide, and on the view that frames everything it lands
+// in open country between two properties, where the honest answer is neither.
+let MY_PROPERTIES = [];              // [{ key, label, owner, parcels: [{rings, acres}] }]
+let SELECTED_PROPS = new Set();      // the keys ticked
+let PROPS_LOADED = false;
+
+function saveSelectedProps() {
+  try { localStorage.setItem('trailcam.props', JSON.stringify([...SELECTED_PROPS])); }
+  catch (e) { /* private window, or storage off — the choice just does not persist */ }
+}
+function loadSelectedProps() {
+  try {
+    const raw = localStorage.getItem('trailcam.props');
+    if (raw) SELECTED_PROPS = new Set(JSON.parse(raw));
+  } catch (e) { SELECTED_PROPS = new Set(); }
+}
+loadSelectedProps();
 let TERRAIN = null;          // the loaded payload
 let terrainImage = null;     // an offscreen canvas holding the hillshade
 let terrainOn = false;
@@ -2591,6 +2928,16 @@ function parcelPaths(left, top) {
   const out = PARCEL_RINGS
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
+  // The ground you ticked, outlined. Drawn under the looked-up parcel so that
+  // pressing "Who owns this?" inside your own boundary still reads clearly.
+  for (const p of MY_PROPERTIES) {
+    if (!SELECTED_PROPS.has(p.key)) continue;
+    for (const parcel of p.parcels || []) {
+      for (const ring of parcel.rings || []) {
+        out.unshift('<path class="myprop" d="' + svgPath(ring, left, top, true) + '"></path>');
+      }
+    }
+  }
   // Fields go under everything: they are ground, and a filled shape drawn
   // over a route or a lane would tint the line that matters.
   return fieldPaths(left, top)
@@ -2994,6 +3341,9 @@ function showParcelCard(title, rows, note) {
 }
 
 async function lookupParcel(lat, lng) {
+  // A click on the map answers a different question from the open search, and
+  // the two share the corner and the boundary \u2014 so the list stands down.
+  removeOwnerSearch();
   showParcelCard('Looking up\u2026', [], null);
   try {
     const res = await fetch('/api/parcel?lat=' + lat + '&lng=' + lng);
@@ -3035,6 +3385,170 @@ if (!D.live) {
     ownBtn.classList.toggle('on', identifying);
     ownBtn.textContent = identifying ? 'Click the map\u2026' : 'Who owns this?';
     mapEl.classList.toggle('placing', identifying);
+  };
+}
+
+// ---- find an owner ----------------------------------------------------
+//
+// The mirror of "who owns this": you have a NAME — the neighbour who gave you
+// permission, the LLC on the sign at the gate — and want the rest of what it
+// owns. Statewide and capped at what the server will return; a common surname
+// says so rather than pretending the first fifty are all of them.
+const findBtn = document.getElementById('findOwner');
+let ownerHits = null;   // the last search: { term, parcels, truncated, count }
+let ownerSel = null;    // index of the row whose boundary is on the map
+
+function removeOwnerSearch() {
+  document.querySelector('.ownersearch')?.remove();
+  ownerHits = null; ownerSel = null;
+}
+
+// Same split as the parcel card: dismissing takes the boundary with it, so a
+// red outline is never left on the map with nothing explaining it.
+function closeOwnerSearch() {
+  removeOwnerSearch();
+  if (PARCEL_RINGS) { PARCEL_RINGS = null; draw(); }
+}
+
+function ownerPanel() {
+  const open = document.querySelector('.ownersearch');
+  if (open) return open;
+  // The two share one corner and one PARCEL_RINGS, so they are never both up.
+  removeParcelCard();
+  const box = el('div', 'ownersearch');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '×'; x.title = 'Close';
+  x.onclick = closeOwnerSearch;
+  box.appendChild(x);
+  box.appendChild(el('h4', null, 'Find an owner'));
+
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.placeholder = 'Owner or company name';
+  input.autocomplete = 'off';
+  const go = document.createElement('button');
+  go.type = 'submit'; go.textContent = 'Search';
+  form.append(input, go);
+  // A form rather than a button handler so Enter in the box works, which is
+  // how anyone actually uses a search field.
+  form.onsubmit = ev => { ev.preventDefault(); runOwnerSearch(input.value); };
+  box.appendChild(form);
+
+  box.appendChild(el('div', 'hits'));
+  box.appendChild(el('div', 'hint',
+    'Wisconsin only. Public record, looked up on demand — nothing is saved.'));
+  mapEl.appendChild(box);
+  input.focus();
+  return box;
+}
+
+/** One line of prose where the results go: searching, empty, or broken. */
+function ownerSay(msg) {
+  const hits = document.querySelector('.ownersearch .hits');
+  if (!hits) return;
+  hits.textContent = '';
+  hits.appendChild(el('div', 'hint', msg));
+}
+
+async function runOwnerSearch(name) {
+  const term = String(name || '').trim();
+  // The server says this too. Saying it here as well means the common typo
+  // costs nothing rather than a round trip and a 400.
+  if (term.length < 3) return ownerSay('Type at least three letters of a name.');
+  ownerSay('Searching…');
+  try {
+    const res = await fetch('/api/parcels/search?name=' + encodeURIComponent(term));
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'search failed');
+    ownerHits = body;
+    ownerSel = null;
+    // A boundary from the previous search must not outlive its list.
+    if (PARCEL_RINGS) { PARCEL_RINGS = null; draw(); }
+    drawOwnerHits();
+  } catch (err) {
+    ownerHits = null; ownerSel = null;
+    ownerSay('Search failed: ' + err.message);
+  }
+}
+
+function drawOwnerHits() {
+  const hits = document.querySelector('.ownersearch .hits');
+  if (!hits || !ownerHits) return;
+  hits.textContent = '';
+  const list = ownerHits.parcels || [];
+  if (!list.length) {
+    return ownerSay('No Wisconsin parcels with that name. Owner names are recorded '
+      + 'as the deed spells them — try a surname on its own.');
+  }
+  if (ownerHits.truncated) {
+    // Said before the rows, because it changes how the list should be read.
+    hits.appendChild(el('div', 'hint', 'More than ' + list.length
+      + ' matches. Showing the ' + list.length + ' largest — narrow the name to see the rest.'));
+  }
+  list.forEach((p, i) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'hit' + (i === ownerSel ? ' on' : '');
+    row.appendChild(el('span', null, p.owner || 'Owner not recorded'));
+    const where = [p.acres === null ? null : p.acres + ' acres',
+      p.county ? p.county + ' County' : null,
+      p.propClassName].filter(Boolean).join(' · ');
+    if (where) row.appendChild(el('span', 'where', where));
+    row.onclick = () => pickOwnerHit(i);
+    hits.appendChild(row);
+    // The detail opens where the row is rather than in a second card, so the
+    // list you are working down stays on screen and in place.
+    if (i === ownerSel) hits.appendChild(ownerDetail(p));
+  });
+}
+
+function ownerDetail(p) {
+  const box = el('div', 'detail');
+  for (const [k, v] of [
+    ['Acres', p.acres],
+    ['Class', p.propClassName || p.propClass],
+    ['County', p.county],
+    ['Town', p.town],
+    ['Parcel ID', p.parcelId],
+    ['Mailing address', p.mailingAddress],
+  ]) {
+    if (v === null || v === undefined || v === '') continue;
+    const r = el('div', 'row');
+    r.append(el('span', null, k), el('b', null, String(v)));
+    box.appendChild(r);
+  }
+  return box;
+}
+
+function pickOwnerHit(i) {
+  const p = (ownerHits?.parcels || [])[i];
+  if (!p) return;
+  ownerSel = i;
+  PARCEL_RINGS = p.rings || null;
+  // Frame the parcel itself where its boundary came back, so a 300-acre block
+  // and a town lot each fill the map. The centre is the fallback for the rare
+  // record with attributes but no geometry.
+  const pts = (p.rings || []).flat();
+  if (pts.length) ({ centre, zoom } = frameFor(pts));
+  else if (p.centre) { centre = { lat: p.centre.lat, lng: p.centre.lng }; zoom = Math.max(zoom, 15); }
+  draw();
+  drawOwnerHits();
+}
+
+if (!D.live) {
+  findBtn.disabled = true;
+  findBtn.title = 'Owner search needs the server';
+  findBtn.style.opacity = '0.6';
+  findBtn.style.cursor = 'not-allowed';
+} else {
+  findBtn.onclick = ev => {
+    ev.stopPropagation();
+    // Not a map mode — it takes typing, not a click — but arming it should
+    // still put down whatever crosshair is up.
+    clearMapModes();
+    if (document.querySelector('.ownersearch')) closeOwnerSearch();
+    else ownerPanel();
   };
 }
 
@@ -4586,6 +5100,37 @@ function wxOpenBar() {
   wxBar.textContent = '';
   wxBar.appendChild(el('div', 'now'));
 
+  // The plot holds three layers: the rain profile, the groove the thumb runs
+  // in, and the slider itself stretched over both. Built in that order so the
+  // slider is last and therefore on top for pointer events.
+  const plot = el('div', 'wxplot');
+
+  // The rain profile behind the track. Heights are probability, so an hour is
+  // as tall as its chance; the ones with measurable precipitation are painted
+  // darker, because 30% with rain falling and 30% without look identical on
+  // height alone and are not the same evening.
+  const spark = el('div', 'wxspark');
+  const probs = WX.prob || [];
+  const maxProb = Math.max(10, ...probs.filter(p => Number.isFinite(p)));
+  for (let i = 0; i < WX.time.length; i++) {
+    const p = Number.isFinite(probs[i]) ? probs[i] : 0;
+    const wet = Number.isFinite(WX.precip[i]) && WX.precip[i] > 0;
+    const bar = el('i', wet ? 'wet' : null);
+    bar.style.height = Math.max(1, Math.round(p / maxProb * 100)) + '%';
+    spark.appendChild(bar);
+  }
+  plot.appendChild(spark);
+  plot.appendChild(el('div', 'wxgroove'));
+
+  // A tick where the present sits. The forecast starts at midnight this
+  // morning, so "now" is somewhere inside the track rather than at its left
+  // edge, and without the tick there is nothing to read the thumb against.
+  if (WX.time.length > 1) {
+    const tick = el('div', 'wxnowtick');
+    tick.style.left = (wxNowIdx / (WX.time.length - 1) * 100) + '%';
+    plot.appendChild(tick);
+  }
+
   const slider = document.createElement('input');
   slider.type = 'range';
   slider.id = 'wxslider';
@@ -4593,8 +5138,12 @@ function wxOpenBar() {
   slider.max = String(WX.time.length - 1);
   slider.step = '1';
   slider.value = String(wxIdx);
+  // The thumb is a dot on a groove now rather than a browser slider, so the
+  // control says out loud what it is for anyone not looking at it.
+  slider.setAttribute('aria-label', 'Forecast hour');
   slider.oninput = () => { wxIdx = Number(slider.value); wxPaintBar(); };
-  wxBar.appendChild(slider);
+  plot.appendChild(slider);
+  wxBar.appendChild(plot);
 
   // Day names under the slider, each as wide as the hours it owns, so the
   // thumb's position reads as a day without arithmetic.
@@ -4616,7 +5165,7 @@ function wxOpenBar() {
 
   const foot = el('div', 'foot');
   const nowBtn = document.createElement('button');
-  nowBtn.type = 'button'; nowBtn.textContent = 'Now';
+  nowBtn.type = 'button'; nowBtn.className = 'primary'; nowBtn.textContent = 'Now';
   nowBtn.onclick = () => { wxIdx = wxNowIdx; slider.value = String(wxIdx); wxPaintBar(); };
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button'; closeBtn.textContent = 'Close';
@@ -4626,7 +5175,7 @@ function wxOpenBar() {
     wxPaintChip();
   };
   foot.append(nowBtn, closeBtn);
-  foot.appendChild(el('span', 'when', 'Drag to look ahead.'));
+  foot.appendChild(el('span', 'hint', 'Drag to look ahead.'));
   wxBar.appendChild(foot);
 
   if (WX.note) wxBar.appendChild(el('div', 'stale', WX.note));

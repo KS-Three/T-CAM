@@ -461,12 +461,31 @@ returns "no parcel here" rather than pretending. The endpoint is overridable
 via `TRAILCAM_PARCEL_URL`, so pointing at another state's service is a config
 change rather than a rewrite.
 
+### Finding an owner by name
+
+The same question from the other end. Press **Find an owner**, type a name — a
+person or an LLC — and you get the Wisconsin parcels that name is on, largest
+first: owner, acreage, county, class, parcel ID and mailing address. Click a
+row and its boundary is drawn and framed on the map.
+
+This is what you want the evening after somebody says yes to forty acres. The
+neighbour who gave you permission often has another eighty a mile north, and
+the map is how you find out before you ask.
+
+Three letters of a name minimum, and **fifty rows maximum**. A common surname
+says "more than fifty matches — narrow the name" rather than showing you the
+first fifty as though they were all of them. The cap is deliberate and not
+adjustable upward: fifty rows is a look-up, ten thousand would be a mailing
+list.
+
 ### On privacy
 
 Owner names and mailing addresses are public record, and the mailing address is
 the practical point. It is still someone's home address, so lookups are made
 **on demand** and held only in memory for the life of the process. Nothing is
-written to the database or to disk, and there is no bulk download.
+written to the database or to disk, and there is no bulk download — that
+applies to the name search as much as to the click, which is why it is capped
+and why `limit` can only ask for fewer rows than the cap, never more.
 
 ### Two failure modes kept distinct
 
@@ -478,6 +497,25 @@ Conflating them would have the map claim nobody owns ground that plainly is
 owned. ArcGIS makes this easy to get wrong: it reports its own errors *inside*
 a 200 response, so checking the status code alone would turn a broken service
 into "no parcel here". A test pins that.
+
+### "Suggest a stand" asks which ground first
+
+Press it and the first thing you get is a list of the properties you hunt —
+worked out from the parcels under the pins you have already placed, with the
+owner and acreage off the deed. Tick one (or both) and the boundary is drawn
+on the map before anything is searched, so the ground the tool is about to
+reason over is a shape you can look at. The choice sticks; shift-click the
+button to change it.
+
+This replaced guessing from the map centre, which failed in the most ordinary
+way possible: the view that frames everything centres in open country *between*
+two properties, so the honest answer to "whose ground is this" was neither —
+and the old code fell back to every stand you own and picked a deed by vote.
+The first press of the button returned nothing, judged against a property
+nineteen kilometres away.
+
+Two properties ticked at once gives one shortlist, best first, each spot
+labelled with the ground it is on.
 
 ### What "Suggest a stand" will not suggest
 
@@ -501,12 +539,16 @@ Each was its own hole, and each is now closed.
   from OpenStreetMap — 120 m off a building, 60 m off a road, both adjustable.
   Field roads, two-tracks and footpaths are deliberately *not* roads; that is
   where you want to be.
-- **Anything off the screen.** The map sends what it can see and the answer is
-  clipped to it, so a suggestion is a pin you can find.
-- **The other property.** The suggester alone works on the ground under the map
-  centre. The planner and `/tonight` still rank across both places, because
-  "the best sit tonight is at the other place" is a useful answer — but "hang a
-  new stand here" is a question about one property.
+- **The other property.** The suggester alone works on the ground you ticked.
+  The planner and `/tonight` still rank across both places, because "the best
+  sit tonight is at the other place" is a useful answer — but "hang a new stand
+  here" is a question about one property.
+
+The search area comes off the parcel boundary, not off the map, so the answer
+does not change when you zoom. Anything that lands outside the current view is
+still counted in the notes ("2 of these are outside the current view") rather
+than hidden — you picked the property, and a spot on it is on it whatever the
+zoom happens to be.
 
 Every drop is counted out loud in the notes under the button. `?parcels=off`
 and `?builtup=off` skip the two external checks.
@@ -787,7 +829,12 @@ else overlays it or slides in over it.
   actually use for where it is from, and the sky in one word. Tap it and it
   opens into the hourly forecast with a scrubber across the coming week: drag
   forward and watch the wind swing and the front arrive, because the wind
-  three days out is what decides which stand gets hunted Saturday. The
+  three days out is what decides which stand gets hunted Saturday. Behind the
+  scrubber the week's rain is drawn, one bar an hour, each as tall as the
+  chance of it — the darker bars are the hours with rain actually falling,
+  because a 30% that comes to nothing and a 30% you sit through are not the
+  same evening. A tick marks now, which sits *inside* the week rather than at
+  its left edge: the forecast starts at midnight this morning. The
   forecast comes through the server and is cached, so in the truck the strip
   shows the last fetch **and says how old it is** rather than passing Tuesday
   off as live. Everything stays in the property's own clock — the times are

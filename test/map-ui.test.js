@@ -85,6 +85,57 @@ test('the weather strip reads its own server and scrubs the hours', () => {
     'the arrow points where the air GOES while the words name where it is from');
 });
 
+test('the timeline is drawn, not borrowed from the browser', () => {
+  // The native range input is deliberately KEPT — it already knows how to be
+  // dragged, arrowed and announced — and then stripped of its chrome. Losing
+  // the input in favour of a div is the regression this pins: the look would
+  // survive and the keyboard would not.
+  assert.match(mapScript, /slider\.type = 'range'/,
+    'the control is still a real range input, for keyboard and screen readers');
+  assert.match(mapScript, /slider\.setAttribute\('aria-label', 'Forecast hour'\)/,
+    'a slider stripped of its chrome has to say what it is');
+  assert.match(mapStyles, /\.wxbar input\[type=range\] \{ -webkit-appearance: none; appearance: none;/,
+    'the browser thumb and groove are removed, not merely recoloured');
+  assert.match(mapStyles, /::-webkit-slider-thumb[\s\S]*?background: var\(--accent\)/,
+    'the thumb is drawn in the app palette');
+  assert.match(mapStyles, /:focus-visible::-webkit-slider-thumb/,
+    'keyboard focus is visible — appearance:none removes the default ring too');
+
+  // The rain profile sits behind the track. Heights are probability; the
+  // darker bars are the hours with precipitation actually falling, which is
+  // the distinction height alone cannot carry.
+  assert.match(mapScript, /const spark = el\('div', 'wxspark'\)/,
+    'the bar draws a rain profile behind the timeline');
+  assert.match(mapScript, /const wet = Number\.isFinite\(WX\.precip\[i\]\) && WX\.precip\[i\] > 0/,
+    'an hour with rain falling is marked apart from one that merely might');
+  assert.match(mapScript, /Math\.max\(10, \.\.\.probs\.filter\(p => Number\.isFinite\(p\)\)\)/,
+    'a dry week does not scale a 4% chance up into a wall of rain');
+
+  // "Now" is inside the track, not at its left edge: the forecast starts at
+  // midnight this morning.
+  assert.match(mapScript, /tick\.style\.left = \(wxNowIdx \/ \(WX\.time\.length - 1\) \* 100\) \+ '%'/,
+    'the now tick is placed by index, so it stays true as the forecast rolls');
+
+  assert.doesNotMatch(mapStyles, /\.wxbar \.scale span \{[^}]*border-left/,
+    'the day cells lost their dividers — they drew a grid the data does not have');
+});
+
+test('the floating controls fall back to something solid', () => {
+  // color-mix is the whole glass effect. Where it does not land the control
+  // must still be readable, so every translucent fill is preceded by the
+  // opaque one — a plain chip is fine, an unreadable one is not.
+  for (const sel of ['.wxchip', '.wxbar']) {
+    const block = mapStyles.slice(mapStyles.indexOf('  ' + sel + ' {'));
+    const decl = block.slice(0, block.indexOf('}'));
+    assert.ok(/background: var\(--panel\);[\s\S]*background: color-mix/.test(decl),
+      sel + ' declares the opaque background before the translucent one');
+    assert.ok(/border: 1px solid var\(--line\);[\s\S]*border-color: color-mix/.test(decl),
+      sel + ' does the same for its edge');
+  }
+  assert.match(mapStyles, /-webkit-backdrop-filter: blur/,
+    'Safari still needs the prefixed backdrop-filter');
+});
+
 test('crop fields: one vocabulary, faint paint, a chip for a click target', () => {
   // The dropdown's crops are db.mjs's own, interpolated as a value — the same
   // one-definition rule the measure geometry follows.
@@ -164,4 +215,60 @@ test('all of it still compiles as one page script', () => {
   for (const id of ['zhome', 'fieldBtn', 'wxchip', 'wxbar']) {
     assert.ok(html.includes('id="' + id + '"'), `#${id} is on the page`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Find an owner — the name search on the map
+// ---------------------------------------------------------------------------
+
+test('the owner search is a toolbar control that needs the server', () => {
+  assert.match(mapMarkup, /<button id="findOwner" type="button">Find an owner<\/button>/,
+    'it sits beside "Who owns this?" in the Ground group — same question, other end');
+  const guard = mapScript.slice(mapScript.indexOf('findBtn.disabled'));
+  assert.match(guard.slice(0, 200), /Owner search needs the server/,
+    'opened as a saved file there is nothing to query, and a dead button must say why');
+});
+
+test('the search panel and the parcel card never share the corner', () => {
+  // They sit in the same place and drive the same PARCEL_RINGS. Both open at
+  // once is two answers to one question, with one boundary between them.
+  const panel = mapScript.slice(mapScript.indexOf('function ownerPanel()'));
+  assert.match(panel.slice(0, 400), /removeParcelCard\(\);/,
+    'opening the search puts the card away');
+  const look = mapScript.slice(mapScript.indexOf('async function lookupParcel'));
+  assert.match(look.slice(0, 300), /removeOwnerSearch\(\);/,
+    'and a click on the map puts the search away');
+});
+
+test('closing the search takes its boundary with it', () => {
+  // The same split the parcel card needed: replacing the list must leave the
+  // outline alone, dismissing it must not leave a red line on the map with
+  // nothing on screen explaining what it is.
+  const close = mapScript.slice(mapScript.indexOf('function closeOwnerSearch()'));
+  assert.match(close.slice(0, 200),
+    /removeOwnerSearch\(\);\s*\n\s*if \(PARCEL_RINGS\) \{ PARCEL_RINGS = null; draw\(\); \}/);
+});
+
+test('a truncated list says so before the rows', () => {
+  const draw = mapScript.slice(mapScript.indexOf('function drawOwnerHits()'));
+  assert.match(draw.slice(0, 1200), /if \(ownerHits\.truncated\)/,
+    'fifty rows with no note reads as "these are all of them"');
+  assert.match(draw.slice(0, 1200), /narrow the name/,
+    'and it says what to do about it');
+});
+
+test('picking a result frames the parcel itself', () => {
+  const pick = mapScript.slice(mapScript.indexOf('function pickOwnerHit('));
+  assert.match(pick.slice(0, 600), /PARCEL_RINGS = p\.rings \|\| null;/);
+  assert.match(pick.slice(0, 600), /\(\{ centre, zoom \} = frameFor\(pts\)\)/,
+    'a 300-acre block and a town lot each fill the map');
+  assert.match(pick.slice(0, 600), /else if \(p\.centre\)/,
+    'the rare record with attributes but no geometry still goes somewhere');
+});
+
+test('the search asks the server, which asks the parcel service', () => {
+  assert.match(mapScript, /fetch\('\/api\/parcels\/search\?name=' \+ encodeURIComponent\(term\)\)/,
+    'one client on the public service, as with the point lookup');
+  assert.match(mapScript, /Type at least three letters of a name\./,
+    'the short-name rule is answered locally rather than by a round trip and a 400');
 });

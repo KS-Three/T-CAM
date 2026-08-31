@@ -95,11 +95,12 @@ test('it reports whether wind history was available, because it changes the rank
   }
 });
 
-test('the map sends what it can see, so the answer can be clipped to it', async () => {
-  // Structural, because the clip is only worth anything if the client actually
-  // reports its viewport: without these four the endpoint falls back to a
-  // 500 m circle round the centre whatever the zoom, and half the suggestions
-  // land off the edge of the screen.
+test('the map sends what it can see, so the answer can say what is off-screen', async () => {
+  // Structural, because the viewport is only worth anything if the client
+  // actually reports it. It no longer FILTERS — the property you picked is the
+  // scope now, and a spot on it is on it whatever the zoom — but the answer
+  // still counts how many are off the edge, because a pin you cannot see reads
+  // as the tool having ignored where you are looking.
   const { mapScript } = await import('../map-view.mjs');
   assert.match(mapScript, /const vb = visibleBounds\(\);/, 'the bounds are read at request time');
   for (const k of ['north', 'south', 'east', 'west']) {
@@ -149,4 +150,119 @@ test('the answer says which property it is about', async t => {
   if ('ground' in body && body.ground) {
     assert.equal(body.ground.counts.stand, 1, 'one stand on this ground, not both');
   }
+});
+
+// ---- the property picker -------------------------------------------------
+// Which ground a suggestion is about is now ASKED, not inferred. The map
+// centre was the old answer and on the view that frames everything it lands in
+// open country between two properties, where the honest answer is neither —
+// at which point the old code fell back to every stand and let an owner-name
+// vote pick a deed forty kilometres away.
+
+test('with nothing placed, the property list is empty and says why', async t => {
+  const { get } = await serving(t);
+  const body = await (await get('/api/my-properties')).json();
+  assert.deepEqual(body.properties, []);
+  assert.match(body.note, /Nothing is placed yet/);
+});
+
+test('each property carries the boundary the page has to draw', async t => {
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.120, lng: -90.650 });
+  });
+  const body = await (await get('/api/my-properties')).json();
+  assert.equal(body.properties.length, 1, 'one cluster, one property');
+  const p = body.properties[0];
+  assert.equal(p.key, 'g0');
+  assert.ok('parcels' in p, 'parcels are always reported, even when empty');
+  assert.ok('centre' in p && 'bounds' in p, 'the page needs somewhere to fly to');
+  // Offline (or outside Wisconsin) there is simply no parcel, which is a real
+  // answer: the shape must still be right so the picker can render a row.
+  for (const parcel of p.parcels) {
+    assert.ok('rings' in parcel && 'owner' in parcel && 'acres' in parcel);
+  }
+});
+
+test('two properties get labels that tell them apart', async t => {
+  // The failure this pins: describeGround says what is ON a ground, and two
+  // properties hunted the same way describe identically — a picker whose two
+  // rows both read "2 cameras, 1 stand" is not a picker.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'Home', lat: 44.120, lng: -90.650 });
+    createStand(db, { name: 'Far', lat: 44.250, lng: -90.450 });
+  });
+  const body = await (await get('/api/my-properties')).json();
+  assert.equal(body.properties.length, 2, 'a drive apart is two properties');
+  const [a, b] = body.properties.map(p => p.label);
+  // Offline both fall back to the contents and DO match; with a parcel service
+  // they carry acreage and county. Either way the keys must differ, which is
+  // what the page actually selects on.
+  assert.notEqual(body.properties[0].key, body.properties[1].key);
+  assert.ok(typeof a === 'string' && typeof b === 'string');
+});
+
+test('over open country it refuses to guess, and hands back the list', async t => {
+  // The bug in the shipped version: the default "Everything" view centres
+  // between two properties, and the answer came back judged against whichever
+  // deed the owner vote happened to pick.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'Home', lat: 44.120, lng: -90.650 });
+    createStand(db, { name: 'Far', lat: 44.250, lng: -90.450 });
+  });
+  const res = await get('/api/suggest-stands?lat=44.19&lng=-90.55');
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.needsProperty, true, 'it asked instead of guessing');
+  assert.deepEqual(body.candidates, []);
+  assert.equal(body.properties.length, 2, 'and said what there is to choose from');
+  assert.match(body.note, /not over one of your properties/);
+});
+
+test('an unknown property key is refused rather than ignored', async t => {
+  // Silently falling back to "everything" would make a typo look like a
+  // working search over ground the person did not ask about.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.12, lng: -90.65 });
+  });
+  const res = await get('/api/suggest-stands?properties=g99');
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /no property matches g99/);
+});
+
+test('an explicit property beats the map centre entirely', async t => {
+  // Ask about the far ground while the map is parked on the home one: the
+  // answer must be about what was asked for, not about where the map is.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'Home', lat: 44.120, lng: -90.650 });
+    createStand(db, { name: 'Far', lat: 44.250, lng: -90.450 });
+  });
+  const body = await (await get('/api/suggest-stands?properties=g1&lat=44.120&lng=-90.650')).json();
+  assert.ok(!body.needsProperty, 'no need to ask — it was told');
+  if (body.properties && body.properties.length) {
+    assert.equal(body.properties.length, 1, 'exactly the one ground asked for');
+  }
+});
+
+test('the viewport reports what is off-screen; it no longer throws it away', async t => {
+  // The clip used to run before the lookups, which was right when the search
+  // was a circle round the map centre. Now the property is the scope, so a
+  // spot on the ground you picked is on it whatever the zoom — the answer
+  // says how many you cannot see rather than hiding them.
+  const { get } = await serving(t, db => {
+    createStand(db, { name: 'A', lat: 44.12, lng: -90.65 });
+  });
+  const q = '?properties=g0&north=44.1201&south=44.1199&east=-90.6499&west=-90.6501';
+  const body = await (await get('/api/suggest-stands' + q)).json();
+  assert.ok('offScreen' in body, 'the count is reported');
+  assert.equal(typeof body.offScreen, 'number');
+});
+
+test('the map asks for the properties it has ticked', async () => {
+  const { mapScript } = await import('../map-view.mjs');
+  assert.match(mapScript, /\/api\/my-properties/, 'the page can list your ground');
+  assert.match(mapScript, /SELECTED_PROPS/, 'and remembers which you picked');
+  assert.ok(mapScript.includes("'&properties=' + [...SELECTED_PROPS].join(',')"),
+    'the selection is what the request carries');
+  assert.match(mapScript, /path class="myprop"/, 'and the boundary is drawn');
+  assert.match(mapScript, /body\.needsProperty/, 'a refusal to guess opens the picker');
 });

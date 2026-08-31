@@ -116,3 +116,73 @@ export async function cropAt(lat, lng, { year, fetchImpl = globalThis.fetch, now
   }
   throw lastErr ?? new Error('CropScape lookup failed');
 }
+
+/**
+ * Six years of CDL at one point, oldest first. Years the service cannot answer
+ * are omitted rather than guessed, so a short history is visibly short.
+ *
+ * Requests are sequential on purpose. CropScape is a free public service and
+ * was observed struggling on 2026-08-31 (its raster endpoint returning 502
+ * while the point endpoint stayed healthy); six polite requests is a fair
+ * price for a field, and hammering it in parallel is how the point endpoint
+ * joins the raster one.
+ */
+export async function cropHistory(lat, lng, { years = 6, now, fetchImpl = globalThis.fetch } = {}) {
+  const newest = latestCdlYear(now);
+  const out = [];
+  for (let y = newest - years + 1; y <= newest; y++) {
+    try {
+      const r = await cropAt(lat, lng, { year: y, fetchImpl });
+      out.push({ year: y, category: r.category, code: r.code, crop: r.crop });
+    } catch {
+      // A single missing year is normal at the edges of coverage.
+    }
+  }
+  return out;
+}
+
+/** Crops that hold the ground rather than rotating out of it. */
+const PERSISTENT = new Set(['alfalfa', 'clover', 'pasture']);
+
+/**
+ * What the rotation suggests for a season the CDL has not published yet.
+ *
+ * Deliberately legible rather than learned, because a hunter can check this
+ * reasoning against what they saw and a fitted model cannot be argued with:
+ * a strict corn/soybean alternation is the strongest signal in the midwest,
+ * perennial cover mostly persists, and otherwise recent years vote with the
+ * most recent weighted highest — except for itself, since a rotation is
+ * precisely the habit of not repeating.
+ *
+ * Returns [{ crop, p }] best first, normalised, or [] with no history.
+ */
+export function rotationPrior(history, targetYear) {
+  const known = history.filter(h => h.crop);
+  if (!known.length) return [];
+
+  const scores = new Map();
+  const add = (crop, w) => scores.set(crop, (scores.get(crop) ?? 0) + w);
+  const last = known[known.length - 1];
+
+  if (PERSISTENT.has(last.crop)) add(last.crop, 6);
+
+  const cs = known.filter(h => h.crop === 'corn' || h.crop === 'soybeans').slice(-4);
+  const alternating = cs.length >= 3
+    && cs.every((h, i) => i === 0 || h.crop !== cs[i - 1].crop);
+  if (alternating && (last.crop === 'corn' || last.crop === 'soybeans')) {
+    add(last.crop === 'corn' ? 'soybeans' : 'corn', 8);
+    add(last.crop, 1.5);
+  }
+
+  known.forEach((h, i) => {
+    let w = 1.5 ** i;
+    if (i === known.length - 1) w *= 0.4;
+    add(h.crop, w);
+  });
+
+  const total = [...scores.values()].reduce((a, b) => a + b, 0);
+  if (!total) return [];
+  return [...scores.entries()]
+    .map(([crop, v]) => ({ crop, p: v / total }))
+    .sort((a, b) => b.p - a.p);
+}

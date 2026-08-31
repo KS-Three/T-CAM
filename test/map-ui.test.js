@@ -165,3 +165,59 @@ test('all of it still compiles as one page script', () => {
     assert.ok(html.includes('id="' + id + '"'), `#${id} is on the page`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Find an owner — the name search on the map
+// ---------------------------------------------------------------------------
+
+test('the owner search is a toolbar control that needs the server', () => {
+  assert.match(mapMarkup, /<button id="findOwner" type="button">Find an owner<\/button>/,
+    'it sits beside "Who owns this?" in the Ground group — same question, other end');
+  const guard = mapScript.slice(mapScript.indexOf('findBtn.disabled'));
+  assert.match(guard.slice(0, 200), /Owner search needs the server/,
+    'opened as a saved file there is nothing to query, and a dead button must say why');
+});
+
+test('the search panel and the parcel card never share the corner', () => {
+  // They sit in the same place and drive the same PARCEL_RINGS. Both open at
+  // once is two answers to one question, with one boundary between them.
+  const panel = mapScript.slice(mapScript.indexOf('function ownerPanel()'));
+  assert.match(panel.slice(0, 400), /removeParcelCard\(\);/,
+    'opening the search puts the card away');
+  const look = mapScript.slice(mapScript.indexOf('async function lookupParcel'));
+  assert.match(look.slice(0, 300), /removeOwnerSearch\(\);/,
+    'and a click on the map puts the search away');
+});
+
+test('closing the search takes its boundary with it', () => {
+  // The same split the parcel card needed: replacing the list must leave the
+  // outline alone, dismissing it must not leave a red line on the map with
+  // nothing on screen explaining what it is.
+  const close = mapScript.slice(mapScript.indexOf('function closeOwnerSearch()'));
+  assert.match(close.slice(0, 200),
+    /removeOwnerSearch\(\);\s*\n\s*if \(PARCEL_RINGS\) \{ PARCEL_RINGS = null; draw\(\); \}/);
+});
+
+test('a truncated list says so before the rows', () => {
+  const draw = mapScript.slice(mapScript.indexOf('function drawOwnerHits()'));
+  assert.match(draw.slice(0, 1200), /if \(ownerHits\.truncated\)/,
+    'fifty rows with no note reads as "these are all of them"');
+  assert.match(draw.slice(0, 1200), /narrow the name/,
+    'and it says what to do about it');
+});
+
+test('picking a result frames the parcel itself', () => {
+  const pick = mapScript.slice(mapScript.indexOf('function pickOwnerHit('));
+  assert.match(pick.slice(0, 600), /PARCEL_RINGS = p\.rings \|\| null;/);
+  assert.match(pick.slice(0, 600), /\(\{ centre, zoom \} = frameFor\(pts\)\)/,
+    'a 300-acre block and a town lot each fill the map');
+  assert.match(pick.slice(0, 600), /else if \(p\.centre\)/,
+    'the rare record with attributes but no geometry still goes somewhere');
+});
+
+test('the search asks the server, which asks the parcel service', () => {
+  assert.match(mapScript, /fetch\('\/api\/parcels\/search\?name=' \+ encodeURIComponent\(term\)\)/,
+    'one client on the public service, as with the point lookup');
+  assert.match(mapScript, /Type at least three letters of a name\./,
+    'the short-name rule is answered locally rather than by a round trip and a 400');
+});

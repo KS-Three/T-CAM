@@ -32,22 +32,25 @@ import {
   allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
-  setCameraView,
+  setCameraView, cameraDays,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
   upsertProperty, allProperties, assignPropertyMembers, setPhotoPhash, emptyBaseline,
   saveWindClimatology, windClimatology,
   allRoutes, routesForStand, createRoute, updateRoute, deleteRoute, routeById,
   logSit, updateSit, deleteSit, allSits, sitById, SIT_WINDOWS,
   saveTrack, allTracks, trackById, deleteTrack,
-  allFields, createField, updateField, deleteField, CROP_KINDS, CROP_LABELS,
+  allFields, fieldById, createField, updateField, deleteField,
+  CROP_KINDS, CROP_LABELS,
+  fieldScan, allFieldScans, saveFieldScan,
   saveForecast, cachedForecast,
 } from './db.mjs';
 import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
-import { cropAt } from './cropscan.mjs';
+import { cropAt, cropHistory } from './cropscan.mjs';
+import { scanField, disagreement } from './cropseason.mjs';
 import { suggestEntryPath } from './entry-path.mjs';
 import { dashboardHtml } from './dashboard-page.mjs';
 import { readPlan } from './spypoint-sync.mjs';
-import { parcelAt } from './parcels.mjs';
+import { parcelAt, parcelsByOwner, ownerTerm, OWNER_SEARCH_MIN_CHARS, OWNER_SEARCH_MAX } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.mjs';
 import { evidenceFor } from './evidence.mjs';
@@ -61,6 +64,9 @@ import { WISCONSIN_DEER } from './legal-light.mjs';
 import { isHash, windMatch } from './phash.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { parseView, cameraView, facingLine, CAMERA_SPREAD_DEG } from './camera-view.mjs';
+import { updateVisitHeadings } from './travel.mjs';
+import { estimate, estimateLine, BANDS } from './estimate.mjs';
+import { dayOf } from './camera-days.mjs';
 import { reviewHtml } from './review-page.mjs';
 import { tonightHtml } from './tonight-page.mjs';
 import { journalHtml } from './journal-page.mjs';
@@ -704,6 +710,37 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/cameras') {
         return sendJson(res, 200, allCameras(db).map(cameraFromRow));
       }
+      // How often this camera photographs a deer in one light band.
+      //
+      // Everything this returns is about THIS CAMERA. It is not a probability
+      // of seeing a deer from a stand: the ground between the two, the cover on
+      // it and your own scent are not in the number, and multiplying by a guess
+      // at those would bury three invented coefficients inside one honest one.
+      const estMatch = url.pathname.match(/^\/api\/cameras\/(.+)\/estimate$/);
+      if (req.method === 'GET' && estMatch) {
+        const id = decodeURIComponent(estMatch[1]);
+        const cam = allCameras(db).find(c => c.id === id);
+        if (!cam) return sendJson(res, 404, { error: `no camera ${id}` });
+
+        const band = url.searchParams.get('band') ?? 'dawn';
+        if (!BANDS.includes(band)) {
+          return sendJson(res, 400, { error: `band must be one of ${BANDS.join(', ')}` });
+        }
+        // A span in days back from today, not a pair of dates: a caller who
+        // picks both ends can pick the ends that flatter the answer.
+        const back = Math.min(365, Math.max(1, Number(url.searchParams.get('days')) || 30));
+        const to = dayOf(new Date().toISOString(), cam.lng);
+        const from = dayOf(new Date(Date.now() - (back - 1) * 86400000).toISOString(), cam.lng);
+
+        const visits = db.prepare(
+          'SELECT started_at FROM visits WHERE camera_id = ? ORDER BY started_at').all(id);
+        const e = estimate({
+          days: cameraDays(db, id, { from, to }),
+          visits, band, lat: cam.lat, lng: cam.lng, from, to,
+        });
+        return sendJson(res, 200, { camera: cam.name, from, to, ...e, line: estimateLine(e) });
+      }
+
       // Point a camera, or unpoint it. PATCH rather than PUT: everything else
       // on a camera belongs to the provider and is overwritten by the next
       // sync, and this one field is the owner's.
@@ -732,7 +769,13 @@ export function createServer({ out = OPT.out } = {}) {
           if (!Number.isFinite(view.spread)) view.spread = CAMERA_SPREAD_DEG;
         }
         try {
-          return sendJson(res, 200, cameraFromRow(setCameraView(db, id, view)));
+          const updated = setCameraView(db, id, view);
+          // Every visit this camera ever recorded now has a different compass
+          // bearing behind the same crossing. Recomputing here is the whole
+          // reason updateVisitHeadings does not skip visits it has already
+          // done: a heading left over from the old facing is worse than none.
+          updateVisitHeadings(db);
+          return sendJson(res, 200, cameraFromRow(updated));
         } catch (err) {
           return sendJson(res, 404, { error: err.message });
         }
@@ -1145,6 +1188,46 @@ export function createServer({ out = OPT.out } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/crop-kinds') {
         return sendJson(res, 200, { kinds: CROP_KINDS, labels: CROP_LABELS });
       }
+      // --- what a field is doing this season -------------------------------
+      // GET returns the stored scan and never reaches the network, so the map
+      // stays instant and answers in the truck with no signal. POST rescans.
+      const scanMatch = url.pathname.match(/^\/api\/fields\/(\d+)\/scan$/);
+      if (scanMatch) {
+        const id = Number(scanMatch[1]);
+        const field = fieldById(db, id);
+        if (!field) return sendJson(res, 404, { error: `no field with id ${id}` });
+        const season = Number(url.searchParams.get('season'))
+          || new Date().getUTCFullYear();
+
+        if (req.method === 'GET') {
+          const scan = fieldScan(db, id, season);
+          return sendJson(res, 200, scan
+            ? { ...scan, disagreement: disagreement(field, scan) }
+            : { scanned: false, why: 'this field has not been scanned yet' });
+        }
+        if (req.method === 'POST') {
+          // Classification is opt-in per request: it costs a second season of
+          // imagery and on most ground refuses anyway.
+          const body = await readJson(req).catch(() => ({}));
+          const wantCrop = Boolean(body?.classify);
+          try {
+            const centre = field.points[0];
+            const history = wantCrop
+              ? await cropHistory(centre[1], centre[0]) : [];
+            const scan = await scanField(field.points, {
+              season, classifyToo: wantCrop, history,
+            });
+            const saved = saveFieldScan(db, id, season, scan);
+            return sendJson(res, 200,
+              { ...saved, disagreement: disagreement(field, saved) });
+          } catch (err) {
+            // A scan failing is a bad day for the satellite, not a bad request,
+            // so it answers 200 with the reason like the cropscan route below.
+            return sendJson(res, 200, { scanned: false, why: err.message });
+          }
+        }
+      }
+
       // What USDA's satellite crop map calls a point, to pre-select the crop
       // when a field is outlined. Failure is an answer here, not an error:
       // the form works identically without it, so the page gets a 200 with
@@ -1684,6 +1767,40 @@ export function createServer({ out = OPT.out } = {}) {
           // No parcel is a real answer (outside Wisconsin, or on water), and
           // must not read as a failed lookup.
           return sendJson(res, 200, { parcel, found: parcel !== null });
+        } catch (err) {
+          return sendJson(res, 502, { error: err.message });
+        }
+      }
+      // The same question from the other end: where does a NAME own ground.
+      // Statewide and capped — see parcels.mjs on why the cap is part of the
+      // feature rather than a performance detail.
+      if (req.method === 'GET' && url.pathname === '/api/parcels/search') {
+        const term = ownerTerm(url.searchParams.get('name'));
+        if (term.length < OWNER_SEARCH_MIN_CHARS) {
+          // Said as a requirement, not as a failure: two letters of a surname
+          // would match a third of the state, and the honest answer is "give
+          // me more of the name" rather than a truncated list of strangers.
+          return sendJson(res, 400, {
+            error: `an owner search needs at least ${OWNER_SEARCH_MIN_CHARS} letters of a name`,
+          });
+        }
+        const rawLimit = url.searchParams.get('limit');
+        const limit = rawLimit === null || rawLimit === ''
+          ? OWNER_SEARCH_MAX : Number(rawLimit);
+        if (!Number.isFinite(limit) || limit < 1) {
+          return sendJson(res, 400, { error: 'limit must be a positive number' });
+        }
+        try {
+          const found = await parcelsByOwner(term, { limit });
+          return sendJson(res, 200, {
+            term: found.term,
+            parcels: found.parcels,
+            count: found.parcels.length,
+            // "Showing fifty of more than fifty" is a different sentence from
+            // "these are the fifty", and the page has to be able to say it.
+            truncated: found.truncated,
+            max: OWNER_SEARCH_MAX,
+          });
         } catch (err) {
           return sendJson(res, 502, { error: err.message });
         }

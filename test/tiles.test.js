@@ -84,6 +84,40 @@ test('the served page is given proxy templates and never an upstream URL', () =>
   assert.equal(direct.base.satellite.kind, 'zyx', 'keeping its real coordinate order');
 });
 
+test('the Wisconsin LiDAR layer carries its own hillshade rule, defined once', () => {
+  // ZFactor 8 is the load-bearing number, and the reason this layer exists at
+  // all: the DNR service accepts custom raster functions where USGS refuses,
+  // and 8 was picked by looking at flat Waushara sand at 2, 3, 8 and 15 (see
+  // tile-sources.mjs). Losing the rule silently falls back to the service's
+  // default rendering, which is the washed-out look the layer replaced —
+  // structurally invisible, visually the whole point.
+  const url = expandTile(sourceByKey('lidarwi'), 15, 8132, 11764);
+  assert.match(url, /^https:\/\/dnrmaps\.wi\.gov\/arcgis_image\//,
+    'the ImageServer host, not the MapServer one the DNR overlays use');
+  assert.match(url, /bboxSR=3857/, 'metres, to line up with the slippy tiles');
+  assert.ok(url.includes(encodeURIComponent('"ZFactor":8')), 'the chosen exaggeration');
+  assert.ok(url.includes(encodeURIComponent('"rasterFunction":"Hillshade"')));
+  assert.ok(!url.includes('{bbox3857}'), 'the placeholder is replaced');
+  assert.equal(BASE_SOURCES.lidarwi.maxZoom, 18,
+    '2 ft data still has something to say at z18, where the 1 m federal layer does not');
+  assert.equal(sourceByKey('lidarwishade').template, BASE_SOURCES.lidarwi.template,
+    'the overlay is the SAME rendering, referenced not repeated');
+});
+
+test('the two LiDAR layers stay on separate cache keys', () => {
+  // Not cosmetic. Tiles live at tiles/<key>/z/x/y and are only refreshed after
+  // 90 days, so pointing the existing key at the new service would have served
+  // a mixture of old and new renderings of the same ground for months, with
+  // nothing to show for it on screen. Different services must mean different
+  // keys, forever.
+  assert.notEqual(BASE_SOURCES.lidarwi.key, BASE_SOURCES.lidar.key);
+  assert.notEqual(BASE_SOURCES.lidarwi.template, BASE_SOURCES.lidar.template);
+  assert.match(BASE_SOURCES.lidar.template, /nationalmap\.gov/, 'the federal layer is untouched');
+  const keys = Object.keys(BASE_SOURCES);
+  assert.ok(keys.indexOf('lidarwi') < keys.indexOf('lidar'),
+    'and Wisconsin comes first in the picker, which is insertion order');
+});
+
 test('the LiDAR layer asks USGS for the stretch rendering, defined once', () => {
   // Gray-Stretch is the load-bearing choice: the service's fixed hillshades
   // are scaled for real hills and draw the flat home ground near-solid white

@@ -94,7 +94,9 @@ const cache = new Map();
 const CACHE_MAX = 500;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
-export function clearParcelCache() { cache.clear(); }
+// Both caches, because clearing one and not the other leaves a test passing on
+// a stale answer from the half it forgot.
+export function clearParcelCache() { cache.clear(); searchCache.clear(); }
 
 /**
  * Look up the parcel containing a point. Returns null when there is no parcel
@@ -164,4 +166,128 @@ export function pointInRings(rings, lng, lat) {
     }
   }
   return inside;
+}
+
+// ---------------------------------------------------------------------------
+// Search by owner name
+// ---------------------------------------------------------------------------
+//
+// The point lookup answers "who owns THIS". The other half of the question a
+// hunter actually asks is "where else does that name own ground" — the
+// neighbour who gave you permission on forty acres has another eighty a mile
+// north, and that is worth knowing before you ask.
+//
+// Same privacy stance as the rest of this file: public record, fetched on
+// demand, held in memory only. What is different is the shape of the request —
+// a name search is a query ABOUT A PERSON rather than about a place, so it is
+// capped hard and never bulk-downloadable. Fifty rows is a look-up; ten
+// thousand would be a mailing list.
+
+export const OWNER_SEARCH_MAX = 50;
+export const OWNER_SEARCH_MIN_CHARS = 3;
+
+/**
+ * Clean a typed name into something safe to put in a WHERE clause.
+ *
+ * Everything outside the characters a name can actually contain is dropped
+ * rather than escaped. That kills SQL injection at the source instead of
+ * relying on quoting, and it also removes the LIKE wildcards % and _ — typed
+ * by accident they turn a search into a scan of the whole state.
+ */
+export function ownerTerm(name) {
+  return String(name ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9 &.,'-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Both owner columns, because a name is as often the second one as the first. */
+export function ownerWhere(term) {
+  const q = term.replace(/'/g, "''");
+  return "UPPER(OWNERNME1) LIKE '%" + q + "%' OR UPPER(OWNERNME2) LIKE '%" + q + "%'";
+}
+
+/**
+ * A point to fly the map to, from a parcel's rings.
+ *
+ * The centre of the bounding box, not the centre of area: it is used for
+ * framing a result, where "somewhere in the middle of it" is the whole
+ * requirement. On a hooked or L-shaped parcel it can land outside the boundary
+ * — which would matter if anything looked the point back up, and nothing does.
+ */
+export function ringsCentre(rings) {
+  if (!Array.isArray(rings) || !rings.length) return null;
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (const ring of rings) {
+    if (!Array.isArray(ring)) continue;
+    for (const pt of ring) {
+      const lng = Number(pt?.[0]), lat = Number(pt?.[1]);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+  if (!Number.isFinite(minLng) || !Number.isFinite(minLat)) return null;
+  return { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 };
+}
+
+const searchCache = new Map();
+
+/**
+ * Parcels whose owner name contains `name`, statewide, largest first.
+ *
+ * Largest first because acreage is what makes a row worth reading: a hunter
+ * scanning "SMITH" wants the 300-acre block, not the town lot. Truncation is
+ * KNOWN rather than guessed — one more row than the cap is requested, and its
+ * presence is what sets `truncated`. A list that silently stops at fifty reads
+ * as "these are all of them", which for a common surname is a lie.
+ */
+export async function parcelsByOwner(name, { limit = OWNER_SEARCH_MAX, signal } = {}) {
+  const term = ownerTerm(name);
+  if (term.length < OWNER_SEARCH_MIN_CHARS) {
+    throw new Error(`an owner search needs at least ${OWNER_SEARCH_MIN_CHARS} characters`);
+  }
+  const asked = Math.trunc(Number(limit));
+  const cap = Number.isFinite(asked) && asked > 0
+    ? Math.min(asked, OWNER_SEARCH_MAX) : OWNER_SEARCH_MAX;
+
+  const k = `${term}|${cap}`;
+  const hit = searchCache.get(k);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+
+  const url = `${ENDPOINT()}?${new URLSearchParams({
+    where: ownerWhere(term),
+    outFields: FIELDS,
+    // Boundaries come back with the list so a result draws the moment it is
+    // clicked, with no second request. Generalised to about five metres,
+    // which is invisible at parcel scale and keeps fifty polygons small.
+    returnGeometry: 'true',
+    maxAllowableOffset: '0.00005',
+    outSR: '4326',
+    orderByFields: 'GISACRES DESC',
+    resultRecordCount: String(cap + 1),
+    f: 'json',
+  })}`;
+
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`parcel service returned HTTP ${res.status}`);
+  const body = await res.json();
+  // Same trap as parcelAt: ArcGIS returns its own errors with HTTP 200.
+  if (body?.error) {
+    throw new Error(`parcel service error: ${body.error.message ?? 'unknown'}`);
+  }
+
+  const features = Array.isArray(body.features) ? body.features : [];
+  const parcels = features.slice(0, cap).map(f => {
+    const p = parcelFromFeature(f);
+    return { ...p, centre: ringsCentre(p.rings) };
+  });
+  const value = { term, parcels, truncated: features.length > cap };
+
+  if (searchCache.size >= CACHE_MAX) searchCache.delete(searchCache.keys().next().value);
+  searchCache.set(k, { at: Date.now(), value });
+  return value;
 }

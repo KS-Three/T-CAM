@@ -460,12 +460,31 @@ returns "no parcel here" rather than pretending. The endpoint is overridable
 via `TRAILCAM_PARCEL_URL`, so pointing at another state's service is a config
 change rather than a rewrite.
 
+### Finding an owner by name
+
+The same question from the other end. Press **Find an owner**, type a name — a
+person or an LLC — and you get the Wisconsin parcels that name is on, largest
+first: owner, acreage, county, class, parcel ID and mailing address. Click a
+row and its boundary is drawn and framed on the map.
+
+This is what you want the evening after somebody says yes to forty acres. The
+neighbour who gave you permission often has another eighty a mile north, and
+the map is how you find out before you ask.
+
+Three letters of a name minimum, and **fifty rows maximum**. A common surname
+says "more than fifty matches — narrow the name" rather than showing you the
+first fifty as though they were all of them. The cap is deliberate and not
+adjustable upward: fifty rows is a look-up, ten thousand would be a mailing
+list.
+
 ### On privacy
 
 Owner names and mailing addresses are public record, and the mailing address is
 the practical point. It is still someone's home address, so lookups are made
 **on demand** and held only in memory for the life of the process. Nothing is
-written to the database or to disk, and there is no bulk download.
+written to the database or to disk, and there is no bulk download — that
+applies to the name search as much as to the click, which is why it is capped
+and why `limit` can only ask for fewer rows than the cap, never more.
 
 ### Two failure modes kept distinct
 
@@ -843,7 +862,8 @@ remembered per browser.
 | **Hybrid** | Esri imagery + place/boundary labels | 19 |
 | **Map** | OpenStreetMap | 19 |
 | **Terrain** | USGS Topo | 17 |
-| **LiDAR** | USGS 3DEP bare-earth hillshade, rendered on demand | 17 |
+| **LiDAR** | Wisconsin DNR bare-earth hillshade, rendered on demand | 18 |
+| **LiDAR (US)** | USGS 3DEP bare-earth hillshade, rendered on demand | 17 |
 
 Zoom is clamped per layer, so switching to a shallower layer doesn't leave you
 staring at blank tiles past its coverage.
@@ -860,22 +880,39 @@ press back to your ground.
 
 ### LiDAR
 
-The **LiDAR** layer is the bare-earth hillshade the paid apps sell, from the
-same free USGS 3DEP the Terrain button already reads — but browsable: pan
-anywhere and the ground texture is simply there, no button to press. On it a
-two-foot ditch, an old logging road, a knob a deer beds behind all read at a
-glance, under canopy the satellite cannot see through. **LiDAR shade** in the
-overlays list is the same rendering laid over the imagery instead of replacing
-it, so the draw and the standing corn read together.
+The **LiDAR** layer is the bare-earth hillshade the paid apps sell, free and
+browsable: pan anywhere and the ground texture is simply there, no button to
+press. On it a two-foot ditch, an old logging road, a knob a deer beds behind
+all read at a glance, under canopy the satellite cannot see through. **LiDAR
+shade** in the overlays list is the same rendering laid over the imagery
+instead of replacing it, so the draw and the standing corn read together.
 
-Three honest notes. The shading is **stretched to each rendered window's own
-relief** — that is why flat sand country shows its two-foot draws at all
-(a fixed hillshade paints it solid white; measured) — so grey levels are
-relative: compare shapes within a view, not brightness across views, and
-expect a faint tone step at the odd tile edge. Tiles are **rendered on
-demand by USGS**, so the first look at new ground takes seconds; every tile
-is then cached like the rest, offline included. And it needs 3DEP coverage,
-which most of the country has and not every corner does.
+It comes from **Wisconsin's own DEM** rather than the federal one, because on
+this ground it is better in every way that was measured (2026-08-31). The state
+mosaic is county-flown: Waushara is 2017 at a **2-foot** DEM against 3DEP's
+1 m. More importantly the DNR service accepts a **hillshade rule of our own**,
+where USGS refuses custom parameters and leaves you picking from its fixed
+menu. That exaggeration was chosen by eye on flat Waushara sand — too little
+and it washes out, too much and raster noise becomes texture that is not on the
+ground. It is also the *fastest* of the options tried, at roughly half the
+per-tile time of the federal layer.
+
+Three honest notes. Wisconsin's DEM is a **patchwork of county flights**, so
+resolution and relief character can change at a county line — Waupaca next door
+is 3 m data from 2005. Tiles are **rendered on demand**, so the first look at
+new ground takes a moment; every tile is then cached like the rest, offline
+included. And it stops at the state line: outside Wisconsin the layer is simply
+blank.
+
+**LiDAR (US)** is USGS 3DEP, kept for exactly that reason — it is national. Its
+shading is **stretched to each rendered window's own relief**, which is what
+lets flat sand country show its two-foot draws at all (a fixed federal
+hillshade paints it solid white; measured), at the cost of grey levels being
+relative: compare shapes within a view, not brightness across views. **LiDAR
+shade (US)** is its over-imagery twin. The two LiDAR layers are deliberately
+separate map layers rather than one switched in place — tiles are cached per
+layer for 90 days, so sharing a name would have quietly served a mixture of
+both renderings of the same ground.
 
 This layer is for *scanning* ground by eye. The **Terrain** button is still
 the analysis: it fetches the actual elevations and finds the draws, ridges,

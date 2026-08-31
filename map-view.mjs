@@ -195,9 +195,12 @@ export const mapStyles = `
                      color: var(--muted); border-radius: 5px; padding: 4px 9px;
                      font: inherit; font-size: 12px; cursor: pointer; }
   .oldwinds button:hover { color: var(--bad); border-color: var(--bad); }
-  .parcelcard .row { display: flex; justify-content: space-between; gap: 12px;
-                     padding: 3px 0; color: var(--muted); }
-  .parcelcard .row b { color: var(--ink); font-weight: 600; text-align: right; }
+  /* One row style for both: a parcel read off the map and a parcel picked out
+     of a name search are the same facts, and must not look like two things. */
+  .parcelcard .row, .ownersearch .row { display: flex; justify-content: space-between;
+                     gap: 12px; padding: 3px 0; color: var(--muted); }
+  .parcelcard .row b, .ownersearch .row b { color: var(--ink); font-weight: 600;
+                     text-align: right; }
   .layers.open .layermenu { display: flex; }
   .layers.open .swatch { visibility: hidden; }
   .layermenu button.on { border-color: var(--accent); }
@@ -462,6 +465,38 @@ export const mapStyles = `
                 width: min(300px, calc(100% - 20px)); background: var(--panel);
                 border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
                 box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  /* The owner search takes the SAME corner as the parcel card, and the two are
+     never open together — a card describing one parcel beside a list of fifty
+     others is two answers to one question. Opening either closes the other. */
+  .ownersearch { position: absolute; right: 10px; bottom: 10px; z-index: 6;
+                 width: min(330px, calc(100% - 20px)); max-height: calc(100% - 20px);
+                 display: flex; flex-direction: column;
+                 background: var(--panel); border: 1px solid var(--line);
+                 border-radius: 10px; padding: 13px 15px;
+                 box-shadow: 0 4px 20px rgba(0,0,0,.35); font-size: 13px; }
+  .ownersearch h4 { margin: 0 0 8px; font-size: 14px; }
+  .ownersearch .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                        background: none; border: 0; color: var(--muted); font-size: 16px;
+                        line-height: 1; padding: 2px 4px; }
+  .ownersearch form { display: flex; gap: 6px; }
+  .ownersearch input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px;
+                       border: 1px solid var(--line); background: var(--bg);
+                       color: var(--ink); font: 13px ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch form button { padding: 6px 10px; border-radius: 6px; cursor: pointer;
+                             border: 1px solid var(--accent); background: var(--accent);
+                             color: #fff; font: 600 12px/1 ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch .hint { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  /* The list scrolls, the box does not grow: fifty rows must not push the map
+     off the screen on a laptop. */
+  .ownersearch .hits { margin-top: 8px; overflow-y: auto; min-height: 0; }
+  .ownersearch .hit { width: 100%; text-align: left; cursor: pointer; display: block;
+                      padding: 6px 8px; border: 0; border-radius: 6px; background: none;
+                      color: var(--ink); font: 13px ui-sans-serif, system-ui, sans-serif; }
+  .ownersearch .hit:hover { background: var(--bg); }
+  .ownersearch .hit.on { background: var(--bg); outline: 1px solid var(--accent); }
+  .ownersearch .hit .where { display: block; font-size: 11px; color: var(--muted); }
+  /* The picked row's facts, indented under it rather than in a second card. */
+  .ownersearch .detail { padding: 2px 8px 8px; }
   /* Map-type control, positioned like Google's: a thumbnail in the lower-left
      showing what you would switch TO, with the full list on hover or tap. */
   .layers { position: absolute; left: 10px; bottom: 10px; z-index: 3; }
@@ -651,6 +686,7 @@ export const mapMarkup = String.raw`
             <button id="view3dBtn" type="button">3D view</button>
             <button id="measureBtn" type="button">Measure</button>
             <button id="whoOwns" type="button">Who owns this?</button>
+            <button id="findOwner" type="button">Find an owner</button>
           </div>
         </div>
         <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
@@ -1165,6 +1201,31 @@ const CROP_STYLE = {
 
 const fieldWord = f => CROP_LABELS[f.crop] || f.crop;
 
+// How a stored scan reads in the field form. Every branch says how old the
+// reading is, because "standing" from a fortnight ago is a different claim
+// from "standing" on Tuesday, and cloud routinely hides a field for weeks.
+const SCAN_WORDS = {
+  standing: 'still standing',
+  senescing: 'going off — past its peak but not yet bare',
+  cut: 'cut',
+  'cut-or-senesced': 'either cut or dried down — the passes are too far apart to say which',
+  unknown: 'not readable',
+};
+
+function scanWords(r) {
+  if (!r || r.scanned === false) return r && r.why ? r.why : 'Not checked yet.';
+  const bits = ['Looks ' + (SCAN_WORDS[r.state] || r.state)];
+  if (r.state === 'cut' && r.state_since) bits.push('since ' + r.state_since);
+  if (r.latest_date) bits.push('(clearest recent look ' + r.latest_date + ')');
+  let out = bits.join(' ') + '.';
+  if (r.verdict) out += ' The greenness curve looks like ' + (CROP_LABELS[r.verdict] || r.verdict) + '.';
+  else if (r.verdict_why) out += ' Crop not identified: ' + r.verdict_why + '.';
+  if (r.disagreement && r.disagreement.length) {
+    out += ' Worth a look: ' + r.disagreement.join('; ') + '.';
+  }
+  return out;
+}
+
 async function refreshFields() {
   FIELDS = await (await fetch('/api/fields')).json();
   draw();
@@ -1323,6 +1384,37 @@ function openFieldForm(field) {
   standing.onclick = () => { cut.value = ''; };
   cutRow.append(cutToday, standing);
   form.appendChild(cutRow);
+
+  // What the satellite says the field is doing THIS season, as against the
+  // CDL's year-old answer above. Read from storage, so opening a field costs
+  // nothing and works with no signal; only the button goes to the network. It
+  // never writes to the crop or cut boxes — it reports and the person decides,
+  // the same rule the USDA pre-selection follows.
+  const season = el('div', 'hint', '');
+  if (!isNew) {
+    form.append(el('label', null, 'This season, from satellite'), season);
+    const scanRow = el('div', 'formrow');
+    const scanBtn = el('button', null, 'Check this season');
+    scanBtn.type = 'button';
+    scanBtn.onclick = () => {
+      scanBtn.disabled = true;
+      season.textContent = 'Reading about a dozen satellite passes — this takes a minute…';
+      fetch('/api/fields/' + field.id + '/scan', { method: 'POST' })
+        .then(r => r.json())
+        .then(r => { season.textContent = scanWords(r); refreshFields(); })
+        .catch(() => { season.textContent = 'The scan could not be run just now.'; })
+        .then(() => { scanBtn.disabled = false; });
+    };
+    scanRow.appendChild(scanBtn);
+    form.appendChild(scanRow);
+
+    if (D.live) {
+      fetch('/api/fields/' + field.id + '/scan')
+        .then(r => r.json())
+        .then(r => { season.textContent = scanWords(r); })
+        .catch(() => { season.textContent = ''; });
+    }
+  }
 
   const notes = document.createElement('textarea');
   notes.rows = 2;
@@ -2988,6 +3080,9 @@ function showParcelCard(title, rows, note) {
 }
 
 async function lookupParcel(lat, lng) {
+  // A click on the map answers a different question from the open search, and
+  // the two share the corner and the boundary \u2014 so the list stands down.
+  removeOwnerSearch();
   showParcelCard('Looking up\u2026', [], null);
   try {
     const res = await fetch('/api/parcel?lat=' + lat + '&lng=' + lng);
@@ -3029,6 +3124,170 @@ if (!D.live) {
     ownBtn.classList.toggle('on', identifying);
     ownBtn.textContent = identifying ? 'Click the map\u2026' : 'Who owns this?';
     mapEl.classList.toggle('placing', identifying);
+  };
+}
+
+// ---- find an owner ----------------------------------------------------
+//
+// The mirror of "who owns this": you have a NAME — the neighbour who gave you
+// permission, the LLC on the sign at the gate — and want the rest of what it
+// owns. Statewide and capped at what the server will return; a common surname
+// says so rather than pretending the first fifty are all of them.
+const findBtn = document.getElementById('findOwner');
+let ownerHits = null;   // the last search: { term, parcels, truncated, count }
+let ownerSel = null;    // index of the row whose boundary is on the map
+
+function removeOwnerSearch() {
+  document.querySelector('.ownersearch')?.remove();
+  ownerHits = null; ownerSel = null;
+}
+
+// Same split as the parcel card: dismissing takes the boundary with it, so a
+// red outline is never left on the map with nothing explaining it.
+function closeOwnerSearch() {
+  removeOwnerSearch();
+  if (PARCEL_RINGS) { PARCEL_RINGS = null; draw(); }
+}
+
+function ownerPanel() {
+  const open = document.querySelector('.ownersearch');
+  if (open) return open;
+  // The two share one corner and one PARCEL_RINGS, so they are never both up.
+  removeParcelCard();
+  const box = el('div', 'ownersearch');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '×'; x.title = 'Close';
+  x.onclick = closeOwnerSearch;
+  box.appendChild(x);
+  box.appendChild(el('h4', null, 'Find an owner'));
+
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.placeholder = 'Owner or company name';
+  input.autocomplete = 'off';
+  const go = document.createElement('button');
+  go.type = 'submit'; go.textContent = 'Search';
+  form.append(input, go);
+  // A form rather than a button handler so Enter in the box works, which is
+  // how anyone actually uses a search field.
+  form.onsubmit = ev => { ev.preventDefault(); runOwnerSearch(input.value); };
+  box.appendChild(form);
+
+  box.appendChild(el('div', 'hits'));
+  box.appendChild(el('div', 'hint',
+    'Wisconsin only. Public record, looked up on demand — nothing is saved.'));
+  mapEl.appendChild(box);
+  input.focus();
+  return box;
+}
+
+/** One line of prose where the results go: searching, empty, or broken. */
+function ownerSay(msg) {
+  const hits = document.querySelector('.ownersearch .hits');
+  if (!hits) return;
+  hits.textContent = '';
+  hits.appendChild(el('div', 'hint', msg));
+}
+
+async function runOwnerSearch(name) {
+  const term = String(name || '').trim();
+  // The server says this too. Saying it here as well means the common typo
+  // costs nothing rather than a round trip and a 400.
+  if (term.length < 3) return ownerSay('Type at least three letters of a name.');
+  ownerSay('Searching…');
+  try {
+    const res = await fetch('/api/parcels/search?name=' + encodeURIComponent(term));
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'search failed');
+    ownerHits = body;
+    ownerSel = null;
+    // A boundary from the previous search must not outlive its list.
+    if (PARCEL_RINGS) { PARCEL_RINGS = null; draw(); }
+    drawOwnerHits();
+  } catch (err) {
+    ownerHits = null; ownerSel = null;
+    ownerSay('Search failed: ' + err.message);
+  }
+}
+
+function drawOwnerHits() {
+  const hits = document.querySelector('.ownersearch .hits');
+  if (!hits || !ownerHits) return;
+  hits.textContent = '';
+  const list = ownerHits.parcels || [];
+  if (!list.length) {
+    return ownerSay('No Wisconsin parcels with that name. Owner names are recorded '
+      + 'as the deed spells them — try a surname on its own.');
+  }
+  if (ownerHits.truncated) {
+    // Said before the rows, because it changes how the list should be read.
+    hits.appendChild(el('div', 'hint', 'More than ' + list.length
+      + ' matches. Showing the ' + list.length + ' largest — narrow the name to see the rest.'));
+  }
+  list.forEach((p, i) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'hit' + (i === ownerSel ? ' on' : '');
+    row.appendChild(el('span', null, p.owner || 'Owner not recorded'));
+    const where = [p.acres === null ? null : p.acres + ' acres',
+      p.county ? p.county + ' County' : null,
+      p.propClassName].filter(Boolean).join(' · ');
+    if (where) row.appendChild(el('span', 'where', where));
+    row.onclick = () => pickOwnerHit(i);
+    hits.appendChild(row);
+    // The detail opens where the row is rather than in a second card, so the
+    // list you are working down stays on screen and in place.
+    if (i === ownerSel) hits.appendChild(ownerDetail(p));
+  });
+}
+
+function ownerDetail(p) {
+  const box = el('div', 'detail');
+  for (const [k, v] of [
+    ['Acres', p.acres],
+    ['Class', p.propClassName || p.propClass],
+    ['County', p.county],
+    ['Town', p.town],
+    ['Parcel ID', p.parcelId],
+    ['Mailing address', p.mailingAddress],
+  ]) {
+    if (v === null || v === undefined || v === '') continue;
+    const r = el('div', 'row');
+    r.append(el('span', null, k), el('b', null, String(v)));
+    box.appendChild(r);
+  }
+  return box;
+}
+
+function pickOwnerHit(i) {
+  const p = (ownerHits?.parcels || [])[i];
+  if (!p) return;
+  ownerSel = i;
+  PARCEL_RINGS = p.rings || null;
+  // Frame the parcel itself where its boundary came back, so a 300-acre block
+  // and a town lot each fill the map. The centre is the fallback for the rare
+  // record with attributes but no geometry.
+  const pts = (p.rings || []).flat();
+  if (pts.length) ({ centre, zoom } = frameFor(pts));
+  else if (p.centre) { centre = { lat: p.centre.lat, lng: p.centre.lng }; zoom = Math.max(zoom, 15); }
+  draw();
+  drawOwnerHits();
+}
+
+if (!D.live) {
+  findBtn.disabled = true;
+  findBtn.title = 'Owner search needs the server';
+  findBtn.style.opacity = '0.6';
+  findBtn.style.cursor = 'not-allowed';
+} else {
+  findBtn.onclick = ev => {
+    ev.stopPropagation();
+    // Not a map mode — it takes typing, not a click — but arming it should
+    // still put down whatever crosshair is up.
+    clearMapModes();
+    if (document.querySelector('.ownersearch')) closeOwnerSearch();
+    else ownerPanel();
   };
 }
 

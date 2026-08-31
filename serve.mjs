@@ -1142,7 +1142,13 @@ export function createServer({ out = OPT.out } = {}) {
             // Tiles are the one thing here worth caching in the browser too:
             // they are immutable in practice and this is the offline path.
             'cache-control': 'public, max-age=604800',
-            'x-tile-cache': tile.stale ? 'stale' : tile.cached ? 'hit' : 'miss',
+            // 'revalidating' is a HIT that happens to be old: the bytes went out
+            // immediately and a refresh is running behind this response. Plain
+            // 'stale' means old bytes with no refresh coming, because upstream
+            // was unreachable. The map draws the same either way; the header is
+            // how you tell which without guessing.
+            'x-tile-cache': tile.revalidating ? 'revalidating'
+              : tile.stale ? 'stale' : tile.cached ? 'hit' : 'miss',
           });
           return res.end(tile.body);
         } catch (err) {

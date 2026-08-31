@@ -159,7 +159,15 @@ async function terrainFirst(req, url) {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/tiles/') || url.pathname.startsWith('/photos/')) {
+  // Radar is checked BEFORE the /tiles/ rule and never cached. Ground does
+  // not move, so a map tile from last month is the same tile; a radar frame
+  // from last month is a photograph of weather that is long gone, and
+  // cache-first would hand it back looking exactly as current as the real
+  // thing. When radar cannot be fetched the layer must go blank and say so,
+  // which is what a failed request lets the page do.
+  if (url.pathname.startsWith('/radar/') || url.pathname === '/api/radar') {
+    e.respondWith(fetch(e.request));
+  } else if (url.pathname.startsWith('/tiles/') || url.pathname.startsWith('/photos/')) {
     e.respondWith(cacheFirst(e.request));
   } else if (url.pathname === '/api/terrain') {
     e.respondWith(terrainFirst(e.request, url));

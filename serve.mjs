@@ -45,6 +45,10 @@ import {
   saveForecast, cachedForecast, distanceM,
 } from './db.mjs';
 import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
+import {
+  makeIndexCache, makeTileCache, framesForClient, frameById, tileUrl, validId,
+  MAX_ZOOM as RADAR_MAX_ZOOM,
+} from './radar.mjs';
 import { cropAt, cropHistory } from './cropscan.mjs';
 import { scanField, disagreement } from './cropseason.mjs';
 import { suggestEntryPath } from './entry-path.mjs';
@@ -685,6 +689,12 @@ export function createServer({ out = OPT.out } = {}) {
     throw new Error(`could not open the database at ${out}: ${err.message}`);
   }
 
+  // Radar's two caches live with the SERVER, not with the process: a test
+  // that spins up two of these gets two empty loops rather than one holding
+  // the other's frames. Both are in memory on purpose — see radar.mjs.
+  const radarIndex = makeIndexCache();
+  const radarTiles = makeTileCache();
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     try {
@@ -908,6 +918,85 @@ export function createServer({ out = OPT.out } = {}) {
           });
         }
       }
+
+      // --- radar ----------------------------------------------------------
+      // The frame list for the loop. No location: radar is tiles over the
+      // whole map, so what the page needs is WHICH frames exist and how old
+      // the newest one is — the judgement about whether that is too old to
+      // draw is made in radar.mjs and shipped, so the cutoff lives in one
+      // place rather than in the page as well.
+      if (req.method === 'GET' && url.pathname === '/api/radar') {
+        try {
+          const hit = await radarIndex.get();
+          // Frames the index no longer lists will never be asked for again.
+          radarTiles.keepOnly(hit.shaped.frames.map(f => f.id));
+          const body = framesForClient(hit.shaped, { fetchedAt: hit.fetchedAt });
+          return sendJson(res, 200, {
+            ...body,
+            cached: hit.cached,
+            // A fetch that failed onto a cached index is reported rather than
+            // hidden: it is the difference between "the sky is quiet" and
+            // "this server has not spoken to the outside in an hour".
+            fetchError: hit.error ?? null,
+          });
+        } catch (err) {
+          return sendJson(res, 502, { error: `no radar: ${err.message}` });
+        }
+      }
+
+      // One tile of one frame. Deliberately NOT under /tiles/ — see
+      // radar.mjs on why an image that expires in minutes must not touch the
+      // ninety-day disk cache, the pre-fetch, or the cache-first worker rule.
+      const radarMatch = url.pathname.match(/^\/radar\/([a-z0-9]+)\/(\d+)\/(\d+)\/(\d+)$/);
+      if (req.method === 'GET' && radarMatch) {
+        const [, id, zs, xs, ys] = radarMatch;
+        const z = Number(zs), x = Number(xs), y = Number(ys);
+        if (!validId(id)) return sendJson(res, 400, { error: 'bad frame id' });
+        if (z < 0 || z > 22 || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) {
+          return sendJson(res, 400, { error: 'tile coordinates are out of range' });
+        }
+        // Above RADAR_MAX_ZOOM the service answers 200 with a "Zoom Level Not
+        // Supported" placard rather than an error, so asking would put grey
+        // lettering on the map with nothing to catch it. The page never asks
+        // — it stretches the deepest real zoom — and this refuses on its
+        // behalf so a stale page cannot.
+        if (z > RADAR_MAX_ZOOM) {
+          return sendJson(res, 400, {
+            error: `radar is only served to zoom ${RADAR_MAX_ZOOM}; stretch it rather than asking deeper`,
+          });
+        }
+        const hot = radarTiles.get(id, z, x, y);
+        if (hot) {
+          res.writeHead(200, {
+            'content-type': hot.contentType,
+            'cache-control': 'public, max-age=300',
+            'x-radar-cache': 'hit',
+          });
+          return res.end(hot.body);
+        }
+        try {
+          const hit = await radarIndex.get();
+          const frame = frameById(hit.shaped, id);
+          // An id the current index does not carry is an EXPIRED frame, not a
+          // malformed request, and 410 says so — the page uses it to stop
+          // asking for a reel that has rolled off rather than retrying.
+          if (!frame) return sendJson(res, 410, { error: 'that radar frame has expired' });
+          const up = await fetch(tileUrl(hit.shaped, frame, z, x, y));
+          if (!up.ok) return sendJson(res, 502, { error: `radar tile: HTTP ${up.status}` });
+          const body = Buffer.from(await up.arrayBuffer());
+          const contentType = up.headers.get('content-type') || 'image/png';
+          radarTiles.put(id, z, x, y, { body, contentType });
+          res.writeHead(200, {
+            'content-type': contentType,
+            'cache-control': 'public, max-age=300',
+            'x-radar-cache': 'miss',
+          });
+          return res.end(body);
+        } catch (err) {
+          return sendJson(res, 502, { error: err.message });
+        }
+      }
+
       // --- review: visits, detections, bucks ------------------------------
       //
       // A VISIT is the unit you tag, not a photo. These cameras fire two frames

@@ -62,6 +62,27 @@ test('tiles and photos are cache-first; pages and API are network-first', () => 
   assert.match(src, /url\.origin !== self\.location\.origin/, 'nor other origins');
 });
 
+test('radar is never cached, and is checked before the tile rule', () => {
+  // Ground does not move, so a month-old map tile is the same tile. A
+  // month-old radar frame is a photograph of weather that is long gone, and
+  // cache-first would serve it back looking exactly as current as the real
+  // thing — the failure the whole staleness cutoff exists to prevent.
+  const src = swSource();
+  const dispatch = src.slice(src.indexOf("addEventListener('fetch'"));
+  const radarAt = dispatch.indexOf("'/radar/'");
+  const tilesAt = dispatch.indexOf("'/tiles/'");
+  assert.ok(radarAt > 0, 'radar has its own branch');
+  assert.ok(radarAt < tilesAt,
+    'and it is tested BEFORE /tiles/, or a path could fall into the cache-first branch');
+  const radarBranch = dispatch.slice(radarAt, tilesAt);
+  assert.match(radarBranch, /respondWith\(fetch\(e\.request\)\)/,
+    'radar goes straight to the network, with no cache read and no cache write');
+  assert.doesNotMatch(radarBranch, /cacheFirst|cache\.put/,
+    'nothing about radar touches the cache');
+  assert.match(dispatch, /url\.pathname === '\/api\/radar'/,
+    'the frame list is not cached either — a cached list dates the whole reel');
+});
+
 test('a cached answer is stamped with when it was stored', () => {
   assert.match(swSource(), /x-sw-cached-at/,
     'the page can say how old offline data is instead of passing it off as live');

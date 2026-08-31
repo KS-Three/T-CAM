@@ -48,6 +48,10 @@ import { browserSource as groundsSource } from './grounds.mjs';
 // same way the measure geometry is — one definition, emitted, so the form's
 // dropdown and the database's CHECK constraint cannot drift apart.
 import { CROP_KINDS, CROP_LABELS, COMPASS } from './db.mjs';
+// The radar zoom ceiling is a MEASURED property of the service, so it is
+// emitted from the module that measured it rather than retyped as a literal
+// in the page — the same one-definition rule the crop list follows.
+import { MAX_ZOOM as RADAR_MAX_ZOOM } from './radar.mjs';
 
 export const mapStyles = `
   .plabel { position: absolute; transform: translate(-50%, -170%); font-size: 11px;
@@ -188,6 +192,12 @@ export const mapStyles = `
   #map.drag { cursor: grabbing; }
   #tiles img { position: absolute; width: 256px; height: 256px; user-select: none;
                -webkit-user-drag: none; }
+  /* Radar sits on its own grid at its own zoom, so it overrides the fixed
+     256 every other tile is drawn at, and is smoothed rather than pixel-
+     doubled — the data really is about a kilometre across, and crisp squares
+     would claim a sharpness it does not have. */
+  #tiles img.radartile { width: auto; height: auto; pointer-events: none;
+                         opacity: .72; image-rendering: auto; }
   .pin { position: absolute; width: 18px; height: 18px; border-radius: 50%;
          border: 2px solid #fff; transform: translate(-50%, -50%);
          box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: pointer; }
@@ -741,6 +751,34 @@ export const mapStyles = `
   .wxbar .foot button.primary { background: var(--accent); color: var(--panel); }
   .wxbar .foot button.primary:hover { filter: brightness(1.1); }
   .wxbar .foot .hint { color: var(--muted); font-size: 11px; margin-left: auto; }
+  /* Forecast | Radar. A segmented control rather than two sliders stacked —
+     the axes differ in range AND resolution, so one track that changes with
+     the mode is honest where a shared one would have to lie about one. */
+  .wxseg { display: inline-flex; margin-top: 9px; padding: 2px; border-radius: 999px;
+           background: color-mix(in srgb, var(--ink) 8%, transparent); }
+  .wxseg button { border: 0; background: transparent; color: var(--muted);
+                  border-radius: 999px; padding: 5px 14px; cursor: pointer;
+                  font: 650 11.5px/1 ui-sans-serif, system-ui, sans-serif;
+                  transition: background .14s ease, color .14s ease; }
+  .wxseg button.on { background: var(--panel); color: var(--ink);
+                     box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+  /* The radar track has no rain profile behind it — the map IS the profile —
+     so the plot collapses to the groove and its thumb. */
+  .wxplot.radar { height: 26px; margin-top: 12px; }
+  /* A frame is live when the loop is running on it, held when it is paused,
+     and grey when radar is on but has nothing it is willing to draw. */
+  .wxdot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+           display: inline-block; flex: 0 0 auto; }
+  .wxdot.live { background: var(--accent); animation: wxpulse 1.8s ease-in-out infinite; }
+  .wxdot.stale { background: var(--warn); }
+  @keyframes wxpulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .wxbar .pillnow { font-size: 10px; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: .06em; color: var(--accent);
+                    background: color-mix(in srgb, var(--accent) 16%, transparent);
+                    border-radius: 999px; padding: 3px 7px; }
+  @media (prefers-reduced-motion: reduce) {
+    .wxdot.live { animation: none; }
+  }
   .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 8px; line-height: 1.35; }
   @media (prefers-reduced-motion: reduce) {
     .wxchip, .wxbar .foot button { transition: none; }
@@ -839,6 +877,29 @@ const TS = 256;
 const LAYERS = D.tiles.base;
 const OVERLAYS = D.tiles.overlays;
 
+// ---- radar state ----------------------------------------------------------
+// Declared up here, beside the layers, because draw() reads radarOn and a
+// let further down the file would still be in its dead zone the first time
+// the map paints. The rest of the radar code lives with the weather bar,
+// which owns its controls.
+//
+// Radar is deliberately NOT in overlayOn: that set is written to
+// localStorage, and a live layer that comes back on by itself at every launch
+// would quietly fetch a reel every time the map opened.
+let radarOn = false;
+let RADAR = null;                // the served frame list, or null
+let radarIdx = 0;                // which frame is drawn
+let radarNewer = 0;              // frames that arrived while scrubbed back
+let radarPlaying = false;
+let radarTimer = null;           // the autoplay tick
+let radarPoll = null;            // the 5-minute check for new frames
+let wxMode = 'forecast';         // which axis the one track is driving
+const RADAR_MAX_ZOOM = ${RADAR_MAX_ZOOM};
+/** The frame to draw, or null — which is also how "too old to draw" is said,
+ *  so the cutoff is honoured by the paint loop and not only by the label. */
+const radarFrame = () =>
+  (RADAR && !RADAR.tooOld && RADAR.frames && RADAR.frames[radarIdx]) || null;
+
 const MERC = 20037508.342789244;
 function tileBounds3857(z, x, y) {
   const size = 2 * MERC / 2 ** z;
@@ -922,6 +983,49 @@ function frameFor(pts) {
 let zoom = 4, centre = { lat: 39.5, lng: -98.35 };
 if (framePoints.length) ({ centre, zoom } = frameFor(framePoints));
 
+/**
+ * Radar, on its own grid.
+ *
+ * The service has radar only down to RADAR_MAX_ZOOM. Above it every request
+ * comes back HTTP 200 carrying an identical "Zoom Level Not Supported"
+ * placard — measured at z8 through z12, all 1370 bytes — so a paint pass that
+ * simply used the map's zoom would tile a grey wall of lettering across the
+ * property and nothing in the response would say it was wrong. That is why
+ * this is not an entry in OVERLAYS: it does not share the map's grid, its URL
+ * carries a frame rather than only a tile, it must never join the offline
+ * pre-fetch, and it deliberately does not survive a reload.
+ *
+ * So it asks for the deepest zoom that exists and stretches those tiles over
+ * the viewport. Stretching costs nothing real here: radar resolution is about
+ * a kilometre, so a sharper tile would carry no more weather even if one were
+ * served. Refusing above z7 would instead mean no radar at any zoom this map
+ * is actually used at.
+ */
+function paintRadar(left, top, W, H) {
+  const f = radarFrame();
+  const rz = Math.min(zoom, RADAR_MAX_ZOOM);
+  const size = TS * 2 ** (zoom - rz);      // one radar tile, in map pixels
+  const rn = 2 ** rz;
+  for (let rx = Math.floor(left / size); rx <= Math.floor((left + W) / size); rx++) {
+    for (let ry = Math.floor(top / size); ry <= Math.floor((top + H) / size); ry++) {
+      if (ry < 0 || ry >= rn) continue;
+      const img = new Image();
+      img.className = 'radartile';
+      img.alt = '';
+      img.src = '/radar/' + f.id + '/' + rz + '/' + (((rx % rn) + rn) % rn) + '/' + ry;
+      img.style.left = (rx * size - left) + 'px';
+      img.style.top = (ry * size - top) + 'px';
+      img.style.width = size + 'px';
+      img.style.height = size + 'px';
+      // A frame that has rolled off the index answers 410. Retrying it on
+      // every pan would be a steady drip of dead requests, so the first
+      // failure refreshes the reel instead.
+      img.onerror = () => { img.style.display = 'none'; radarExpired(); };
+      tilesEl.appendChild(img);
+    }
+  }
+}
+
 function draw() {
   const W = mapEl.clientWidth, H = mapEl.clientHeight;
   const cx = projX(centre.lng, zoom), cy = projY(centre.lat, zoom);
@@ -973,6 +1077,10 @@ function draw() {
       }
     }
   }
+  // Radar last, so weather sits over the ground and over every regulatory
+  // wash. Its own pass, outside the tile loop, because its grid is not the
+  // map's — see paintRadar.
+  if (radarOn && radarFrame()) paintRadar(left, top, W, H);
   for (const c of located) {
     const x = projX(c.lng, zoom) - left, y = projY(c.lat, zoom) - top;
     if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
@@ -5065,6 +5173,17 @@ function wxPaintChip() {
     (Number.isFinite(WX.temp[i]) ? Math.round(WX.temp[i]) : '?') + '°F'));
   if (WX.sky && WX.sky[i]) wxChip.appendChild(el('span', 'muted', WX.sky[i]));
   if (WX.stale) wxChip.appendChild(el('span', 'muted', '(old)'));
+  // Radar keeps running with the bar closed, so the collapsed chip has to
+  // carry it: a live dot and the frame's own time. A layer painting the map
+  // while every control that governs it is hidden is the state this avoids.
+  const rf = radarFrame();
+  if (radarOn && rf) {
+    wxChip.appendChild(el('span', 'wxdot' + (radarPlaying ? ' live' : '')));
+    wxChip.appendChild(el('span', null, radarClock(rf.time)));
+  } else if (radarOn) {
+    wxChip.appendChild(el('span', 'wxdot stale'));
+    wxChip.appendChild(el('span', 'muted', 'no radar'));
+  }
   wxChip.hidden = false;
 }
 
@@ -5099,7 +5218,47 @@ function wxPaintBar() {
 function wxOpenBar() {
   wxBar.textContent = '';
   wxBar.appendChild(el('div', 'now'));
+  wxBar.appendChild(wxSegment());
+  wxBar.appendChild(el('div', 'wxbody'));
+  wxRenderBody();
+  wxChip.hidden = true;
+  wxBar.hidden = false;
+  // On a phone the ground switcher floats where the bar now is (measured:
+  // "Everything" sat square on the day scale). It steps aside while the bar
+  // is open — the rule that hides it lives in the dashboard's stylesheet and
+  // only bites at phone width, so the top-bar switcher never blinks.
+  document.getElementById('groundSel')?.classList.add('under-wxbar');
+}
 
+/**
+ * Forecast | Radar. One track, two modes, rather than two sliders stacked:
+ * the axes are genuinely different — hourly over a week ahead against
+ * ten-minute steps over two hours behind — and a single control that changes
+ * range and resolution with the mode is honest about both, where one slider
+ * spanning both would have to lie about one of them.
+ */
+function wxSegment() {
+  const seg = el('div', 'wxseg');
+  for (const [mode, label] of [['forecast', 'Forecast'], ['radar', 'Radar']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = wxMode === mode ? 'on' : '';
+    b.textContent = label;
+    b.setAttribute('aria-pressed', String(wxMode === mode));
+    b.onclick = ev => { ev.stopPropagation(); wxSetMode(mode); };
+    seg.appendChild(b);
+  }
+  return seg;
+}
+
+function wxRenderBody() {
+  const body = wxBar.querySelector('.wxbody');
+  if (!body) return;
+  body.textContent = '';
+  if (wxMode === 'radar') wxBuildRadar(body); else wxBuildForecast(body);
+}
+
+function wxBuildForecast(body) {
   // The plot holds three layers: the rain profile, the groove the thumb runs
   // in, and the slider itself stretched over both. Built in that order so the
   // slider is last and therefore on top for pointer events.
@@ -5143,7 +5302,7 @@ function wxOpenBar() {
   slider.setAttribute('aria-label', 'Forecast hour');
   slider.oninput = () => { wxIdx = Number(slider.value); wxPaintBar(); };
   plot.appendChild(slider);
-  wxBar.appendChild(plot);
+  body.appendChild(plot);
 
   // Day names under the slider, each as wide as the hours it owns, so the
   // thumb's position reads as a day without arithmetic.
@@ -5161,32 +5320,254 @@ function wxOpenBar() {
     s.style.flexGrow = String(dd.n);
     scale.appendChild(s);
   }
-  wxBar.appendChild(scale);
+  body.appendChild(scale);
 
   const foot = el('div', 'foot');
   const nowBtn = document.createElement('button');
   nowBtn.type = 'button'; nowBtn.className = 'primary'; nowBtn.textContent = 'Now';
   nowBtn.onclick = () => { wxIdx = wxNowIdx; slider.value = String(wxIdx); wxPaintBar(); };
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button'; closeBtn.textContent = 'Close';
-  closeBtn.onclick = () => {
+  foot.append(nowBtn, wxCloseButton());
+  foot.appendChild(el('span', 'hint', 'Drag to look ahead.'));
+  body.appendChild(foot);
+
+  if (WX.note) body.appendChild(el('div', 'stale', WX.note));
+  wxPaintBar();
+}
+
+function wxCloseButton() {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = 'Close';
+  b.onclick = () => {
     wxBar.hidden = true;
     document.getElementById('groundSel')?.classList.remove('under-wxbar');
+    // Closing the bar puts the CONTROL away, not the layer: radar keeps
+    // playing and the chip carries its frame time, so the map is never
+    // painting weather with nothing on screen admitting to it.
     wxPaintChip();
   };
-  foot.append(nowBtn, closeBtn);
-  foot.appendChild(el('span', 'hint', 'Drag to look ahead.'));
-  wxBar.appendChild(foot);
+  return b;
+}
 
-  if (WX.note) wxBar.appendChild(el('div', 'stale', WX.note));
-  wxPaintBar();
-  wxChip.hidden = true;
-  wxBar.hidden = false;
-  // On a phone the ground switcher floats where the bar now is (measured:
-  // "Everything" sat square on the day scale). It steps aside while the bar
-  // is open — the rule that hides it lives in the dashboard's stylesheet and
-  // only bites at phone width, so the top-bar switcher never blinks.
-  document.getElementById('groundSel')?.classList.add('under-wxbar');
+// ---- radar: the loop, its clock, and the two timers -----------------------
+// The frames come from /api/radar, which also decides whether the newest one
+// is too old to draw. That judgement is NOT remade here: one definition, and
+// the half that drifts would be the half that decides whether a stale
+// photograph of a storm goes on the map.
+
+/** A frame's stamp on the PROPERTY's clock, matching everything else on the
+ *  bar — the phone's timezone is not where the deer are. */
+function radarClock(unixSeconds) {
+  const off = Number.isFinite(WX?.utcOffsetSeconds) ? WX.utcOffsetSeconds : null;
+  const d = off === null
+    ? new Date(unixSeconds * 1000)
+    : new Date(unixSeconds * 1000 + off * 1000);
+  const hh = off === null ? d.getHours() : d.getUTCHours();
+  const mm = off === null ? d.getMinutes() : d.getUTCMinutes();
+  const ap = hh >= 12 ? 'pm' : 'am';
+  return (hh % 12 === 0 ? 12 : hh % 12) + ':' + String(mm).padStart(2, '0') + ' ' + ap;
+}
+
+async function radarLoad() {
+  const res = await fetch('/api/radar');
+  const body = await res.json();
+  if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  const wasNewest = !RADAR || radarIdx >= (RADAR.frames.length - 1);
+  const previous = RADAR ? RADAR.frames.map(f => f.id) : [];
+  RADAR = body;
+  if (!RADAR.frames.length) { radarIdx = 0; radarNewer = 0; return; }
+  if (wasNewest) {
+    // Parked on the newest frame means riding forward with it — the live tail.
+    radarIdx = RADAR.frames.length - 1;
+    radarNewer = 0;
+  } else {
+    // Scrubbed back to watch a cell: hold that frame rather than yanking the
+    // picture away, and say how many arrived behind it.
+    const held = previous[radarIdx];
+    const still = RADAR.frames.findIndex(f => f.id === held);
+    radarIdx = still >= 0 ? still : 0;
+    radarNewer = RADAR.frames.length - 1 - radarIdx;
+  }
+}
+
+/** A tile answered 410: the reel rolled off under us. Refetch once. */
+let radarRefetching = false;
+function radarExpired() {
+  if (radarRefetching || !radarOn) return;
+  radarRefetching = true;
+  radarLoad()
+    .then(() => { draw(); if (!wxBar.hidden) wxRenderBody(); })
+    .catch(() => { /* the note on the next poll will explain */ })
+    .finally(() => { radarRefetching = false; });
+}
+
+function radarStep() {
+  if (!RADAR || !RADAR.frames.length) return;
+  radarIdx = (radarIdx + 1) % RADAR.frames.length;
+  if (radarIdx === RADAR.frames.length - 1) radarNewer = 0;
+  draw();
+  if (!wxBar.hidden && wxMode === 'radar') wxPaintRadarHead();
+  wxPaintChip();
+}
+
+function radarPlay() {
+  radarStop();
+  radarPlaying = true;
+  radarTimer = setInterval(radarStep, 700);
+}
+function radarStop() {
+  radarPlaying = false;
+  if (radarTimer) clearInterval(radarTimer);
+  radarTimer = null;
+}
+
+/** Only while radar is on, and only ever one. Polling a reel nobody is
+ *  looking at spends the truck's data on nothing. */
+function radarPollStart() {
+  radarPollStop();
+  radarPoll = setInterval(() => {
+    radarLoad()
+      .then(() => { draw(); if (!wxBar.hidden && wxMode === 'radar') wxRenderBody(); wxPaintChip(); })
+      .catch(() => { /* keep the reel we have; its age is already shown */ });
+  }, 5 * 60000);
+}
+function radarPollStop() {
+  if (radarPoll) clearInterval(radarPoll);
+  radarPoll = null;
+}
+
+async function wxSetMode(mode) {
+  wxMode = mode;
+  if (mode === 'radar') {
+    radarOn = true;
+    try {
+      if (!RADAR) await radarLoad();
+    } catch (err) {
+      RADAR = { frames: [], tooOld: true, note: 'Radar could not be reached: ' + err.message };
+    }
+    if (RADAR && RADAR.frames.length && !RADAR.tooOld) { radarPlay(); }
+    radarPollStart();
+  } else {
+    radarOn = false;
+    radarStop();
+    radarPollStop();
+  }
+  draw();
+  // The segment's own pressed state has to be rebuilt along with the body.
+  const seg = wxBar.querySelector('.wxseg');
+  if (seg) seg.replaceWith(wxSegment());
+  wxRenderBody();
+  wxPaintChip();
+}
+
+function wxPaintRadarHead() {
+  const line = wxBar.querySelector('.now');
+  if (!line) return;
+  line.textContent = '';
+  const f = RADAR && RADAR.frames[radarIdx];
+  if (!f) { line.appendChild(el('b', null, 'No radar')); return; }
+  const dot = el('span', 'wxdot' + (radarPlaying ? ' live' : ''));
+  line.appendChild(dot);
+  line.appendChild(el('b', null, radarClock(f.time)));
+  if (f.kind === 'nowcast') line.appendChild(el('span', 'pillnow', 'forecast'));
+  // The age of the frame you are LOOKING AT, not of the reel. Those differ by
+  // the whole two hours the moment you scrub back, and the drive caught this
+  // reading "9 min old" beside a frame from an hour and a half ago.
+  // RADAR.ageMinutes still governs whether the reel draws at all; it just does
+  // not describe this frame.
+  const mins = Math.round((Date.now() - f.time * 1000) / 60000);
+  line.appendChild(el('span', 'muted',
+    mins <= 0 ? (f.kind === 'nowcast' ? 'in ' + Math.abs(mins) + ' min' : 'just now')
+      : mins + ' min ago'));
+  if (radarNewer > 0) {
+    line.appendChild(el('span', 'muted',
+      radarNewer + ' newer frame' + (radarNewer === 1 ? '' : 's')));
+  }
+  line.appendChild(el('span', 'when', 'RADAR'));
+}
+
+function wxBuildRadar(body) {
+  wxPaintRadarHead();
+
+  // Too old, or nothing to show: say so instead of drawing. The layer is
+  // already blank, because radarFrame() returns null on the same condition.
+  if (!RADAR || !RADAR.frames.length || RADAR.tooOld) {
+    body.appendChild(el('div', 'stale',
+      (RADAR && RADAR.note) || 'No radar frames are available right now.'));
+    const foot = el('div', 'foot');
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.className = 'primary'; retry.textContent = 'Try again';
+    retry.onclick = () => {
+      radarLoad().then(() => { draw(); wxRenderBody(); wxPaintChip(); }).catch(() => wxRenderBody());
+    };
+    foot.append(retry, wxCloseButton());
+    body.appendChild(foot);
+    return;
+  }
+
+  const plot = el('div', 'wxplot radar');
+  plot.appendChild(el('div', 'wxgroove'));
+  // Where the past stops and the vendor's own short forecast begins. Measured
+  // empty on a live probe, so this is drawn only when there is one.
+  const firstNow = RADAR.frames.findIndex(f => f.kind === 'nowcast');
+  if (firstNow > 0) {
+    const tick = el('div', 'wxnowtick');
+    tick.style.left = ((firstNow - 0.5) / (RADAR.frames.length - 1) * 100) + '%';
+    plot.appendChild(tick);
+  }
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.id = 'radarslider';
+  slider.min = '0';
+  slider.max = String(RADAR.frames.length - 1);
+  slider.step = '1';
+  slider.value = String(radarIdx);
+  slider.setAttribute('aria-label', 'Radar frame');
+  slider.oninput = () => {
+    radarStop();                       // a hand on the slider ends the autoplay
+    radarIdx = Number(slider.value);
+    radarNewer = RADAR.frames.length - 1 - radarIdx;
+    draw();
+    wxPaintRadarHead();
+    wxPaintChip();
+  };
+  plot.appendChild(slider);
+  body.appendChild(plot);
+
+  // Clock labels rather than day names: the whole reel is about two hours.
+  const scale = el('div', 'scale');
+  const marks = 4;
+  for (let m = 0; m < marks; m++) {
+    const f = RADAR.frames[Math.round(m / (marks - 1) * (RADAR.frames.length - 1))];
+    scale.appendChild(el('span', null, radarClock(f.time)));
+  }
+  body.appendChild(scale);
+
+  const foot = el('div', 'foot');
+  const playBtn = document.createElement('button');
+  playBtn.type = 'button'; playBtn.className = 'primary';
+  playBtn.textContent = radarPlaying ? 'Pause' : 'Play';
+  playBtn.onclick = () => {
+    if (radarPlaying) radarStop(); else radarPlay();
+    playBtn.textContent = radarPlaying ? 'Pause' : 'Play';
+    wxPaintRadarHead();
+  };
+  const liveBtn = document.createElement('button');
+  liveBtn.type = 'button'; liveBtn.textContent = 'Live';
+  liveBtn.onclick = () => {
+    radarIdx = RADAR.frames.length - 1;
+    radarNewer = 0;
+    slider.value = String(radarIdx);
+    draw(); wxPaintRadarHead(); wxPaintChip();
+  };
+  foot.append(playBtn, liveBtn, wxCloseButton());
+  foot.appendChild(el('span', 'hint', 'Last two hours.'));
+  body.appendChild(foot);
+
+  if (RADAR.fetchError) {
+    body.appendChild(el('div', 'stale',
+      'Showing the last reel this server managed to fetch — it has not reached '
+      + 'the radar service since (' + RADAR.fetchError + ').'));
+  }
 }
 
 wxChip.onclick = async ev => {

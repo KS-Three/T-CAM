@@ -79,8 +79,8 @@ test('the weather strip reads its own server and scrubs the hours', () => {
     'dragging the slider repaints the hour under it');
   assert.match(mapScript, /WX\.utcOffsetSeconds/,
     '"now" is found on the property\'s clock, not the phone\'s');
-  assert.match(mapScript, /if \(WX\.note\) wxBar\.appendChild\(el\('div', 'stale', WX\.note\)\)/,
-    'a stale forecast says so on the bar');
+  assert.match(mapScript, /if \(WX\.note\) body\.appendChild\(el\('div', 'stale', WX\.note\)\)/,
+    'a stale forecast says so on the bar (its body, since radar joined the bar)');
   assert.match(mapScript, /rotate\(' \+ Math\.round\(\(\(dirDeg \|\| 0\) \+ 180\) % 360\)/,
     'the arrow points where the air GOES while the words name where it is from');
 });
@@ -271,4 +271,99 @@ test('the search asks the server, which asks the parcel service', () => {
     'one client on the public service, as with the point lookup');
   assert.match(mapScript, /Type at least three letters of a name\./,
     'the short-name rule is answered locally rather than by a round trip and a 400');
+});
+
+test('radar rides its own axis, and never joins the tile machinery', () => {
+  // Radar deliberately does NOT become an OVERLAY_SOURCES entry. That set is
+  // written to localStorage, offered to the bounded offline pre-fetch, and
+  // addressed by a URL with no time in it — three things that are all wrong
+  // for an image which expires in minutes.
+  assert.match(mapScript, /if \(radarOn && radarFrame\(\)\) paintRadar\(left, top, W, H\);/,
+    'radar paints in its own pass, after every overlay and outside the tile loop');
+  assert.match(mapScript, /img\.src = '\/radar\/' \+ f\.id \+ '\/' \+ rz/,
+    'the URL carries a frame AND its own zoom, which is why it cannot be an overlay template');
+
+  // The service has radar only to z7; above it every request answers HTTP 200
+  // with an identical "Zoom Level Not Supported" placard (measured at z8-z12,
+  // 1370 bytes each). Drawn straight that is a grey wall of lettering across
+  // the property, and nothing in the response says so.
+  assert.match(mapScript, /const rz = Math\.min\(zoom, RADAR_MAX_ZOOM\)/,
+    'the deepest zoom that exists is asked for, never deeper');
+  assert.match(mapScript, /const RADAR_MAX_ZOOM = 7;/,
+    'and the ceiling is emitted from the module that measured it, not retyped');
+  assert.match(mapScript, /const size = TS \* 2 \*\* \(zoom - rz\)/,
+    'that tile is then stretched — radar is a kilometre across, so nothing is lost');
+  assert.doesNotMatch(mapScript, /overlayOn\.add\('radar'\)|OVERLAYS\.radar/,
+    'radar is not an overlay, so it cannot be persisted or pre-fetched as one');
+  const save = mapScript.slice(mapScript.indexOf("'/api/tiles/save'"));
+  assert.doesNotMatch(save.slice(0, 600), /radar/,
+    'and "save this view" never pre-fetches a frame that dies in ten minutes');
+
+  // The cutoff is the server's judgement, honoured by the paint loop rather
+  // than only by a label — a note saying "too old" over a drawn storm would
+  // be the worst of both.
+  assert.match(mapScript, /const radarFrame = \(\) =>\s*\n?\s*\(RADAR && !RADAR\.tooOld/,
+    'too old means nothing is drawn, not merely something is written');
+
+  assert.match(mapScript, /const wasNewest = !RADAR \|\| radarIdx >= \(RADAR\.frames\.length - 1\)/,
+    'the live tail is decided before the new reel replaces the old one');
+  assert.match(mapScript, /radarNewer = RADAR\.frames\.length - 1 - radarIdx/,
+    'and a scrubbed-back viewer is told how many arrived behind them');
+  assert.match(mapScript, /radarStop\(\);[^\n]*\n\s*radarIdx = Number\(slider\.value\)/,
+    'a hand on the slider ends the autoplay rather than fighting it');
+  assert.match(mapScript, /img\.onerror = \(\) => \{ img\.style\.display = 'none'; radarExpired\(\); \}/,
+    'a 410 refreshes the reel instead of dripping dead requests every pan');
+});
+
+test('the loop only runs while somebody is looking at it', () => {
+  assert.match(mapScript, /radarPoll = setInterval\(/, 'new frames are polled for');
+  assert.match(mapScript, /5 \* 60000\)/, 'about as often as the vendor publishes');
+  const setMode = mapScript.slice(mapScript.indexOf('async function wxSetMode'));
+  assert.match(setMode.slice(0, 900), /radarOn = false;[\s\S]*?radarStop\(\);[\s\S]*?radarPollStop\(\)/,
+    'leaving radar mode stops BOTH timers — polling a reel nobody is watching '
+    + 'spends the truck\'s data on nothing');
+});
+
+test('the radar clock is the property\'s, like everything else on the bar', () => {
+  assert.match(mapScript, /function radarClock\(unixSeconds\)/);
+  assert.match(mapScript, /Number\.isFinite\(WX\?\.utcOffsetSeconds\) \? WX\.utcOffsetSeconds : null/,
+    'frames are stamped on the ground\'s clock, not the phone\'s');
+  assert.match(mapScript, /d\.getUTCHours\(\)/,
+    'and the offset is applied by reading UTC parts, not by re-parsing a local string');
+});
+
+test('one track, two modes — not two sliders stacked', () => {
+  assert.match(mapScript, /function wxSegment\(\)/);
+  assert.match(mapScript, /\['forecast', 'Forecast'\], \['radar', 'Radar'\]/,
+    'the two modes are the segmented control');
+  assert.match(mapScript, /b\.setAttribute\('aria-pressed'/,
+    'a segmented control has to announce which half is chosen');
+  assert.match(mapScript, /slider\.setAttribute\('aria-label', 'Radar frame'\)/,
+    'the radar track names itself too');
+  assert.match(mapStyles, /\.wxseg button\.on \{/, 'and the chosen half is drawn as chosen');
+});
+
+test('the chip admits when radar is painting behind a closed bar', () => {
+  const chip = mapScript.slice(mapScript.indexOf('function wxPaintChip'));
+  assert.match(chip.slice(0, 1400), /if \(radarOn && rf\)/,
+    'a live layer with every control hidden is the state this prevents');
+  assert.match(chip.slice(0, 1400), /radarClock\(rf\.time\)/, 'the chip carries the frame time');
+  assert.match(chip.slice(0, 1400), /wxdot stale/,
+    'radar on with nothing drawable says so rather than looking off');
+  assert.match(mapStyles, /\.wxdot\.live \{[^}]*animation: wxpulse/);
+  assert.match(mapStyles, /prefers-reduced-motion[\s\S]*?\.wxdot\.live \{ animation: none; \}/,
+    'the pulse respects a reduced-motion preference');
+});
+
+test('the age beside a frame is that frame\'s, not the reel\'s', () => {
+  // Caught by the browser drive: the head read "9 min old" next to a frame
+  // from ninety minutes earlier, because it was reporting the reel's age.
+  // They differ by the whole loop the moment you scrub back.
+  const head = mapScript.slice(mapScript.indexOf('function wxPaintRadarHead'));
+  assert.match(head.slice(0, 1600), /const mins = Math\.round\(\(Date\.now\(\) - f\.time \* 1000\) \/ 60000\)/,
+    'the age is measured off the displayed frame');
+  assert.doesNotMatch(head.slice(0, 1600), /RADAR\.ageMinutes \+ ' min/,
+    'the reel age governs whether radar draws at all, and describes no single frame');
+  assert.match(head.slice(0, 1600), /in ' \+ Math\.abs\(mins\)/,
+    'a nowcast frame is in the future, and says so rather than reporting negative age');
 });

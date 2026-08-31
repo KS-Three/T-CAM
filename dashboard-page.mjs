@@ -891,6 +891,11 @@ function cameraCard(c, { withId = true } = {}) {
       card.appendChild(n);
     }
   }
+  // Which way it looks. Absent rather than guessed when nobody has said: a
+  // camera defaulted to north would put a measured bearing and an assumed one
+  // in the same row, and everything downstream would believe both equally.
+  if (c.facingLine) card.appendChild(line('Facing', c.facingLine));
+
   card.appendChild(line('Last contact', fmtDate(c.lastSeen) +
     (c.health.age !== null ? ' (' + c.health.age + 'd)' : '')));
 

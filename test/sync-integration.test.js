@@ -17,10 +17,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const run = promisify(execFile);
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath, NOT new URL(...).pathname: on Windows the pathname is
+// "/C:/Users/..." with a leading slash, which path.join turns into
+// "\C:\Users\..." and node then resolves against the cwd as
+// "C:\C:\Users\...". Every test in this file spawned a subprocess that
+// died with MODULE_NOT_FOUND, so the one test proving the sync is wired
+// together has never actually run on Windows.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC = path.join(HERE, '..', 'spypoint-sync.mjs');
 
 // A 1x1 JPEG, so the download path writes a real image rather than a stub.
@@ -44,7 +51,11 @@ const CAMERA = (id, name, lng, lat) => ({
       position: { type: 'Point', coordinates: [lng, lat] },
     }],
   },
-  subscriptions: [{ plan: { name: 'Free' }, photoCount: 2, photoLimit: 100 }],
+  subscriptions: [{
+    plan: { name: 'Free' }, photoCount: 2, photoLimit: 100,
+    startDateBillingCycle: '2025-11-01T00:00:00.000Z',
+    endDateBillingCycle: '2025-11-30T23:59:59.999Z',
+  }],
 });
 
 /** A stand-in for the SpyPoint API, serving two cameras and three photos. */
@@ -250,4 +261,29 @@ test('the flat files are still written alongside the database', async t => {
   const csv = fs.readFileSync(path.join(out, 'cameras.csv'), 'utf8');
   assert.match(csv, /North Ridge/);
   assert.match(csv, /44\.123456,-90\.654321/, 'lat then lng in the CSV too');
+
+  // The quota columns, end to end: the API's subscription block, through the
+  // provider, into the flat file. Derived here rather than in the dashboard so
+  // a spreadsheet can sort on it.
+  const [header, row] = csv.trim().split('\n');
+  const cols = header.split(',');
+  const at = name => row.split(',')[cols.indexOf(name)];
+  for (const c of ['cycle_start', 'cycle_end', 'quota_level', 'photos_per_day', 'quota_dry_on']) {
+    assert.ok(cols.includes(c), `${c} column present`);
+  }
+  assert.equal(at('photos_used'), '2');
+  assert.equal(at('photo_limit'), '100');
+  assert.equal(at('cycle_start'), '2025-11-01T00:00:00.000Z');
+  assert.equal(at('quota_level'), 'ok', '2 of 100 is not an alarm');
+});
+
+test('the sync reports the quota per camera, not one camera for the account', async t => {
+  // The line this replaced printed whichever camera came back first. Every
+  // camera has to appear, with its own numbers.
+  const { server, port } = await fakeSpypoint();
+  t.after(() => server.close());
+  const { stdout } = await sync(port, tmp());
+  assert.match(stdout, /Photo quota this billing cycle:/);
+  assert.match(stdout, /North Ridge\s+\[.{10}\] 2\/100/,
+    'the camera, its bar and its own counts');
 });

@@ -564,6 +564,22 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 13,
+    name: 'billing cycle bounds for the photo quota',
+    up: db => {
+      // photo_count / photo_limit have been stored since the first migration,
+      // but a fraction with no cycle behind it cannot say anything useful. The
+      // camera that has spent 60% of its allowance is fine on day 25 and in
+      // trouble on day 6, and only these two dates tell the difference.
+      //
+      // Both are nullable and stay null for any provider that does not meter
+      // photos at all. A null must read as "no limit known", never as a limit
+      // of zero — quota.mjs refuses to alarm on either of these being absent.
+      db.exec('ALTER TABLE cameras ADD COLUMN cycle_start TEXT;');
+      db.exec('ALTER TABLE cameras ADD COLUMN cycle_end   TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -735,9 +751,9 @@ export function upsertCamera(db, row, { provider, accountLabel = null, raw = nul
       id, provider, account_label, native_id, property_id, weather_location_id,
       name, model, lat, lng, gps_fix, battery, battery_level, battery_source,
       signal, signal_bars, signal_level, signal_type, temp_value, temp_unit,
-      mem_used, mem_size, plan, photo_count, photo_limit, last_seen, raw,
-      first_seen_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      mem_used, mem_size, plan, photo_count, photo_limit, cycle_start, cycle_end,
+      last_seen, raw, first_seen_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       account_label = excluded.account_label,
       weather_location_id = excluded.weather_location_id,
@@ -750,7 +766,9 @@ export function upsertCamera(db, row, { provider, accountLabel = null, raw = nul
       temp_value = excluded.temp_value, temp_unit = excluded.temp_unit,
       mem_used = excluded.mem_used, mem_size = excluded.mem_size,
       plan = excluded.plan, photo_count = excluded.photo_count,
-      photo_limit = excluded.photo_limit, last_seen = excluded.last_seen,
+      photo_limit = excluded.photo_limit,
+      cycle_start = excluded.cycle_start, cycle_end = excluded.cycle_end,
+      last_seen = excluded.last_seen,
       raw = excluded.raw, updated_at = excluded.updated_at
   `).run(
     id, provider, accountLabel, String(row.id), existing?.property_id ?? null,
@@ -758,7 +776,8 @@ export function upsertCamera(db, row, { provider, accountLabel = null, raw = nul
     row.battery, row.batteryLevel, row.batterySource,
     row.signal, row.signalBars, row.signalLevel, row.signalType,
     row.tempValue, row.tempUnit, row.memUsed, row.memSize,
-    row.plan, row.photoCount, row.photoLimit, row.lastSeen,
+    row.plan, row.photoCount, row.photoLimit,
+    row.cycleStart ?? null, row.cycleEnd ?? null, row.lastSeen,
     raw ? JSON.stringify(raw) : null,
     existing?.first_seen_at ?? now, now);
 

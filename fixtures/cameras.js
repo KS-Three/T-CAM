@@ -56,6 +56,11 @@ export const FLEX_M = {
     plan: { name: 'Free', id: 'Free', isFree: true, photoCountPerMonth: 100 },
     photoCount: 0,
     photoLimit: 100,
+    // The window photoCount is measured over. Without it the count is a
+    // bare fraction and no burn rate can be derived from it.
+    startDateBillingCycle: '2025-11-01T00:00:00.000Z',
+    endDateBillingCycle: '2025-11-30T23:59:59.999Z',
+    monthEndBillingCycle: '2025-11-30T23:59:59.999Z',
     isFree: true,
   }],
 };

@@ -133,6 +133,8 @@ export function cameraFromRow(r) {
     plan: r.plan,
     photoCount: r.photo_count,
     photoLimit: r.photo_limit,
+    cycleStart: r.cycle_start ?? null,
+    cycleEnd: r.cycle_end ?? null,
     lastSeen: r.last_seen,
   };
 }

@@ -84,6 +84,8 @@ test('the extracted SpyPoint provider still produces the pre-refactor output', (
     plan: 'Free',
     photoCount: 0,
     photoLimit: 100,
+    cycleStart: '2025-11-01T00:00:00.000Z',
+    cycleEnd: '2025-11-30T23:59:59.999Z',
     lastSeen: '2025-11-28T15:00:42.000Z',
   });
 

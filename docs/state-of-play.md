@@ -88,6 +88,7 @@ Rules for anything added from here:
 | **Wind recognition** — each frame fingerprinted in the browser (256-bit dHash, canvas); a visit matching the frames YOU reviewed as empty gets "Looks like wind" with the measured match; previews caption confirmed tags, the camera's claims, and the wind match | Driven end to end on real generated images: the empty burst hashed itself on arrival, N built the baseline, the animal-blob frame was refused wind talk (after the drive caught 9×8 hashing calling it a 97% match — the hash was rebuilt at 17×16), the empty-like visit was called at 100%, and the lightbox captions carried all three kinds of knowing |
 | **LiDAR basemap + shade overlay** — the browsable bare-earth hillshade (USGS 3DEP Gray-Stretch, rendered on demand, cached and offline-saveable like every tile); "LiDAR shade" lays the same rendering over the imagery with an overlay blend | Probed live first: the service refuses custom exaggeration (200-byte error stubs) and its fixed hillshades paint the flat home ground solid white, so Gray-Stretch — which normalises each window to its own relief — is the load-bearing choice, pinned by test; then driven in a real browser against live USGS through the real proxy at z16 and z17 (ditches, knobs and an old road legible on 12-ft-relief ground), the blend chosen from four screenshotted candidates (multiply dimmed dark canopy to mud; overlay kept structure), 117 tiles landing in the offline cache on the way |
 | **Camera GPS: newest fix wins** — status.coordinates is an ARRAY and the sync took [0]; a moved camera carries several and the pin stayed on the old spot. Newest dateTime now decides, and the camera card shows the fix date, flagged when it is much older than the last contact | Reported from the field 2026-08-30. Reproduced from the real document shape (two fixes, old one first), pinned both orders plus the undated cases; 616 tests |
+| **Photo quota alarm** — each camera's transmission allowance, flagged on 80% spent AND on a burn rate that will not last the billing cycle; folded into camera health so the card, the map pin and the Needs attention list all react. The old one-line "Plan: 10/100" reported whichever camera came back first, which hid the one at 100/100 that had stopped sending | 17 unit tests (thresholds, the rate, cycle-end suppression, over-limit, unlimited plans, missing and unparseable dates); driven in a real browser against the real 4-camera account and against a mid-cycle seed showing all three levels — banner, alert list, cards and pin classes all read back correct; 693 tests |
 | **`gps-doctor.mjs`** — why is a camera's pin in the wrong place? Read-only: compares every fix SpyPoint sent against what the normalizer picks and what the database actually draws, and decodes the DMS and geohash copies of each fix to catch the document disagreeing with itself | Written for a second field report (Fremont North, 2026-08-31) that the newest-fix rule above did not explain. Both verdict branches exercised against a planted stale row; the DMS decoder reproduces the fixture's documented pair exactly and the geohash decoder the spec's `ezs42` worked example; 5 tests |
 | **The planner recalibrated against the literature** — every factor carries an evidence tier; tier-D factors are shown scoring zero | A literature pass ([`deer-evidence.md`](deer-evidence.md)) found four scored factors that GPS-collar studies contradict. Cold front 14 → 3, wind's high-speed penalty deleted (activity *rises* with wind), barometer 5 → 0, moon 2 → 0. 20 planner tests rewritten to pin the new decisions with the reasoning in comments |
 | **Rut calendar moved to the Wisconsin data** — peak rut 23 Oct – 12 Nov, best week 5–11 Nov | Hunsaker et al. 2025: 188 collared males in Dane/Iowa/Grant counties, changepoint analysis agreeing across movement rate, range size and conception date. The old calendar scored the last week of October a full tier too low |
@@ -405,6 +406,18 @@ Two smaller notes:
 
 ## Things that will bite you
 
+- **`new URL(import.meta.url).pathname` is wrong on Windows.** It keeps a
+  leading slash - `/C:/Users/...` - and `path.join` then produces
+  `\C:\Users\...`, which Node resolves against the cwd as
+  `C:\C:\Users\...`. Three places had it, and all three failed *only* on
+  Kent's machine: `sync-integration.test.js` (every subprocess died with
+  MODULE_NOT_FOUND, so the one test proving the sync is wired together had
+  never actually run here), `build-stamp.test.js` (no `.git` found under the
+  bad path, so a null commit), and `tools/cdp-driver.mjs`'s
+  `--user-data-dir=/tmp/...` (Chrome exits before opening the debug port; the
+  only symptom is "chromium never answered", sixty times a quarter-second
+  apart). Use `fileURLToPath` and `os.tmpdir()`. Fixed 2026-08-31 - the suite
+  is green on Windows for the first time, 694/694.
 - Run node with `--disable-warning=ExperimentalWarning`; `node:sqlite` prints an
   experimental notice that makes a working tool look broken. The launcher does.
 - The dashboard **file** (`spypoint-data/dashboard.html`) cannot save anything.

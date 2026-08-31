@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
 import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits } from './db.mjs';
+import { quotaOf, quotaLine } from './quota.mjs';
 // The dashboard is its own module now: it is a page, not a sync concern.
 import {
   dashboardHtml, healthOf, fmtLoc, fmtPct, daysSince, STALE_DAYS,
@@ -230,9 +231,24 @@ async function main() {
         `  temp=${r.tempValue !== null ? `${r.tempValue}°${r.tempUnit ?? ''}` : '?'}` +
         `  last=${ageTxt}${mark}`);
   }
-  const plan = rows.find(r => r.plan);
-  if (plan) {
-    log(`Plan: ${plan.plan} — ${plan.photoCount ?? '?'}/${plan.photoLimit ?? '?'} photos used this billing cycle.`);
+  // Quota is metered PER CAMERA. This was one line reporting whichever
+  // camera happened to come back first, labelled as though it were the
+  // account's - so a camera sitting at 100/100 and transmitting nothing was
+  // invisible behind a neighbour's 10/100. Print them all, then say plainly
+  // which ones are in trouble.
+  const quotas = rows.map(r => ({ r, q: quotaOf(r) })).filter(x => x.q.limit !== null);
+  if (quotas.length) {
+    const w = Math.max(...quotas.map(x => x.r.name.length));
+    log('Photo quota this billing cycle:');
+    for (const { r, q } of quotas) log(`  ${r.name.padEnd(w)}  ${quotaLine(q)}`);
+    const flagged = quotas.filter(x => x.q.level !== 'ok');
+    if (flagged.length) {
+      warn(`\nQUOTA: ${flagged.length} of ${quotas.length} camera(s) are at or near their limit:`);
+      for (const { r, q } of flagged) warn(`  ${r.name}: ${q.note}`);
+      warn('A camera that has spent its allowance keeps taking photos and stops');
+      warn('sending them, without reporting anything wrong. The pictures are on');
+      warn('its SD card; they will not reach the cloud until the cycle turns over.\n');
+    }
   }
   if (stale.length) {
     warn(`\nNOTE: ${stale.length} of ${rows.length} camera(s) have not reported in over ${STALE_DAYS} days:`);
@@ -269,16 +285,20 @@ async function main() {
       'battery_pct', 'battery_level', 'battery_source',
       'signal_pct', 'signal_bars', 'signal_level', 'signal_type',
       'temperature', 'temperature_unit', 'memory_used_mb', 'memory_size_mb',
-      'plan', 'photos_used', 'photo_limit', 'last_seen', 'days_since_seen',
+      'plan', 'photos_used', 'photo_limit', 'cycle_start', 'cycle_end',
+      'quota_level', 'photos_per_day', 'quota_dry_on',
+      'last_seen', 'days_since_seen',
     ].join(',');
-    const lines = rows.map(r => [
+    const lines = rows.map(r => { const qt = quotaOf(r); return [
       r.id, q(r.name), q(r.model), r.lat ?? '', r.lng ?? '', q(r.gpsFix),
       r.battery ?? '', q(r.batteryLevel), q(r.batterySource),
       r.signal ?? '', r.signalBars ?? '', q(r.signalLevel), q(r.signalType),
       r.tempValue ?? '', q(r.tempUnit), r.memUsed ?? '', r.memSize ?? '',
       q(r.plan), r.photoCount ?? '', r.photoLimit ?? '',
+      q(r.cycleStart), q(r.cycleEnd),
+      q(qt.level), qt.perDay === null ? '' : qt.perDay.toFixed(2), q(qt.dryOn),
       q(r.lastSeen), daysSince(r.lastSeen) ?? '',
-    ].join(','));
+    ].join(','); });
     await fs.writeFile(path.join(OPT.out, 'cameras.csv'), [header, ...lines].join('\n') + '\n');
   }
 

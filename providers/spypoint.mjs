@@ -143,7 +143,14 @@ function cameraSummary(cam) {
     memSize: st.memory?.size ?? null,
     plan: sub?.plan?.name ?? null,
     photoCount: sub?.photoCount ?? null,
-    photoLimit: sub?.photoLimit ?? null,
+    photoLimit: sub?.photoLimit ?? sub?.plan?.photoCountPerMonth ?? null,
+    // The billing cycle the counts above are measured against. Without these
+    // the usage is a bare fraction with no rate behind it, and the camera that
+    // is about to go silent looks the same as the one that will coast to the
+    // end of the month. `monthEndBillingCycle` is the same instant on every
+    // document seen so far; it stands in only if the primary is missing.
+    cycleStart: sub?.startDateBillingCycle ?? null,
+    cycleEnd: sub?.endDateBillingCycle ?? sub?.monthEndBillingCycle ?? null,
     lastSeen: st.lastUpdate
       ?? findFirst(cam, /last.?(update|sync|comm|photo)/i, v => typeof v === 'string')?.value ?? null,
   };

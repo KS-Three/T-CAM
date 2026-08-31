@@ -498,6 +498,25 @@ owned. ArcGIS makes this easy to get wrong: it reports its own errors *inside*
 a 200 response, so checking the status code alone would turn a broken service
 into "no parcel here". A test pins that.
 
+### "Suggest a stand" asks which ground first
+
+Press it and the first thing you get is a list of the properties you hunt —
+worked out from the parcels under the pins you have already placed, with the
+owner and acreage off the deed. Tick one (or both) and the boundary is drawn
+on the map before anything is searched, so the ground the tool is about to
+reason over is a shape you can look at. The choice sticks; shift-click the
+button to change it.
+
+This replaced guessing from the map centre, which failed in the most ordinary
+way possible: the view that frames everything centres in open country *between*
+two properties, so the honest answer to "whose ground is this" was neither —
+and the old code fell back to every stand you own and picked a deed by vote.
+The first press of the button returned nothing, judged against a property
+nineteen kilometres away.
+
+Two properties ticked at once gives one shortlist, best first, each spot
+labelled with the ground it is on.
+
 ### What "Suggest a stand" will not suggest
 
 The first real run of the suggester returned five spots: three on a state
@@ -520,12 +539,16 @@ Each was its own hole, and each is now closed.
   from OpenStreetMap — 120 m off a building, 60 m off a road, both adjustable.
   Field roads, two-tracks and footpaths are deliberately *not* roads; that is
   where you want to be.
-- **Anything off the screen.** The map sends what it can see and the answer is
-  clipped to it, so a suggestion is a pin you can find.
-- **The other property.** The suggester alone works on the ground under the map
-  centre. The planner and `/tonight` still rank across both places, because
-  "the best sit tonight is at the other place" is a useful answer — but "hang a
-  new stand here" is a question about one property.
+- **The other property.** The suggester alone works on the ground you ticked.
+  The planner and `/tonight` still rank across both places, because "the best
+  sit tonight is at the other place" is a useful answer — but "hang a new stand
+  here" is a question about one property.
+
+The search area comes off the parcel boundary, not off the map, so the answer
+does not change when you zoom. Anything that lands outside the current view is
+still counted in the notes ("2 of these are outside the current view") rather
+than hidden — you picked the property, and a spot on it is on it whatever the
+zoom happens to be.
 
 Every drop is counted out loud in the notes under the button. `?parcels=off`
 and `?builtup=off` skip the two external checks.

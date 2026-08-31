@@ -90,6 +90,24 @@ export const mapStyles = `
              background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
   #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
                           stroke-dasharray: none; }
+  /* Your own ground, ticked for suggestions. Deliberately not the red of a
+     looked-up parcel: that one is "here is who owns this", this one is "here
+     is the ground I am about to search", and they are often on screen at once. */
+  #contours path.myprop { stroke: rgba(120,235,150,.95); stroke-width: 2.4;
+                          fill: rgba(120,235,150,.08); stroke-dasharray: 9 5; }
+  .propcard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 268px;
+              max-width: calc(100vw - 20px); padding: 12px 14px; border-radius: 10px;
+              background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+              box-shadow: 0 6px 22px rgba(0,0,0,.35); font-size: 13px; }
+  .propcard h4 { margin: 0 0 4px; font-size: 14px; }
+  .propcard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+                     border: 0; background: none; color: var(--muted); font-size: 18px; }
+  .propcard label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+                    padding: 6px 0; border-top: 1px solid var(--line); }
+  .propcard label input { margin-top: 2px; }
+  .propcard .who { color: var(--muted); font-size: 11.5px; display: block; }
+  .propcard .go { width: 100%; margin-top: 10px; }
+  .propcard .hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
   #contours path.route.draft { stroke-dasharray: 6 5; }
   .measurebox .big { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
   #contours path.measure { stroke: rgba(255,235,120,.95); stroke-width: 2.6; fill: none;
@@ -2309,7 +2327,10 @@ function showSuggestion(c) {
     + c.facing + ' at a ' + c.feature.kind));
   card.appendChild(el('div', 'meta',
     c.setbackM + ' m back \u00b7 huntable on ' + c.winds.length + ' of 16 winds'
-    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')));
+    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')
+    // Which ground it is on, but only when you asked about more than one \u2014
+    // on a single property it is the same line under every card.
+    + (SELECTED_PROPS.size > 1 && c.property ? ' \u00b7 ' + c.property.label : '')));
 
   const ul = el('ul');
   for (const r of c.reasons) {
@@ -2352,24 +2373,118 @@ function showSuggestion(c) {
 
 let SUGGEST_CAVEAT = null;
 
+function removePropCard() { document.querySelector('.propcard')?.remove(); }
+
+/**
+ * Which property (or properties) is this about?
+ *
+ * Asked once and remembered, rather than inferred from where the map is
+ * scrolled. Ticking one outlines it on the map, so what the tool is about to
+ * search is a shape you can see before you press the button \u2014 the whole
+ * complaint that started this was suggestions landing on ground the person
+ * had no interest in.
+ */
+async function loadMyProperties() {
+  if (PROPS_LOADED) return MY_PROPERTIES;
+  const res = await fetch('/api/my-properties');
+  const body = await res.json();
+  if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  MY_PROPERTIES = body.properties || [];
+  PROPS_LOADED = true;
+  // Drop remembered keys that no longer exist \u2014 a property is an index into a
+  // clustering, and dropping the last pin on one renumbers the rest.
+  const live = new Set(MY_PROPERTIES.map(p => p.key));
+  for (const k of [...SELECTED_PROPS]) if (!live.has(k)) SELECTED_PROPS.delete(k);
+  return MY_PROPERTIES;
+}
+
+function showPropertyPicker(onGo) {
+  removePropCard();
+  const card = el('div', 'propcard');
+  const x = document.createElement('button');
+  x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
+  x.onclick = () => { removePropCard(); };
+  card.appendChild(x);
+  card.appendChild(el('h4', null, 'Suggest a stand where?'));
+  card.appendChild(el('div', 'who', 'Tick the ground to search. The boundary is drawn as you tick.'));
+
+  if (!MY_PROPERTIES.length) {
+    card.appendChild(el('div', 'hint', 'No parcel was found under anything you have '
+      + 'placed. Outside Wisconsin the parcel layer has nothing to say, so press '
+      + '"Suggest a stand" again and it will work from the map instead.'));
+    mapEl.appendChild(card);
+    return;
+  }
+
+  for (const p of MY_PROPERTIES) {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = SELECTED_PROPS.has(p.key);
+    cb.onchange = () => {
+      if (cb.checked) SELECTED_PROPS.add(p.key); else SELECTED_PROPS.delete(p.key);
+      saveSelectedProps();
+      draw();
+    };
+    const acres = (p.parcels || []).reduce((a, q) => a + (q.acres || 0), 0);
+    const text = document.createElement('span');
+    text.append(el('span', null, p.label));
+    const bits = [];
+    if (p.owner) bits.push(p.owner);
+    if (acres) bits.push(Math.round(acres) + ' acres');
+    if ((p.parcels || []).length > 1) bits.push((p.parcels || []).length + ' parcels');
+    if (bits.length) text.append(el('span', 'who', bits.join(' \u00b7 ')));
+    lab.append(cb, text);
+    card.appendChild(lab);
+  }
+
+  const go = document.createElement('button');
+  go.className = 'primary go';
+  go.textContent = 'Suggest for these';
+  go.onclick = () => {
+    if (!SELECTED_PROPS.size) {
+      terrainNote('Tick at least one property first.');
+      return;
+    }
+    removePropCard();
+    onGo();
+  };
+  card.appendChild(go);
+  card.appendChild(el('div', 'hint', 'Boundaries are public record from the Wisconsin '
+    + 'statewide parcel map, looked up from the pins you have placed.'));
+  mapEl.appendChild(card);
+}
+
 async function loadSuggestions() {
   suggestBtn.disabled = true;
   suggestBtn.textContent = 'Thinking\u2026';
   terrainNote('Reading the ground and your wind history\u2026');
   try {
-    // The bounds go with the centre so the server can leave out what you
-    // cannot see. A suggestion off the edge of the screen is a pin you have to
-    // go hunting for, and it reads as the tool ignoring where you are looking.
+    // The properties you ticked decide the scope. The viewport still goes
+    // along, but only so the answer can SAY how many spots are off the edge \u2014
+    // it no longer throws them away, because you already said which ground you
+    // meant and a spot on it is on it whatever the zoom happens to be.
     const vb = visibleBounds();
     const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6)
       + '&north=' + vb.north.toFixed(6) + '&south=' + vb.south.toFixed(6)
-      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6);
+      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6)
+      + (SELECTED_PROPS.size ? '&properties=' + [...SELECTED_PROPS].join(',') : '');
     const res = await fetch('/api/suggest-stands' + q);
     const body = await res.json();
     // The endpoint says WHY it could not answer — no stands yet, no LiDAR
     // coverage, the terrain service down. Without this check all three came
     // out as the blandest possible lie: "Nothing to suggest here."
     if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+    // The server can only refuse to guess. When the map is over open country
+    // between two properties there IS no right answer to infer, so it hands
+    // back the list and the page asks.
+    if (body.needsProperty) {
+      terrainNote(body.note || 'Pick which property to suggest for.');
+      await loadMyProperties();
+      draw();
+      showPropertyPicker(() => loadSuggestions());
+      return;
+    }
     SUGGESTIONS = body.candidates || [];
     SUGGEST_CAVEAT = body.caveat || null;
     const lines = [];
@@ -2378,6 +2493,11 @@ async function loadSuggestions() {
         + (SUGGESTIONS.length === 1 ? '' : 's') + ' worth walking.</b> Tap one for why.');
     }
     if (body.note) lines.push(body.note);
+    // Which ground each answer came from, when you asked about more than one.
+    if ((body.properties || []).length > 1) {
+      lines.push('Searched ' + body.properties.map(p =>
+        p.label + ' (' + p.found + ')').join(' and ') + '.');
+    }
     for (const n of body.notes || []) lines.push(n);
     if (!body.windHistoryLoaded && SUGGESTIONS.length) {
       lines.push('No wind history cached yet \u2014 load "Which stands earn their keep" '
@@ -2394,21 +2514,47 @@ async function loadSuggestions() {
   }
 }
 
-suggestBtn.onclick = ev => {
+suggestBtn.onclick = async ev => {
   ev.stopPropagation();
   if (!D.live) return;
   if (SUGGESTIONS.length) {
     SUGGESTIONS = [];
     suggestSel = null;
     closeSuggestCard();
+    removePropCard();
     suggestBtn.classList.remove('on');
     suggestBtn.textContent = 'Suggest a stand';
     terrainNote(null);
     draw();
     return;
   }
+  // Ask which ground before searching it. Once you have answered, the answer
+  // sticks and the button goes straight to work — the picker is a decision to
+  // make once, not a dialog to dismiss every time. Shift-click reopens it.
+  if (!SELECTED_PROPS.size || ev.shiftKey) {
+    suggestBtn.disabled = true;
+    try {
+      await loadMyProperties();
+    } catch (err) {
+      terrainNote('Could not read your property boundaries: ' + err.message
+        + ' — suggesting from the map instead.');
+      suggestBtn.disabled = false;
+      loadSuggestions();
+      return;
+    }
+    suggestBtn.disabled = false;
+    if (MY_PROPERTIES.length > 1 || !SELECTED_PROPS.size) {
+      draw();
+      showPropertyPicker(() => loadSuggestions());
+      return;
+    }
+  }
   loadSuggestions();
 };
+
+// Re-opening the picker without clearing what is on the map: the ground you
+// searched last time is not always the ground you want next.
+suggestBtn.title = 'Suggest a stand — shift-click to choose which property';
 if (!D.live) {
   suggestBtn.disabled = true;
   suggestBtn.title = 'Suggestions need the server';
@@ -2567,6 +2713,26 @@ function showWalkCard(s, fromLabel) {
 const terrainCanvas = document.getElementById('terrain');
 const contoursEl = document.getElementById('contours');
 let PARCEL_RINGS = null;     // boundary of the parcel last looked up
+
+// The properties you hunt, straight off the state parcel layer, and which of
+// them the next "Suggest a stand" is about. Asked rather than inferred: the
+// map centre used to decide, and on the view that frames everything it lands
+// in open country between two properties, where the honest answer is neither.
+let MY_PROPERTIES = [];              // [{ key, label, owner, parcels: [{rings, acres}] }]
+let SELECTED_PROPS = new Set();      // the keys ticked
+let PROPS_LOADED = false;
+
+function saveSelectedProps() {
+  try { localStorage.setItem('trailcam.props', JSON.stringify([...SELECTED_PROPS])); }
+  catch (e) { /* private window, or storage off — the choice just does not persist */ }
+}
+function loadSelectedProps() {
+  try {
+    const raw = localStorage.getItem('trailcam.props');
+    if (raw) SELECTED_PROPS = new Set(JSON.parse(raw));
+  } catch (e) { SELECTED_PROPS = new Set(); }
+}
+loadSelectedProps();
 let TERRAIN = null;          // the loaded payload
 let terrainImage = null;     // an offscreen canvas holding the hillshade
 let terrainOn = false;
@@ -2762,6 +2928,16 @@ function parcelPaths(left, top) {
   const out = PARCEL_RINGS
     ? PARCEL_RINGS.map(ring => '<path class="parcel" d="' + svgPath(ring, left, top, true) + '"></path>')
     : [];
+  // The ground you ticked, outlined. Drawn under the looked-up parcel so that
+  // pressing "Who owns this?" inside your own boundary still reads clearly.
+  for (const p of MY_PROPERTIES) {
+    if (!SELECTED_PROPS.has(p.key)) continue;
+    for (const parcel of p.parcels || []) {
+      for (const ring of parcel.rings || []) {
+        out.unshift('<path class="myprop" d="' + svgPath(ring, left, top, true) + '"></path>');
+      }
+    }
+  }
   // Fields go under everything: they are ground, and a filled shape drawn
   // over a route or a lane would tint the line that matters.
   return fieldPaths(left, top)

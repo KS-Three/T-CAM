@@ -349,6 +349,48 @@ other place" is a real answer. "Hang a new stand here" is not — it is a
 question about one property, and answering it with every pin you own is what
 let a stand forty kilometres away decide whose ground this one is.
 
+### Which property is ASKED, never inferred (settled 2026-08-31)
+
+The four filters above all worked, and the feature still opened wrong. Driving
+it in a browser: the map's default view frames everything, which on two
+properties forty kilometres apart is a centre sitting in open country between
+them. `groundAt` correctly answered "neither" — and the code then fell back to
+every stand you own and let the owner vote pick a deed. The first press a
+person makes returned zero suggestions, judged against a property nineteen
+kilometres away. The bug the parcel work existed to kill, alive again in the
+one view the app opens on.
+
+There is no better inference available. Between two properties the honest
+answer really is *neither*, and any rule that produces a property from that
+position is guessing. So the question moved to the person:
+
+- **`/api/my-properties`** enumerates what you hunt — the same proximity
+  clusters the map's switcher shows, plus the real parcels under their pins:
+  owner, acreage, county, and the boundary rings. Still nothing configured.
+- **The picker asks once and remembers.** Ticking a property outlines it on
+  the map before anything is searched, so the ground the tool is about to
+  reason over is a shape you can look at. Shift-click reopens it.
+- **A refusal is a first-class answer.** With no selection and a map centre
+  over nothing, the endpoint returns `needsProperty` and the list — it does
+  not guess, and it does not silently return an empty shortlist either.
+- **Labels come off the deed.** `describeGround` says what is *on* a ground,
+  and two properties hunted the same way describe identically — a picker whose
+  two rows both read "2 cameras, 1 stand" is not a picker. Acreage and county
+  distinguish them ("38 acres, Jackson County").
+
+Two consequences worth stating, because they reverse earlier decisions here:
+
+- **The search circle is derived from the property, not the map.** Centre and
+  radius come from the parcel boundary (the pins' extent when there is no
+  parcel). A fixed radius around the map centre made the answer depend on the
+  zoom, which is how framing a property at zoom 18 — a window smaller than the
+  search radius — turned three suggestions into one.
+- **The viewport no longer filters.** It is still sent, and the answer still
+  counts what is off the edge, because a pin you cannot see reads as the tool
+  ignoring you. But you said which property you meant, and a spot on it is on
+  it whatever the zoom happens to be. Clipping to the screen *and* scoping to
+  the property was two answers to one question.
+
 None of this upgrades the caveat. These are still places to go and WALK: OSM is
 incomplete, the parcel layer is a tax record rather than a survey, and nothing
 here knows whether there is a tree.

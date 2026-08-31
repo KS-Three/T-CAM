@@ -32,8 +32,17 @@ import path from 'node:path';
  * Handles the three shapes .git/HEAD comes in: a symbolic ref to a loose ref
  * file, a symbolic ref whose target only exists in packed-refs (a fresh clone
  * that has never written a loose ref), and a detached HEAD holding a raw sha.
- * A worktree's .git is a FILE pointing at the real directory; that is followed
- * too, since worktrees are how this project runs parallel lanes.
+ *
+ * And it handles worktrees properly, which took two goes. A worktree's .git is
+ * a FILE pointing at a per-worktree git directory, and following that is enough
+ * to read HEAD — but NOT enough to resolve it. That directory holds HEAD, index
+ * and logs; refs/heads and packed-refs live ONCE in the main repository, named
+ * by the `commondir` file sitting beside HEAD. Resolving the ref against the
+ * worktree's own directory finds nothing and degrades to a branch with no sha,
+ * so the banner and /api/health quietly stop naming the commit — in exactly the
+ * setup this project uses to build every feature, which is the worst place for
+ * a "which code is running" answer to go vague. Detached HEAD hid it: the sha
+ * is right there in HEAD, no ref lookup needed, and that was the case covered.
  */
 export function headCommit(repoDir) {
   try {
@@ -50,14 +59,23 @@ export function headCommit(repoDir) {
     const ref = /^ref:\s*(.+)$/.exec(head);
     if (!ref) return /^[0-9a-f]{40}$/i.test(head) ? { sha: head, branch: null } : null;
 
+    // Where refs actually live. `commondir` is written by git for a worktree
+    // and holds a path relative to the worktree's git directory ("../.."); an
+    // ordinary checkout has no such file and resolves against itself.
+    let refDir = gitDir;
+    const commondir = path.join(gitDir, 'commondir');
+    if (fs.existsSync(commondir)) {
+      refDir = path.resolve(gitDir, fs.readFileSync(commondir, 'utf8').trim());
+    }
+
     const branch = ref[1].replace(/^refs\/heads\//, '');
-    const loose = path.join(gitDir, ref[1]);
+    const loose = path.join(refDir, ref[1]);
     if (fs.existsSync(loose)) {
       return { sha: fs.readFileSync(loose, 'utf8').trim(), branch };
     }
     // Fall back to packed-refs: "<sha> <refname>" lines, plus comments and
     // "^<sha>" peel lines for tags, which are not refs and must be skipped.
-    const packed = path.join(gitDir, 'packed-refs');
+    const packed = path.join(refDir, 'packed-refs');
     if (!fs.existsSync(packed)) return { sha: null, branch };
     for (const line of fs.readFileSync(packed, 'utf8').split('\n')) {
       if (!line || line[0] === '#' || line[0] === '^') continue;

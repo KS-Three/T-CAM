@@ -181,9 +181,26 @@ async function fetchAndStore(out, source, key, z, x, y, fetchImpl, signal) {
   // fetches of the same tile in one process is a supported state, and sharing
   // one part name meant the second rename found the file the first had already
   // moved and died with ENOENT.
+  //
+  // The rename itself can still lose, and on Windows it does. POSIX rename
+  // replaces the destination atomically whoever gets there first; Windows
+  // refuses with EPERM when another writer is renaming onto the same path at
+  // that moment. Both writers hold the same tile of the same ground, so a lost
+  // race is not an error — the winner's file is already in place and is just as
+  // good. Clean up our part file and report success. It is only a real failure
+  // if the destination is not there afterwards, and that is still thrown.
   const tmp = `${dest}.${process.pid}.${++partSeq}.part`;
   await fsp.writeFile(tmp, body);
-  await fsp.rename(tmp, dest);
+  try {
+    await fsp.rename(tmp, dest);
+  } catch (err) {
+    const won = await fsp.stat(dest).then(s => s.size > 0, () => false);
+    if (!won) {
+      await fsp.rm(tmp, { force: true });
+      throw err;
+    }
+    await fsp.rm(tmp, { force: true });
+  }
   return { body, contentType };
 }
 

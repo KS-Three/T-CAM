@@ -44,10 +44,28 @@ const isNum = v => typeof v === 'number' && Number.isFinite(v);
  */
 export const SILENT_AFTER_H = 48;
 
-/** The day an instant falls in, as YYYY-MM-DD. */
-export const dayOf = iso => {
+/**
+ * The day an instant falls in at a given longitude, as YYYY-MM-DD.
+ *
+ * SOLAR local time, not UTC, and not a named timezone. In Wisconsin a dusk
+ * visit at 20:00 local is about 01:00 UTC the NEXT day — so a UTC boundary
+ * files every evening under tomorrow, and "9 of 10 days" quietly counts each
+ * evening against the wrong morning. Every dusk sighting, not an edge case.
+ *
+ * Longitude over a timezone database because the sun is what the deer and the
+ * light bands are keyed to, there is no timezone table in a dependency-free
+ * program, and an hour of DST error cannot move a dawn or a dusk across a day
+ * boundary the way six hours of UTC offset does.
+ *
+ * With no longitude it falls back to UTC and says nothing it cannot support.
+ */
+export const solarOffsetMs = lng =>
+  (typeof lng === 'number' && Number.isFinite(lng) ? (lng / 15) * 3600000 : 0);
+
+export const dayOf = (iso, lng) => {
   const t = Date.parse(iso ?? '');
-  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : null;
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + solarOffsetMs(lng)).toISOString().slice(0, 10);
 };
 
 /**
@@ -101,7 +119,7 @@ export function dayState(cam, now = Date.now()) {
 export function cameraDayRow(cam, { now = Date.now(), photos = 0 } = {}) {
   return {
     cameraId: cam.id,
-    day: dayOf(new Date(now).toISOString()),
+    day: dayOf(new Date(now).toISOString(), cam.lng),
     state: dayState(cam, now),
     photos,
     battery: isNum(cam.battery) ? cam.battery : null,

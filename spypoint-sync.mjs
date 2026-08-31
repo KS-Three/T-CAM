@@ -34,6 +34,7 @@ import spypoint from './providers/spypoint.mjs';
 import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits,
   recordCameraDay } from './db.mjs';
 import { cameraDayRow } from './camera-days.mjs';
+import { updateVisitHeadings } from './travel.mjs';
 import { quotaOf, quotaLine } from './quota.mjs';
 // The dashboard is its own module now: it is a page, not a sync concern.
 import {
@@ -440,6 +441,13 @@ async function main() {
       const g = groupVisits(db);
       log(`Visits: ${g.visits} to review from ${g.grouped} photo(s)`
         + (g.ungrouped ? `, ${g.ungrouped} without a timestamp left ungrouped` : ''));
+
+      // Which way each animal crossed the frame, read out of the fingerprints
+      // already stored. After the regroup, because a visit that just gained a
+      // late-arriving photo is a different burst and reads differently.
+      const h = updateVisitHeadings(db);
+      log(`Direction: ${h.crossings} of ${h.of} visit(s) crossed the frame`
+        + (h.noBearing ? `, ${h.noBearing} at camera(s) with no facing set` : ''));
     }
 
     const c = counts(db);

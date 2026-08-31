@@ -48,6 +48,27 @@ const dnrExport = service =>
   DNR + service + '/MapServer/export?bbox={bbox3857}'
   + '&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image';
 
+// The DNR's statewide bare-earth LiDAR DEM. A different host from the overlays
+// above (arcgis_image, not arcgis) and an ImageServer rather than a MapServer,
+// so it does not go through dnrExport.
+const WI_DEM = 'https://dnrmaps.wi.gov/arcgis_image/rest/services/'
+  + 'DW_Elevation/EN_DEM_from_LiDAR/ImageServer';
+
+// Our own hillshade rule, built rather than picked from a menu — see the
+// lidarwi source below for why 8, and for what 3 and 15 look like. Encoded
+// once here so the base layer and its overlay cannot drift into asking for
+// different renderings of the same ground.
+const WI_HILLSHADE_RULE = encodeURIComponent(JSON.stringify({
+  rasterFunction: 'Hillshade',
+  rasterFunctionArguments: {
+    Azimuth: 315, Altitude: 45, ZFactor: 8, HillshadeType: 0, SlopeType: 1,
+  },
+}));
+
+const wiHillshade = WI_DEM + '/exportImage?bbox={bbox3857}'
+  + '&bboxSR=3857&imageSR=3857&size=256,256&format=png32'
+  + '&renderingRule=' + WI_HILLSHADE_RULE + '&f=image';
+
 /** Base maps: exactly one is shown at a time. */
 export const BASE_SOURCES = {
   map: {
@@ -79,7 +100,49 @@ export const BASE_SOURCES = {
     credit: 'Topo © <a href="https://www.usgs.gov/">USGS</a> The National Map',
     bulkAllowed: true,
   },
-  // The bare-earth LiDAR hillshade, as a basemap you can pan anywhere — the
+  // The bare-earth LiDAR hillshade Kent actually uses, rendered from
+  // Wisconsin's own statewide DEM. It sits above the federal layer because it
+  // is better on this ground in every way that was measured (2026-08-31).
+  //
+  // Better source data: the DNR mosaic is county-flown, and Waushara is 2017
+  // at a 2-FOOT DEM against 3DEP's 1 m. Statewide it is a patchwork — Waupaca
+  // next door is 3 m from 2005 — so the relief can visibly change character at
+  // a county line. That is the data, not a bug, and it is the reason the label
+  // does not promise a uniform product.
+  //
+  // Better rendering, which is the part that matters most: this service sets
+  // allowRasterFunction, so the exaggeration is OURS. 3DEP refuses custom
+  // parameters and leaves you picking from its fixed menu — the constraint
+  // that forced Gray-Stretch on the layer below. ZFactor 8 was chosen by
+  // looking at one tile of flat Waushara sand at 2, 3, 8 and 15: at 3 it is
+  // indistinguishable from the DNR's own washed-out prebuilt hillshade
+  // service, at 15 raster noise is amplified into texture that is not on the
+  // ground, at 8 field edges and shallow drainages read without blowing out.
+  //
+  // And it is the FASTEST of the three, which was a surprise: median 0.8 s per
+  // 256px tile, against 1.6 s for 3DEP Gray-Stretch and 3.2 s for the DNR's
+  // own prebuilt EN_Hillshade_from_LiDAR (8 fresh tiles each). Their image
+  // pyramid is quick even though their point-sampling endpoint is glacial —
+  // see terrain.mjs for why the elevation grid still reads from USGS.
+  //
+  // Unlike the stretch below, greys here are ABSOLUTE: one rule over the whole
+  // state, so brightness is comparable between views, not just within one.
+  //
+  // Wisconsin only. Outside the state the service returns a 334-byte fully
+  // transparent PNG rather than an error — the map goes blank rather than
+  // breaking, which is exactly why the federal layer is kept below it.
+  lidarwi: {
+    key: 'lidarwi', label: 'LiDAR', alt: 'Satellite', maxZoom: 18, kind: 'export',
+    // z18 is ~0.43 m/px at this latitude against a 0.6 m DEM — a slight
+    // oversample, and still visibly sharper than z17. The 1 m federal layer
+    // has nothing new past 17, which is why the two differ here.
+    template: wiHillshade,
+    note: 'Bare-earth LiDAR hillshade from Wisconsin’s county-flown DEMs. '
+      + 'Wisconsin only, and resolution changes at county lines.',
+    credit: 'LiDAR hillshade © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
+    bulkAllowed: true,
+  },
+  // The federal bare-earth LiDAR hillshade, as a basemap you can pan anywhere — the
   // layer onX and Spartan Forge sell, from the same free USGS 3DEP the
   // Terrain button already reads. Rendered per request by USGS's image
   // service, so tiles arrive slower than a pre-cut cache (a second or a few
@@ -97,7 +160,13 @@ export const BASE_SOURCES = {
   // RELATIVE to each window, so compare shapes within a view, not brightness
   // across views.
   lidar: {
-    key: 'lidar', label: 'LiDAR', alt: 'Satellite', maxZoom: 17, kind: 'export',
+    // Kept, and kept under its own key, for two reasons: it is national, where
+    // the layer above stops at the state line, and swapping this template in
+    // place would have been invisible for months — tiles are cached at
+    // tiles/<key>/z/x/y and only refreshed after MAX_AGE_MS (90 days), so
+    // ground already viewed would have kept serving the old rendering while
+    // fresh ground served the new one. Two keys, two cache trees, no mixture.
+    key: 'lidar', label: 'LiDAR (US)', alt: 'Satellite', maxZoom: 17, kind: 'export',
     template: 'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/'
       + 'exportImage?bbox={bbox3857}&bboxSR=3857&imageSR=3857&size=256,256&format=jpgpng'
       + '&renderingRule=%7B%22rasterFunction%22%3A%22Hillshade%20Gray-Stretch%22%7D&f=image',
@@ -139,7 +208,24 @@ export const OVERLAY_SOURCES = {
     credit: 'Deer zones © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
     bulkAllowed: true,
   },
-  // The LiDAR hillshade again, but OVER the imagery instead of instead of it,
+  // The Wisconsin hillshade again, but OVER the imagery instead of instead of
+  // it — the pairing for the base layer of the same name, and the one to reach
+  // for first. Same blend reasoning as lidarshade below, which was measured on
+  // the federal layer and holds here: overlay, not multiply.
+  //
+  // Absolute greys, unlike the stretched federal version, so the caveat that
+  // note carries does not apply to this one.
+  lidarwishade: {
+    key: 'lidarwishade', label: 'LiDAR shade', kind: 'export', maxZoom: 18,
+    // Referenced, not repeated, for the same reason as below.
+    template: BASE_SOURCES.lidarwi.template,
+    note: 'Wisconsin bare-earth LiDAR hillshade over the imagery — the ground’s '
+      + 'structure and the cover on it at once. Wisconsin only.',
+    credit: 'LiDAR hillshade © <a href="https://dnr.wisconsin.gov/">Wisconsin DNR</a>',
+    bulkAllowed: true,
+    blend: 'overlay', opacity: 0.8,
+  },
+  // The federal LiDAR hillshade again, but OVER the imagery instead of instead of it,
   // so the ground's structure and the cover on it read together — the draw
   // through the standing corn, not the draw or the corn.
   //
@@ -150,7 +236,7 @@ export const OVERLAY_SOURCES = {
   // shadows down AND lights up, so structure survives on dark ground.
   // Same rendering and the same relative-greys caveat as the base layer.
   lidarshade: {
-    key: 'lidarshade', label: 'LiDAR shade', kind: 'export', maxZoom: 19,
+    key: 'lidarshade', label: 'LiDAR shade (US)', kind: 'export', maxZoom: 19,
     // The base layer's URL, referenced rather than repeated: two copies of a
     // rendering rule is how the layer and the overlay quietly stop showing
     // the same ground.

@@ -216,6 +216,41 @@ things end up belonging to a property at all.
 - Two properties across the road from each other merge into one ground. That is
   accepted: ground you can walk between is one hunt, and the frame covers both.
 
+### Owner search is statewide and capped (settled 2026-08-31)
+
+"Who owns this?" answers about a place. The other half of the question is about
+a NAME: the neighbour who gave you permission on forty acres, and where else
+that name owns ground worth asking about. Same layer, same privacy stance,
+opposite direction — a query about a person rather than about a point, which is
+what the calls below are about.
+
+- **Statewide, not scoped to the county or the view.** The whole value is
+  finding the OTHER ground a name owns, which is by definition somewhere you
+  are not currently looking. County scoping was considered and dropped: it
+  keeps result counts down, but it fails the one question the feature exists to
+  answer. Largest first instead, because acreage is what makes a row worth
+  reading — a hunter scanning "SMITH" wants the 300-acre block, not the town
+  lot.
+- **Fifty rows is the cap, and the cap is part of the feature.** Not a
+  performance detail: fifty is a look-up, ten thousand is a mailing list, and
+  the difference matters on a layer carrying home addresses. `limit` can ask
+  for fewer and cannot ask for more. One row beyond the cap is requested so
+  truncation is KNOWN — a list that stops silently at fifty reads as "these are
+  all of them", which for a common surname is a lie.
+- **Nothing is stored, same as the point lookup.** Results live in memory for
+  an hour and die with the process. There is no bulk export, and no way to walk
+  the layer through this endpoint.
+- **Typed names are filtered to a name's alphabet, not escaped.** Everything
+  outside `A-Z 0-9 & . , ' -` is dropped before the WHERE clause is built,
+  which kills injection at the source and also removes the LIKE wildcards `%`
+  and `_` — typed by accident, those turn a search for a person into a scan of
+  the state. The apostrophe stays, because O'Brien is a name, and is doubled in
+  the clause.
+- **Boundaries ride with the list.** Each row carries its own generalised rings
+  (about five metres, invisible at parcel scale), so clicking a result draws
+  and frames it with no second request. The map is framed on the boundary
+  itself, which is why a town lot and a 300-acre block each fill the screen.
+
 ## 9. The planner answers WHEN; the sightings answer WHERE
 
 This is the decision the discussion improved most, and the reasoning is worth
@@ -356,6 +391,81 @@ is still a usable tool.
 downstream of tagging is untestable until cameras are transmitting again. Building
 it behind a working product means the untested half is never the only thing that
 exists.
+
+---
+
+## 11. Decoding GeoTIFF: allowed, because the reason not to was wrong
+
+Two places in this repo had already refused to decode raster imagery.
+`terrain.mjs` says a point-sampling service "is a gift — decoding GeoTIFF or
+LERC would mean a dependency, and this project has none". `cropscan.mjs` says
+tracing field outlines out of the CDL raster would be "hundreds of lines to
+save the eight clicks an outline takes".
+
+The second is still true and nothing here changes it. The first was **wrong
+about GeoTIFF**, and the difference is worth writing down rather than
+rediscovering.
+
+Probed against the live Sentinel-2 bucket on 2026-08-31, an L2A band is:
+
+    10980x10980, uint16, 1 sample/pixel, tiled 1024x1024, 121 tiles
+    compression 8 (Adobe Deflate), predictor 2 (horizontal differencing)
+
+Deflate is `node:zlib`. The predictor is a running sum along each row. The tile
+index sits in the header, so a few acres cost one range request for the header
+and one per tile actually touched, not the 120 MB the image weighs. That is
+`cog.mjs`, about 180 lines, and **zero dependencies survives** — the
+double-click launcher is untouched. LERC would still mean a dependency, and
+3DEP is still sampled as points rather than decoded, so `terrain.mjs` keeps its
+approach for good reasons.
+
+**What actually justified the change** was not the line count but that there is
+no alternative. Terrain could dodge rasters because USGS samples points for
+you; imagery has no keyless equivalent — Esri's Sentinel-2 ImageServer serves
+metadata anonymously but will not answer pixel queries, and everything else
+wants an account. Refusing to decode meant refusing the feature.
+
+**The cost, stated plainly:** this is the first binary format the project
+parses, and a reader tested only against fixtures the tests themselves wrote
+proves only that it agrees with that writer. Hence `check-crops.mjs`, which
+runs the real path against the real bucket, and a cross-check against an
+independent implementation — `cog.mjs` reads NDVI 0.8268 at a point where
+rasterio reads 0.8200 as a block mean.
+
+## 12. A crop scan reports; it never edits the field
+
+`fields.crop` and `fields.cut_at` are Kent's. A satellite scan is an opinion,
+and it lives in its own table (`field_scans`, migration 17) where it can sit
+beside the record and disagree with it out loud.
+
+This is the rule the map has followed since crop fields were added — the CDL
+pre-selects a crop for a NEW outline and never touches a choice already made —
+extended to the case that rule did not cover: a background job that could
+rewrite the column later. It is also §4's argument about buck identity applied
+to ground instead of animals. A wrong classification that silently overwrites
+an entered fact corrupts everything built on it, and the entered fact was
+right.
+
+**What this costs:** the feature cannot be fully automatic, which is what was
+originally asked for. Kent still confirms. That is the trade, taken knowingly.
+
+**What is honestly weak.** Corn and soybeans separate strongly in NDVI —
+measured near Ames, Iowa for 2025, a 0.40 gap on 19 June and 0.26 on 28 August,
+indistinguishable in mid-July — but reading that separation needs local fields
+of a known crop to calibrate against, and this property has almost none. A 2 km
+sample came back 40% woody wetland, 16% corn and **4% soybeans**: one soybean
+point in twenty-five. So crop identification is off by default, refuses when it
+cannot calibrate, and says why. Harvest detection needs no reference data at
+all — a field is compared against its own peak — and is the reason the feature
+is worth having on this ground.
+
+**A harvest and a hard drydown look identical in one number.** They are
+separated by how fast the fall happened, which is only knowable when two clear
+looks sit close together. When cloud has left a three-week hole the answer is
+`cut-or-senesced`, and it says so. Every state also carries how stale it is: on
+Kent's own ground the last three passes were all clouded out, so "standing" was
+really "standing as of sixteen days ago", and a field can come off in a
+morning.
 
 ---
 

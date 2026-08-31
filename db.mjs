@@ -663,6 +663,51 @@ const MIGRATIONS = [
       db.exec('ALTER TABLE visits ADD COLUMN heading_note TEXT;');
     },
   },
+  {
+    version: 17,
+    name: 'what the satellite says a field is doing this season',
+    up: db => {
+      // Deliberately a table of its own rather than columns on `fields`.
+      //
+      // A scan is a satellite's opinion; `fields.crop` is Kent's. The map has
+      // protected the person's own choice since crop fields were added, and a
+      // sync job that could write that column would quietly end the
+      // protection — a wrong classification would rewrite a fact somebody
+      // entered, the same failure design.md refuses for animal identity. So
+      // nothing here ever writes to `fields`: disagreement is displayed, and
+      // the person decides.
+      //
+      // One row per field per season, replaced on rescan. `series` keeps the
+      // raw NDVI readings as JSON so a later question — when exactly did it
+      // come off? — is answerable without fetching the imagery again. It is a
+      // few hundred bytes against tens of megabytes.
+      //
+      // `verdict` is nullable ON PURPOSE, and is null most of the time: on
+      // ground without enough corn and soybeans nearby to calibrate against,
+      // the classifier refuses and `verdict_why` carries the reason. A null
+      // with an explanation beside it is an honest answer, not a missing one.
+      db.exec(`
+        CREATE TABLE field_scans (
+          field_id     INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+          season       INTEGER NOT NULL,
+          scanned_at   TEXT NOT NULL,
+          state        TEXT NOT NULL
+                         CHECK (state IN ('standing', 'senescing', 'cut',
+                                          'cut-or-senesced', 'unknown')),
+          state_since  TEXT,
+          state_why    TEXT,
+          peak_ndvi    REAL,
+          latest_ndvi  REAL,
+          latest_date  TEXT,
+          looks        INTEGER NOT NULL DEFAULT 0,
+          verdict      TEXT,
+          verdict_why  TEXT,
+          series       TEXT,
+          PRIMARY KEY (field_id, season)
+        );
+      `);
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -1856,6 +1901,62 @@ export function updateField(db, id, patch = {}) {
 
 export const deleteField = (db, id) =>
   db.prepare('DELETE FROM fields WHERE id = ?').run(id).changes > 0;
+
+/** How long a scan stays fresh. Sentinel-2 revisits about every five days, so
+ *  scanning more often than that re-fetches identical pixels. */
+export const SCAN_TTL_DAYS = 5;
+
+const scanRow = r => r && ({
+  ...r,
+  series: r.series ? JSON.parse(r.series) : [],
+});
+
+/** Replace this season's scan for a field. */
+export function saveFieldScan(db, fieldId, season, scan) {
+  db.prepare(`
+    INSERT INTO field_scans (field_id, season, scanned_at, state, state_since,
+                             state_why, peak_ndvi, latest_ndvi, latest_date,
+                             looks, verdict, verdict_why, series)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (field_id, season) DO UPDATE SET
+      scanned_at = excluded.scanned_at, state = excluded.state,
+      state_since = excluded.state_since, state_why = excluded.state_why,
+      peak_ndvi = excluded.peak_ndvi, latest_ndvi = excluded.latest_ndvi,
+      latest_date = excluded.latest_date, looks = excluded.looks,
+      verdict = excluded.verdict, verdict_why = excluded.verdict_why,
+      series = excluded.series
+  `).run(fieldId, season, scan.scannedAt ?? nowIso(), scan.state,
+    scan.stateSince ?? null, scan.stateWhy ?? null,
+    scan.peakNdvi ?? null, scan.latestNdvi ?? null, scan.latestDate ?? null,
+    scan.looks ?? 0, scan.verdict ?? null, scan.verdictWhy ?? null,
+    JSON.stringify(scan.series ?? []));
+  return fieldScan(db, fieldId, season);
+}
+
+export const fieldScan = (db, fieldId, season) =>
+  scanRow(db.prepare('SELECT * FROM field_scans WHERE field_id = ? AND season = ?')
+    .get(fieldId, season)) ?? null;
+
+export const allFieldScans = (db, season) =>
+  db.prepare('SELECT * FROM field_scans WHERE season = ? ORDER BY field_id')
+    .all(season).map(scanRow);
+
+/**
+ * Fields whose scan is missing or older than the revisit interval.
+ *
+ * Out of season nothing is due: there is no crop to watch between mid-November
+ * and April, and a sync in January should not spend minutes proving it.
+ */
+export function fieldsDueForScan(db, { season, now = new Date(), ttlDays = SCAN_TTL_DAYS } = {}) {
+  const month = now.getUTCMonth() + 1;
+  if (month < 4 || month > 11) return [];
+  const yr = season ?? now.getUTCFullYear();
+  const cutoff = new Date(now.getTime() - ttlDays * 86400000).toISOString();
+  return allFields(db).filter(f => {
+    const scan = fieldScan(db, f.id, yr);
+    return !scan || scan.scanned_at < cutoff;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // The sit journal

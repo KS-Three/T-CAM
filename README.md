@@ -839,6 +839,25 @@ else overlays it or slides in over it.
   shows the last fetch **and says how old it is** rather than passing Tuesday
   off as live. Everything stays in the property's own clock — the times are
   never re-read in whatever timezone your phone happens to be in.
+- **Radar** shares that bar: tap **Radar** on it and the last two hours of
+  weather play over the map, ten minutes to a frame. Play, pause, drag back to
+  the frame that shows the cell sitting on your stand, or press **Live** to
+  jump to the newest. It keeps checking for new frames while it is on, and
+  only while it is on. If you have scrubbed back it leaves you where you are
+  and tells you how many arrived behind you, rather than yanking the picture
+  forward.
+
+  Two things it deliberately refuses to do. It will not draw a reel more than
+  half an hour old: past that the layer goes blank and says why, because an
+  old photograph of a storm does not look old, and the forecast strip beside
+  it is the honest way to answer "will it rain later". And it will not pretend
+  to more detail than radar has — the picture is about a kilometre to the
+  pixel, so zooming in past a point stretches it rather than sharpening it.
+
+  The colours run pale blue for light rain through yellow and red to magenta
+  for the heaviest. No green anywhere, on purpose: light rain is the thing
+  that most often changes whether you sit, and the usual green-for-light radar
+  ramp is invisible over canopy and standing corn.
 - **Crop fields** (Scouting → + Crop field): click around a field edge, say
   what grows in it, and it draws as a very faint wash of that crop's colour
   with a name chip at its centre — faint on purpose, because the imagery

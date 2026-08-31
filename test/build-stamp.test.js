@@ -55,6 +55,51 @@ test('follows a worktree .git file to the real git directory', () => {
   assert.deepEqual(headCommit(work), { sha: SHA, branch: null });
 });
 
+test('a worktree on a branch reads the ref from the COMMON git directory', () => {
+  // The case the detached-HEAD test above cannot reach, and the one that
+  // actually happens: every lane in this project is a worktree sitting on a
+  // branch. A worktree's own git directory holds HEAD, index and logs, but
+  // NOT refs/heads — those live once in the main repository, named by the
+  // `commondir` file beside HEAD. Reading the ref relative to the worktree's
+  // directory finds nothing, and the stamp silently degrades to a branch name
+  // with no sha: the banner and /api/health stop naming the commit in exactly
+  // the setup this project uses to build every feature.
+  const real = tmpdir();
+  fs.mkdirSync(path.join(real, '.git', 'refs', 'heads'), { recursive: true });
+  fs.writeFileSync(path.join(real, '.git', 'refs', 'heads', 'lane'), SHA + '\n');
+
+  const gitDir = path.join(real, '.git', 'worktrees', 'lane');
+  fs.mkdirSync(path.join(gitDir, 'refs'), { recursive: true });
+  fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/lane\n');
+  // Exactly what git writes: a path relative to the worktree's git directory.
+  fs.writeFileSync(path.join(gitDir, 'commondir'), '../..\n');
+
+  const work = tmpdir();
+  fs.writeFileSync(path.join(work, '.git'), `gitdir: ${gitDir}\n`);
+
+  assert.deepEqual(headCommit(work), { sha: SHA, branch: 'lane' });
+});
+
+test('a worktree finds its branch in the common packed-refs too', () => {
+  // Same again for a branch that has never had a loose ref written.
+  const real = tmpdir();
+  fs.mkdirSync(path.join(real, '.git'), { recursive: true });
+  fs.writeFileSync(
+    path.join(real, '.git', 'packed-refs'),
+    `# pack-refs with: peeled fully-peeled sorted\n${SHA} refs/heads/lane\n`,
+  );
+
+  const gitDir = path.join(real, '.git', 'worktrees', 'lane');
+  fs.mkdirSync(gitDir, { recursive: true });
+  fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/lane\n');
+  fs.writeFileSync(path.join(gitDir, 'commondir'), '../..\n');
+
+  const work = tmpdir();
+  fs.writeFileSync(path.join(work, '.git'), `gitdir: ${gitDir}\n`);
+
+  assert.deepEqual(headCommit(work), { sha: SHA, branch: 'lane' });
+});
+
 test('a directory with no repository stamps as unknown rather than throwing', () => {
   const dir = tmpdir();
   assert.equal(headCommit(dir), null);

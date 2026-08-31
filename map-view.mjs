@@ -1693,6 +1693,7 @@ function clearMapModes(keep) {
   }
   if (keep !== 'route' && drawing) cancelRoute();
   if (keep !== 'lane' && laneEdit) { laneEdit = null; }
+  if (keep !== 'facing' && facingPick) { facingPick = null; }
   if (keep !== 'measure' && measuring) stopMeasuring();
   if (keep !== 'field' && fielding) cancelFielding();
   if (keep !== 'entry' && entryPick) cancelEntryPick();
@@ -1817,6 +1818,13 @@ let laneForm = null;    // { standId, stand: {lat,lng}, lanes: [], onLanes, onNu
 // code reads it — the cone tells you its width while you are dragging its
 // width — and draw() runs before that part of the script has been reached.
 let gripDrag = null;    // { i, kind } while a handle is held
+
+// Which camera is being pointed, if any. ONE click sets the far end of its
+// cone, which fixes the bearing and the reach together - the same gesture
+// that drops the end of a shooting lane, because a camera's detection zone is
+// the same shape as a lane and there is no reason to invent a second way to
+// describe one.
+let facingPick = null;   // { cameraId } while waiting for the click
 
 /**
  * Put the stand form away and forget everything hanging off it.
@@ -2002,6 +2010,20 @@ function lanePaths(left, top) {
     // The open form is exempt above: you cannot edit a lane you cannot see.
     if (!(selected && selected.kind === 'stand' && selected.id === st.id)) continue;
     if (st.lanes && st.lanes.length) sets.push({ from: st, lanes: st.lanes, key: 's' + st.id });
+  }
+  // A camera's view, drawn from the same geometry for the same reason: it IS a
+  // lane - a cone from a point, out to a distance, this wide. Shown only while
+  // that camera is selected, exactly like the stands above.
+  //
+  // The stored cone always carries its own spread (the server fills it in on
+  // write), so laneHalfDeg reads the camera's width here rather than falling
+  // back to the narrower LANE default and drawing a cone that disagrees with
+  // the number on the card.
+  if (selected && selected.kind === 'camera') {
+    const cam = D.cameras.find(c => c.id === selected.id);
+    if (cam && cam.view && Array.isArray(cam.view.to)) {
+      sets.push({ from: cam, lanes: [cam.view], key: 'cam' + cam.id });
+    }
   }
   for (const { from, lanes, key, live } of sets) {
     const ax = projX(from.lng, zoom) - left, ay = projY(from.lat, zoom) - top;
@@ -2835,6 +2857,37 @@ function showStandReport(s) {
   draw();
 }
 
+/**
+ * Record which way a camera looks, or clear it.
+ *
+ * The server is the one that decides the cone's width and hands back the
+ * derived bearing, so the answer it returns is written over the local camera
+ * rather than the request being echoed into it - otherwise the map would show
+ * the cone it drew while the card showed the one the server computed.
+ */
+function setCameraFacing(cameraId, view) {
+  fetch('/api/cameras/' + encodeURIComponent(cameraId), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ view: view }),
+  }).then(r => (r.ok ? r.json() : r.json().then(j => Promise.reject(new Error(j.error)))))
+    .then(updated => {
+      const cam = D.cameras.find(c => c.id === cameraId);
+      if (cam) {
+        cam.view = updated.view;
+        cam.facing = updated.facing;
+        cam.facingLine = updated.facingLine;
+        showCameraPanel(cam);
+      }
+      draw();
+    })
+    .catch(err => {
+      const cam = D.cameras.find(c => c.id === cameraId);
+      if (cam) showCameraPanel(cam);
+      window.alert('Could not save the facing: ' + err.message);
+    });
+}
+
 /** A camera's card, in the same panel. */
 function showCameraPanel(c) {
   closeStandForm();
@@ -2845,6 +2898,32 @@ function showCameraPanel(c) {
   // camera is how they end up disagreeing about battery life.
   selPanel.appendChild(cameraCard(c, { withId: false }));
   const btns = el('div', 'btns');
+
+  // Pointing a camera is one click on the ground it watches: that point fixes
+  // the bearing and the reach together. Typing a compass word would fix only
+  // the first, and the reach is half of what makes a photograph mean anything
+  // for a particular stand.
+  const point = document.createElement('button');
+  point.type = 'button';
+  point.textContent = c.view ? 'Move the facing' : 'Set facing';
+  point.onclick = () => {
+    clearMapModes('facing');
+    facingPick = { cameraId: c.id };
+    mapEl.classList.add('placing');
+    const say = el('div', 'kind', 'Click the ground this camera looks at.');
+    selPanel.appendChild(say);
+  };
+  btns.appendChild(point);
+
+  if (c.view) {
+    const clr = document.createElement('button');
+    clr.type = 'button'; clr.textContent = 'Clear facing';
+    // Reachable on purpose. A bearing recorded before the camera was moved is
+    // worse than none, and removing it is the only honest correction.
+    clr.onclick = () => setCameraFacing(c.id, null);
+    btns.appendChild(clr);
+  }
+
   const more = document.createElement('button');
   more.type = 'button'; more.textContent = 'Show in camp report';
   more.onclick = () => { revealInDrawer('cam-' + c.id); };
@@ -3898,6 +3977,17 @@ mapEl.addEventListener('click', e => {
     draw();
     return;
   }
+  if (facingPick) {
+    const rf = mapEl.getBoundingClientRect();
+    const fx = e.clientX - rf.left, fy = e.clientY - rf.top;
+    if (fx < 0 || fy < 0 || fx > rf.width || fy > rf.height) return;
+    const at = pixelToLatLng(fx, fy);
+    const id = facingPick.cameraId;
+    facingPick = null;
+    mapEl.classList.remove('placing');
+    setCameraFacing(id, { to: [at.lng, at.lat] });
+    return;
+  }
   if (identifying) {
     const r0 = mapEl.getBoundingClientRect();
     const ix = e.clientX - r0.left, iy = e.clientY - r0.top;
@@ -4151,7 +4241,7 @@ mapEl.addEventListener('wheel', e => {
 mapEl.addEventListener('dblclick', e => {
   if (!onMapGround(e.target)) return;
   if (placing || marking || drawing || measuring || identifying || laneEdit
-      || fielding || entryPick) return;
+      || fielding || entryPick || facingPick) return;
   e.preventDefault();
   zoomAt(zoom + 1, e.clientX, e.clientY);
 });

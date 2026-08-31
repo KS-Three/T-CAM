@@ -365,6 +365,43 @@ Updates are partial, so a rename cannot silently clear the winds — a real risk
 since that would quietly turn a known-good stand into one the tool refuses to
 recommend.
 
+## Which way a camera looks
+
+Select a camera on the map, press **Set facing**, and click the ground it
+watches. That one click fixes both the bearing and the reach, and the cone is
+drawn from the same geometry as a shooting lane — because a camera's detection
+zone *is* a lane: a wedge from a point, out to a distance, this wide. The card
+then reads `Facing NE 45° · 43 m`, and the cone shows whenever that camera is
+selected, the same way a stand's lanes do.
+
+Defaults are a 21° half-angle (the FLEX-M's detection zone is quoted at about
+42° across) and 25 m of reach. Both are starting points to drag, not facts
+about your camera: mounting height and undergrowth change what it really sees,
+and the photos are the evidence.
+
+**An unset facing stays unset.** A camera nobody has pointed shows no Facing row
+and no cone, rather than defaulting to north — a guessed bearing drawn in the
+same ink as a measured one is worse than none, because nothing downstream can
+then tell them apart. **Clear facing** exists for the same reason: a bearing
+recorded before the camera was moved is worse than no bearing, and removing it
+is the only honest correction.
+
+The facing is **yours**, not SpyPoint's, so `upsertCamera` leaves it alone —
+every other column on a camera is overwritten each sync, and a facing in that
+list would silently unpoint every camera every hour. A test pins it.
+
+### What this cannot tell you on its own
+
+Knowing a camera faces north tells you which ground it photographs. It does
+**not** tell you which way a deer in that photograph was walking. A deer in a
+north-facing frame may be heading east, west, toward the camera or away from
+it, and the bearing alone cannot separate those four.
+
+What separates them is where the animal sits from frame to frame across a
+burst — left-to-right across a north-facing frame is eastward, right-to-left is
+westward, growing larger is toward the camera. This is half of a direction,
+deliberately, and it refuses to imply the other half.
+
 ## Who owns this ground
 
 Press **Who owns this?** on the map and click anywhere: owner name, acreage,

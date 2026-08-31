@@ -31,6 +31,7 @@ node serve.mjs --out DIR --port 8787 # serve a dashboard from DIR's trailcam.db
 node spypoint-sync.mjs               # sync (needs SPYPOINT_EMAIL / SPYPOINT_PASSWORD env; --dry-run, --inspect for schema dumps)
 node hunt-planner.mjs --days 14      # rank the coming sits
 node gps-doctor.mjs --camera NAME     # a camera's pin is wrong: which side is lying?
+node check-crops.mjs                 # diagnose a field's satellite scan, step by step (--classify for the slow half)
 ```
 
 Kent runs it via `start-trailcam.cmd` (Windows), which is sync → plan → serve.
@@ -64,6 +65,18 @@ geometry, 3D mesh) is NOT retyped into page scripts: `measure.mjs`,
 the very functions Node runs, and tests compile the emitted copy and compare it
 against the exports on the same inputs. If the map needs a formula, ship it
 across this way; a second copy is how the picture and the model drift.
+
+**Satellite imagery** (`cog.mjs` → `sentinel.mjs` → `cropseason.mjs`): the one
+place this project parses a binary format. `cog.mjs` reads Cloud-Optimized
+GeoTIFF over HTTP range requests (Deflate via `node:zlib`, predictor 2, tiled) —
+still no dependencies; design.md §11 records why the earlier "that would mean a
+dependency" reasoning was wrong. It refuses every TIFF variant it does not
+handle **by name** rather than guessing, because a reader that half-understands
+a format returns plausible wrong numbers instead of an error. Its tests write
+their own TIFFs, so they prove only that the reader agrees with that writer —
+`check-crops.mjs` runs the real path against the real AWS bucket, and that is
+what catches a changed assumption. A scan writes only `field_scans`, never
+`fields.crop` or `cut_at` (design.md §12).
 
 **Data layer** (`db.mjs`): one SQLite file per output dir. `MIGRATIONS` is an
 append-only array — add version N+1, never edit an entry that has shipped.

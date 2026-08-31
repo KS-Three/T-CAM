@@ -11,7 +11,7 @@ import {
   fieldsDueForScan, SCAN_TTL_DAYS,
 } from '../db.mjs';
 import { toUtm } from '../sentinel.mjs';
-import { disagreement } from '../cropseason.mjs';
+import { disagreement, scanField } from '../cropseason.mjs';
 
 const LAT = 44.12, LNG = -90.65;
 const d = 0.0009;
@@ -303,4 +303,39 @@ test('nothing is due out of season', async t => {
   assert.equal(fieldsDueForScan(db, { now: new Date('2026-01-15T12:00:00Z') }).length, 0);
   assert.equal(fieldsDueForScan(db, { now: new Date('2026-12-20T12:00:00Z') }).length, 0);
   assert.ok(fieldsDueForScan(db, { now: new Date('2026-06-01T12:00:00Z') }).length > 0);
+});
+
+// ---------------------------------------------------------------------------
+// what a sync actually does with a due field
+
+test('a sync scan stores a season and never touches the field row', async t => {
+  // The same calls spypoint-sync.mjs makes, in the same order, so the wiring
+  // is covered rather than only the pieces it is made of.
+  const imagery = await fakeImagery(HARVESTED);
+  t.after(() => new Promise(r => imagery.close(r)));
+  t.after(() => { delete process.env.TRAILCAM_STAC_URL; });
+
+  const dir = tmpDir();
+  const db = openDb(dir);
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  createField(db, { crop: 'corn', points: RING });
+
+  const now = new Date('2026-08-31T12:00:00Z');
+  const due = fieldsDueForScan(db, { now });
+  assert.equal(due.length, 1, 'a never-scanned field is due');
+
+  const before = db.prepare('SELECT crop, cut_at FROM fields WHERE id = 1').get();
+  for (const f of due) {
+    const scan = await scanField(f.points, { season: 2026, now });
+    saveFieldScan(db, f.id, scan.season, scan);
+  }
+
+  const stored = fieldScan(db, 1, 2026);
+  assert.equal(stored.state, 'cut');
+  assert.equal(stored.verdict, null, 'a sync does not attempt crop identification');
+  assert.deepEqual(
+    db.prepare('SELECT crop, cut_at FROM fields WHERE id = 1').get(), before,
+    'the sync left the record alone');
+
+  assert.equal(fieldsDueForScan(db, { now }).length, 0, 'and it is no longer due');
 });

@@ -50,6 +50,7 @@ import { parcelAt } from './parcels.mjs';
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.mjs';
 import { evidenceFor } from './evidence.mjs';
+import { individualsFor } from './individuals.mjs';
 import { suggestStands, onYourGround } from './stand-suggester.mjs';
 import { windsForStand } from './coverage.mjs';
 import { calibration, windAccuracy, standPerformance, summary as sitSummary } from './sit-journal.mjs';
@@ -1225,6 +1226,7 @@ export function createServer({ out = OPT.out } = {}) {
             date: sit.date, window: sit.window, rating: sit.rating, score: sit.total,
             windFrom: sit.windFrom, windDir: sit.windDir, windSpeed: sit.wind,
             temp: sit.temp, rain: sit.rain, rut: sit.rut, moon: sit.moon,
+            moonIllum: sit.moonIllum ?? null, pressure: sit.pressure ?? null,
             when: whenLabel(sit, now),
             hours: sit.hours, light: sit.light,
             timezone: sit.timezone ?? null,
@@ -1276,6 +1278,16 @@ export function createServer({ out = OPT.out } = {}) {
             : !stands.length ? 'No stands yet — drop a pin on the map to add one.'
             : null,
         });
+      }
+
+      // Which of YOUR bucks responds to something the population does not.
+      //
+      // Its own endpoint rather than part of /tonight: the randomization tests
+      // walk a season of weather hours per buck, and /tonight is the screen you
+      // read with your boots in your hand. The page fetches this after it has
+      // already drawn.
+      if (req.method === 'GET' && url.pathname === '/api/individuals') {
+        return sendJson(res, 200, individualsFor(db));
       }
 
       // Recorded tracks: where you actually walked.

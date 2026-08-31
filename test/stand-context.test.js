@@ -30,9 +30,35 @@ test('hunting a stand hard costs it, and cites what was measured', () => {
   assert.match(p.why, /62%/, 'the number it rests on is in the reason');
 });
 
+test('a walked-on stand says so in a sentence, not just in points', () => {
+  // Kent's call, 2026-08-30: what he wants from this is to be TOLD the ground
+  // has been walked recently and make the judgement himself, not to have a
+  // stand quietly demoted out of the running. So the note is the real output
+  // and the points are a nudge.
+  const hard = pressureAt(STAND, [sit(1, 0.5), sit(1, 1.5), sit(1, 3)], { now: NOW });
+  const light = pressureAt(STAND, [sit(1, 2)], { now: NOW });
+  const fresh = pressureAt(STAND, [], { now: NOW });
+
+  assert.equal(hard.note, 'This area has experienced recent pressure.');
+  assert.equal(light.note, 'This area has experienced recent pressure.',
+    'even one recent sit is worth mentioning');
+  assert.equal(fresh.note, null, 'and an unhunted stand says nothing');
+  assert.ok(Math.abs(hard.points) <= 6, 'the penalty is a nudge now, not a demotion');
+});
+
+test('a stand settles faster than the literature average', () => {
+  // The collar figure is four or five days, from Mississippi and Oklahoma
+  // hunting cultures with very different access patterns. Kent says shorter on
+  // his ground, and he has better information about his ground than they do.
+  assert.equal(RECOVERY_DAYS, 3);
+  const weekAgo = pressureAt(STAND, [sit(1, 7)], { now: NOW });
+  assert.equal(weekAgo.points, 0, 'last weekend no longer counts against you');
+  assert.equal(weekAgo.note, null);
+});
+
 test('pressure decays, so an old sit is not held against a stand', () => {
   const fresh = pressureAt(STAND, [sit(1, 0)], { now: NOW });
-  const stale = pressureAt(STAND, [sit(1, 14)], { now: NOW });
+  const stale = pressureAt(STAND, [sit(1, 12)], { now: NOW });
   assert.ok(fresh.points < 0, 'sat today is a penalty');
   assert.ok(stale.points >= fresh.points, 'a fortnight ago is not');
   assert.ok(stale.burn < fresh.burn / 4, `decay over ${RECOVERY_DAYS}-day constant`);
@@ -45,7 +71,7 @@ test('sits beyond the window are dropped entirely', () => {
 });
 
 test('a rested stand is worth a little extra, and says how long', () => {
-  const p = pressureAt(STAND, [sit(1, 15)], { now: NOW });
+  const p = pressureAt(STAND, [sit(1, 16)], { now: NOW });
   assert.ok(p.points > 0);
   assert.match(p.why, /rested/);
 });

@@ -156,6 +156,8 @@ function fetchOnce(out, source, key, z, x, y, fetchImpl, signal) {
   return p;
 }
 
+let partSeq = 0;
+
 async function fetchAndStore(out, source, key, z, x, y, fetchImpl, signal) {
   const res = await fetchImpl(expandTile(source, z, x, y), {
     signal,
@@ -173,8 +175,13 @@ async function fetchAndStore(out, source, key, z, x, y, fetchImpl, signal) {
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   // Written via a temporary file and renamed, so a tile interrupted halfway
   // never becomes a truncated image that the cache then serves forever. The
-  // pid keeps two processes sharing one store off each other's part file.
-  const tmp = `${dest}.${process.pid}.part`;
+  // pid keeps two processes sharing one store off each other's part file, and
+  // the counter keeps two concurrent calls in ONE process off each other's:
+  // a caller carrying its own signal is deliberately not deduplicated, so two
+  // fetches of the same tile in one process is a supported state, and sharing
+  // one part name meant the second rename found the file the first had already
+  // moved and died with ENOENT.
+  const tmp = `${dest}.${process.pid}.${++partSeq}.part`;
   await fsp.writeFile(tmp, body);
   await fsp.rename(tmp, dest);
   return { body, contentType };

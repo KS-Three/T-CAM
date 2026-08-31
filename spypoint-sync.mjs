@@ -31,7 +31,9 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { getProvider, credentialsFor } from './providers/index.mjs';
 import spypoint from './providers/spypoint.mjs';
-import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits } from './db.mjs';
+import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits,
+  recordCameraDay } from './db.mjs';
+import { cameraDayRow } from './camera-days.mjs';
 import { quotaOf, quotaLine } from './quota.mjs';
 // The dashboard is its own module now: it is a page, not a sync concern.
 import {
@@ -266,11 +268,17 @@ async function main() {
     try {
       db = openDb(OPT.out);
       for (let i = 0; i < rows.length; i++) {
-        upsertCamera(db, rows[i], {
+        const stored = upsertCamera(db, rows[i], {
           provider: provider.id,
           accountLabel: OPT.account,
           raw: cameras[i],
         });
+        // Today's liveness, written BEFORE any photo is fetched. If the photo
+        // run then fails outright, the fact that this camera was watching is
+        // already recorded — and that is the half that cannot be recovered
+        // afterwards, because the next sync overwrites the state it was read
+        // from. The photo count is filled in below and only ever increases.
+        recordCameraDay(db, cameraDayRow({ ...rows[i], id: stored.id }));
       }
     } catch (err) {
       // A store failure must not cost the sync: the photos and the dashboard are
@@ -388,6 +396,14 @@ async function main() {
       dateEnd = next;
     }
     log(`${cam.name}: ${fetched} new photo(s)`);
+    // Same row again, now that the count is known. recordCameraDay takes the
+    // HIGHER photo count, so a later run that fetches nothing cannot erase
+    // what arrived this morning.
+    if (db) {
+      const row = rows.find(r => r.id === cam.id) ?? cam;
+      recordCameraDay(db, cameraDayRow(
+        { ...row, id: `${provider.id}:${row.id}` }, { photos: fetched }));
+    }
   }
 
   if (meta.length && !OPT.dryRun) {

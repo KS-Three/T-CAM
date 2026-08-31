@@ -277,6 +277,40 @@ test('the flat files are still written alongside the database', async t => {
   assert.equal(at('quota_level'), 'ok', '2 of 100 is not an alarm');
 });
 
+test('a sync records whether each camera was watching that day', async t => {
+  // The denominator, written as it happens. It cannot be reconstructed later:
+  // the cameras table holds current state only and every sync overwrites it.
+  const { server, port } = await fakeSpypoint();
+  t.after(() => server.close());
+  const out = tmp();
+  await sync(port, out);
+
+  const db = new DatabaseSync(path.join(out, 'trailcam.db'));
+  const days = db.prepare('SELECT * FROM camera_days ORDER BY camera_id').all();
+  assert.equal(days.length, 2, 'one row per camera, for today');
+  const today = new Date().toISOString().slice(0, 10);
+  assert.deepEqual(days.map(d => d.day), [today, today]);
+
+  // Both stand-in cameras last checked in well over the silence threshold, so
+  // both correctly log as silent rather than live. That is the whole point in
+  // miniature: their empty day is not evidence that no deer came, and nothing
+  // downstream may divide by it. dayState's live case is unit-tested in
+  // test/camera-days.test.js against a camera that is actually in contact.
+  assert.deepEqual(days.map(d => d.state), ['silent', 'silent']);
+
+  const d = days[0];
+  assert.ok(d.photos >= 1, 'the row carries what actually arrived');
+  assert.equal(d.photo_count, 2, 'and the quota reading it was judged on');
+  assert.equal(d.photo_limit, 100);
+  assert.ok(d.observed_at, 'stamped with when it was seen');
+
+  // Running again the same day must update the row, not add a second one.
+  await sync(port, out);
+  const again = db.prepare('SELECT COUNT(*) n FROM camera_days').get();
+  assert.equal(again.n, 2, 'still one row per camera-day, not four');
+  db.close();
+});
+
 test('the sync reports the quota per camera, not one camera for the account', async t => {
   // The line this replaced printed whichever camera came back first. Every
   // camera has to appear, with its own numbers.

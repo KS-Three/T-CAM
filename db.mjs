@@ -599,6 +599,46 @@ const MIGRATIONS = [
       db.exec('ALTER TABLE cameras ADD COLUMN view TEXT;');
     },
   },
+  {
+    version: 15,
+    name: 'a daily record of whether each camera was actually watching',
+    up: db => {
+      // The denominator. "A deer passed here on 9 of the last 10 days" is only
+      // a fact if the camera could have reported on all ten - and a camera out
+      // of transmission quota, or silent, produces exactly the evidence an
+      // empty trail does: nothing. Counting those as deer-absent days inflates
+      // every estimate built on top, always in the same direction.
+      //
+      // Same argument weather_hours already makes for the weather: the hours
+      // with no detection ARE the control group.
+      //
+      // This cannot be backfilled. The cameras table holds current state only
+      // - photo_count, last_seen, battery are overwritten every sync - so
+      // nothing anywhere remembers yesterday. Every day without a row here is
+      // a day permanently missing from the denominator, which is why it is
+      // being added before the thing that needs it.
+      //
+      // A day with NO ROW means unknown, never live. Readers must treat a gap
+      // as absence of evidence; camera-days.mjs summarise() counts them.
+      db.exec(`
+        CREATE TABLE camera_days (
+          camera_id    TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+          day          TEXT NOT NULL,
+          state        TEXT NOT NULL
+                         CHECK (state IN ('live', 'quota-dark', 'silent', 'unknown')),
+          photos       INTEGER NOT NULL DEFAULT 0,
+          battery      INTEGER,
+          signal       INTEGER,
+          last_seen    TEXT,
+          photo_count  INTEGER,
+          photo_limit  INTEGER,
+          observed_at  TEXT NOT NULL,
+          PRIMARY KEY (camera_id, day)
+        );
+      `);
+      db.exec('CREATE INDEX camera_days_day ON camera_days(day);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -820,6 +860,52 @@ export function setCameraView(db, id, view) {
     .get(view === null || view === undefined ? null : JSON.stringify(view), nowIso(), id);
   if (!r) throw new Error(`no camera ${id}`);
   return r;
+}
+
+/**
+ * Record what a camera was doing today.
+ *
+ * Upserts, because a sync may run many times a day and the LAST observation is
+ * the one that counts: a camera live at 08:00 and out of quota by 16:00 spent
+ * that day going dark, and the day should say so.
+ *
+ * The exception is `photos`, which takes the highest count seen rather than the
+ * latest. A later sync that happens to fetch nothing must not erase the fact
+ * that twelve photographs arrived earlier in the day.
+ */
+export function recordCameraDay(db, row) {
+  return db.prepare(`
+    INSERT INTO camera_days (camera_id, day, state, photos, battery, signal,
+                             last_seen, photo_count, photo_limit, observed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(camera_id, day) DO UPDATE SET
+      state = excluded.state,
+      photos = MAX(camera_days.photos, excluded.photos),
+      battery = excluded.battery, signal = excluded.signal,
+      last_seen = excluded.last_seen,
+      photo_count = excluded.photo_count, photo_limit = excluded.photo_limit,
+      observed_at = excluded.observed_at
+    RETURNING *
+  `).get(row.cameraId, row.day, row.state, row.photos ?? 0,
+    row.battery ?? null, row.signal ?? null, row.lastSeen ?? null,
+    row.photoCount ?? null, row.photoLimit ?? null, row.observedAt);
+}
+
+/**
+ * The recorded days for one camera, oldest first.
+ *
+ * Returns only days that were actually written. The caller pairs this with
+ * camera-days.mjs summarise(), which walks the requested span and fills the
+ * gaps with `unknown` — the days this deliberately does not invent.
+ */
+export function cameraDays(db, cameraId, { from = null, to = null } = {}) {
+  const where = ['camera_id = ?'];
+  const args = [cameraId];
+  if (from) { where.push('day >= ?'); args.push(from); }
+  if (to) { where.push('day <= ?'); args.push(to); }
+  return db.prepare(
+    'SELECT * FROM camera_days WHERE ' + where.join(' AND ') + ' ORDER BY day'
+  ).all(...args);
 }
 
 export function upsertPhoto(db, { provider, cameraId, nativeId, takenAt,

@@ -391,6 +391,46 @@ The facing is **yours**, not SpyPoint's, so `upsertCamera` leaves it alone —
 every other column on a camera is overwritten each sync, and a facing in that
 list would silently unpoint every camera every hour. A test pins it.
 
+### Was the camera even watching?
+
+Every sync writes one row per camera per day: was it transmitting, was it out
+of quota, was it silent, how many photographs arrived. Today, on a real
+account:
+
+```
+camera          state        why
+Fremont South   live         in contact 10h, 10/100
+Fremont North   quota-dark   100/100 spent
+East Side       live         in contact 11h, 28/100
+South Side      live         in contact  9h, 51/100
+```
+
+This exists to fix a denominator. "A deer passed here on 9 of the last 10 days"
+is only a fact if the camera could have reported on all ten — and a camera out
+of quota, or silent, produces exactly the evidence an empty trail does:
+nothing. Fremont North above sent no photographs today. That is not a day
+without deer.
+
+It is the same argument `weather_hours` already makes for the weather: the
+hours with no detection **are** the control group, and without them any
+apparent pattern is an artefact.
+
+**A day with no row means unknown, never live.** The sync only writes on the
+days it runs, so a week with the laptop off is a week of unknowns — absence of
+evidence, not evidence of absence. `summarise()` walks the span you ask for and
+counts those gaps explicitly rather than letting them vanish from both halves
+of a fraction:
+
+```
+3 of 7 days usable — 1 quota-dark, 1 silent, 2 never recorded
+```
+
+**None of this can be backfilled.** The `cameras` table holds current state
+only: `photo_count`, `last_seen` and battery are overwritten on every sync, so
+nothing anywhere remembers yesterday. Every day this log does not exist is a
+day permanently missing from the denominator — which is why it was built before
+the thing that needs it.
+
 ### What this cannot tell you on its own
 
 Knowing a camera faces north tells you which ground it photographs. It does

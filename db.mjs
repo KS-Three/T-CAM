@@ -639,6 +639,30 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX camera_days_day ON camera_days(day);');
     },
   },
+  {
+    version: 16,
+    name: 'which way the animal crossed the frame',
+    up: db => {
+      // Read from the phashes already stored, not from the pictures - the bits
+      // of a dHash are laid out in space, so XORing two of them says WHERE
+      // across the frame something changed. See travel.mjs.
+      //
+      // Two columns because they are two different claims. `crossing` is
+      // observable from the frames alone: the animal moved left-to-right
+      // through the picture. `heading_deg` additionally needs the camera's
+      // facing and stays null until somebody has pointed that camera - a
+      // crossing with no bearing behind it is still a fact, just not a compass
+      // one.
+      //
+      // heading_note carries the REASON when there is no answer, because "it
+      // did not cross" and "only two frames" are different things to a reader
+      // and a null cannot tell them apart.
+      db.exec('ALTER TABLE visits ADD COLUMN crossing TEXT;');
+      db.exec('ALTER TABLE visits ADD COLUMN heading_deg REAL;');
+      db.exec('ALTER TABLE visits ADD COLUMN heading_frames INTEGER;');
+      db.exec('ALTER TABLE visits ADD COLUMN heading_note TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];

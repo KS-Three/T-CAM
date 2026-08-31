@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { headCommit, newestSource, buildStamp, isStale, stampLine } from '../build-stamp.mjs';
 
@@ -130,7 +131,12 @@ test('no sources at all is not stale', () => {
 });
 
 test('the real checkout stamps with a commit', () => {
-  const repo = path.dirname(new URL('.', import.meta.url).pathname);
+  // fileURLToPath, not .pathname: on Windows the pathname keeps a leading
+  // slash ("/C:/Users/..."), buildStamp finds no .git under it and reports a
+  // null commit. The stamp itself is fine - /api/health has been naming the
+  // right sha all along - it was only ever this test that could not find the
+  // checkout.
+  const repo = fileURLToPath(new URL('..', import.meta.url));
   const stamp = buildStamp(repo);
   assert.match(stamp.commit, /^[0-9a-f]{7}$/);
   assert.equal(typeof stamp.newestSource, 'string');

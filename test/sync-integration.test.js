@@ -17,10 +17,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const run = promisify(execFile);
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath, NOT new URL(...).pathname: on Windows the pathname is
+// "/C:/Users/..." with a leading slash, which path.join turns into
+// "\\C:\\Users\\..." and node then resolves against the cwd as
+// "C:\\C:\\Users\\...". Every test in this file spawned a subprocess that
+// died with MODULE_NOT_FOUND, so the one test proving the sync is wired
+// together has never actually run on Windows.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC = path.join(HERE, '..', 'spypoint-sync.mjs');
 
 // A 1x1 JPEG, so the download path writes a real image rather than a stub.

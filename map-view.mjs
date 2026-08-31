@@ -589,31 +589,110 @@ export const mapStyles = `
   /* The weather strip: a chip at the bottom-centre that opens into the
      timeline. Bottom-centre is the one clear edge — the layer swatch owns the
      left corner, attribution the right — and it is where a thumb already is. */
+  /* Both the chip and the bar float ON the map, so they are drawn as glass
+     rather than as panels: a translucent fill over a blur, a hairline edge,
+     and the shadow doing the lifting. The solid var(--panel) is declared
+     first on purpose — it is the fallback wherever color-mix does not land,
+     and a control that ends up merely opaque is plain, not broken. */
   .wxchip { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
-            z-index: 4; display: flex; align-items: center; gap: 7px; padding: 7px 12px;
-            border-radius: 999px; background: var(--panel); border: 1px solid var(--line);
-            color: var(--ink); font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
-            cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.3); white-space: nowrap; }
+            z-index: 4; display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+            border-radius: 999px;
+            background: var(--panel);
+            background: color-mix(in srgb, var(--panel) 84%, transparent);
+            backdrop-filter: blur(12px) saturate(1.3);
+            -webkit-backdrop-filter: blur(12px) saturate(1.3);
+            border: 1px solid var(--line);
+            border-color: color-mix(in srgb, var(--line) 65%, transparent);
+            color: var(--ink); font: 600 12.5px/1 ui-sans-serif, system-ui, sans-serif;
+            font-variant-numeric: tabular-nums;
+            cursor: pointer; white-space: nowrap;
+            box-shadow: 0 2px 12px rgba(0,0,0,.2);
+            transition: transform .15s ease, box-shadow .15s ease; }
+  .wxchip:hover { transform: translateX(-50%) translateY(-1px);
+                  box-shadow: 0 5px 18px rgba(0,0,0,.26); }
   .wxchip .muted { color: var(--muted); font-weight: 500; }
   .wxarrow { display: inline-block; font-size: 13px; line-height: 1; }
   .wxbar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
-           z-index: 6; width: min(560px, calc(100% - 20px)); background: var(--panel);
-           border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 8px;
-           box-shadow: 0 4px 18px rgba(0,0,0,.35); }
-  .wxbar .now { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-                font-size: 13px; color: var(--ink); }
-  .wxbar .now b { font-size: 15px; }
-  .wxbar .when { color: var(--muted); font-size: 12px; margin-left: auto; }
-  .wxbar input[type=range] { width: 100%; margin: 9px 0 2px; }
-  .wxbar .scale { display: flex; font-size: 10px; color: var(--muted); }
-  .wxbar .scale span { flex: 1; text-align: center; border-left: 1px solid var(--line);
-                       overflow: hidden; }
-  .wxbar .scale span:first-child { border-left: 0; }
-  .wxbar .foot { display: flex; gap: 8px; margin-top: 7px; align-items: center; }
-  .wxbar .foot button { border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-                        border-radius: 6px; padding: 4px 10px; cursor: pointer;
-                        font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; }
-  .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 5px; }
+           z-index: 6; width: min(600px, calc(100% - 20px));
+           background: var(--panel);
+           background: color-mix(in srgb, var(--panel) 90%, transparent);
+           backdrop-filter: blur(18px) saturate(1.3);
+           -webkit-backdrop-filter: blur(18px) saturate(1.3);
+           border: 1px solid var(--line);
+           border-color: color-mix(in srgb, var(--line) 65%, transparent);
+           border-radius: 16px; padding: 12px 14px 10px;
+           box-shadow: 0 10px 34px rgba(0,0,0,.26); }
+  .wxbar .now { display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+                font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .wxbar .now b { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+  .wxbar .when { color: var(--muted); font-size: 10.5px; margin-left: auto;
+                 text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+  /* The timeline is three layers in one box: the rain profile drawn behind,
+     the groove, and a native range input stretched over the lot with its own
+     chrome removed. The input stays because it already knows how to be
+     dragged by a thumb, arrowed by a keyboard and announced to a screen
+     reader — all of which a bare div would have to reimplement, badly. */
+  .wxplot { position: relative; height: 46px; margin: 10px 0 0; }
+  /* No gap between the bars, and no rounded caps. A week is 168 of these in
+     about 570px, so each is three pixels wide: spaced and capped they read as
+     static rather than as weather (screenshots in the PR). Butted together
+     they make one continuous profile, which is what a front looks like. */
+  .wxspark { position: absolute; left: 0; right: 0; top: 0; bottom: 20px;
+             display: flex; align-items: flex-end; gap: 0; pointer-events: none; }
+  .wxspark i { flex: 1 1 0; min-width: 0; min-height: 1px;
+               background: var(--accent); opacity: .3; }
+  /* An hour with rain actually falling reads darker than one that merely
+     might: the bar heights are probability, and probability alone never says
+     which side of the front you are standing on. */
+  .wxspark i.wet { opacity: .62; }
+  .wxgroove { position: absolute; left: 0; right: 0; bottom: 8px; height: 4px;
+              border-radius: 999px; background: var(--line); pointer-events: none; }
+  /* Where "now" falls on a track that starts at midnight this morning. */
+  .wxnowtick { position: absolute; bottom: 4px; width: 2px; height: 12px;
+               border-radius: 1px; background: var(--muted); opacity: .55;
+               transform: translateX(-1px); pointer-events: none; }
+  .wxbar input[type=range] { -webkit-appearance: none; appearance: none;
+        position: absolute; left: 0; bottom: 0; width: 100%; height: 20px;
+        margin: 0; padding: 0; background: transparent; cursor: pointer; }
+  .wxbar input[type=range]:focus { outline: 0; }
+  .wxbar input[type=range]::-webkit-slider-runnable-track { height: 20px; background: transparent; }
+  .wxbar input[type=range]::-moz-range-track { height: 20px; background: transparent; }
+  .wxbar input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+        width: 14px; height: 14px; margin-top: 3px; border-radius: 50%;
+        background: var(--accent); border: 2px solid var(--panel);
+        box-shadow: 0 1px 5px rgba(0,0,0,.4); }
+  .wxbar input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%;
+        background: var(--accent); border: 2px solid var(--panel);
+        box-shadow: 0 1px 5px rgba(0,0,0,.4); }
+  .wxbar input[type=range]:focus-visible::-webkit-slider-thumb {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .wxbar input[type=range]:focus-visible::-moz-range-thumb {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent); }
+  /* Day names sit under their own hours. Tick marks rather than full
+     dividers: the old cell borders drew a grid the data does not have. */
+  .wxbar .scale { display: flex; margin-top: 5px;
+                  font: 700 9.5px/1 ui-sans-serif, system-ui, sans-serif;
+                  color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .wxbar .scale span { flex: 1 1 0; min-width: 0; text-align: center; position: relative;
+                       overflow: hidden; white-space: nowrap; }
+  .wxbar .scale span::before { content: ''; position: absolute; left: 0; top: -7px;
+                               width: 1px; height: 4px; background: var(--line); }
+  .wxbar .scale span:first-child::before { display: none; }
+  .wxbar .foot { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+  .wxbar .foot button { border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
+                        background: color-mix(in srgb, var(--ink) 9%, transparent);
+                        color: var(--ink);
+                        font: 600 11.5px/1 ui-sans-serif, system-ui, sans-serif;
+                        transition: background .12s ease; }
+  .wxbar .foot button:hover { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+  .wxbar .foot button.primary { background: var(--accent); color: var(--panel); }
+  .wxbar .foot button.primary:hover { filter: brightness(1.1); }
+  .wxbar .foot .hint { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .wxbar .stale { color: var(--warn); font-size: 11px; margin-top: 8px; line-height: 1.35; }
+  @media (prefers-reduced-motion: reduce) {
+    .wxchip, .wxbar .foot button { transition: none; }
+    .wxchip:hover { transform: translateX(-50%); }
+  }
   /* On a phone the attribution wraps to a full-width pill along the very
      bottom edge and sat straight on the chip (measured at 390px). The strip
      steps above it; the ground switcher steps above the strip in the
@@ -4586,6 +4665,37 @@ function wxOpenBar() {
   wxBar.textContent = '';
   wxBar.appendChild(el('div', 'now'));
 
+  // The plot holds three layers: the rain profile, the groove the thumb runs
+  // in, and the slider itself stretched over both. Built in that order so the
+  // slider is last and therefore on top for pointer events.
+  const plot = el('div', 'wxplot');
+
+  // The rain profile behind the track. Heights are probability, so an hour is
+  // as tall as its chance; the ones with measurable precipitation are painted
+  // darker, because 30% with rain falling and 30% without look identical on
+  // height alone and are not the same evening.
+  const spark = el('div', 'wxspark');
+  const probs = WX.prob || [];
+  const maxProb = Math.max(10, ...probs.filter(p => Number.isFinite(p)));
+  for (let i = 0; i < WX.time.length; i++) {
+    const p = Number.isFinite(probs[i]) ? probs[i] : 0;
+    const wet = Number.isFinite(WX.precip[i]) && WX.precip[i] > 0;
+    const bar = el('i', wet ? 'wet' : null);
+    bar.style.height = Math.max(1, Math.round(p / maxProb * 100)) + '%';
+    spark.appendChild(bar);
+  }
+  plot.appendChild(spark);
+  plot.appendChild(el('div', 'wxgroove'));
+
+  // A tick where the present sits. The forecast starts at midnight this
+  // morning, so "now" is somewhere inside the track rather than at its left
+  // edge, and without the tick there is nothing to read the thumb against.
+  if (WX.time.length > 1) {
+    const tick = el('div', 'wxnowtick');
+    tick.style.left = (wxNowIdx / (WX.time.length - 1) * 100) + '%';
+    plot.appendChild(tick);
+  }
+
   const slider = document.createElement('input');
   slider.type = 'range';
   slider.id = 'wxslider';
@@ -4593,8 +4703,12 @@ function wxOpenBar() {
   slider.max = String(WX.time.length - 1);
   slider.step = '1';
   slider.value = String(wxIdx);
+  // The thumb is a dot on a groove now rather than a browser slider, so the
+  // control says out loud what it is for anyone not looking at it.
+  slider.setAttribute('aria-label', 'Forecast hour');
   slider.oninput = () => { wxIdx = Number(slider.value); wxPaintBar(); };
-  wxBar.appendChild(slider);
+  plot.appendChild(slider);
+  wxBar.appendChild(plot);
 
   // Day names under the slider, each as wide as the hours it owns, so the
   // thumb's position reads as a day without arithmetic.
@@ -4616,7 +4730,7 @@ function wxOpenBar() {
 
   const foot = el('div', 'foot');
   const nowBtn = document.createElement('button');
-  nowBtn.type = 'button'; nowBtn.textContent = 'Now';
+  nowBtn.type = 'button'; nowBtn.className = 'primary'; nowBtn.textContent = 'Now';
   nowBtn.onclick = () => { wxIdx = wxNowIdx; slider.value = String(wxIdx); wxPaintBar(); };
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button'; closeBtn.textContent = 'Close';
@@ -4626,7 +4740,7 @@ function wxOpenBar() {
     wxPaintChip();
   };
   foot.append(nowBtn, closeBtn);
-  foot.appendChild(el('span', 'when', 'Drag to look ahead.'));
+  foot.appendChild(el('span', 'hint', 'Drag to look ahead.'));
   wxBar.appendChild(foot);
 
   if (WX.note) wxBar.appendChild(el('div', 'stale', WX.note));

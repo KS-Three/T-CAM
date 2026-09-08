@@ -81,6 +81,7 @@ are never written to disk, never logged, and never stored in this repo.
 | `node serve.mjs --host 0.0.0.0` | Also reachable from a phone on the same Wi-Fi |
 | `node gps-doctor.mjs --camera "NAME"` | A camera's pin is in the wrong place — says which of the API, the sync or the database is lying |
 | `node spypoint-sync.mjs --provider <id>` | Sync a different camera brand |
+| `node check-crops.mjs` | Why is a field scan not working? Walks the satellite path one step at a time |
 
 ### The pages
 
@@ -967,6 +968,35 @@ else overlays it or slides in over it.
   it happens: it is a date, not a tick-box, because a cornfield cut yesterday
   and one cut a month ago are different hunting facts. A cut field goes
   dashed and its chip says when.
+- **Ask the satellite what the field is doing now.** The crop map above is a
+  season behind — the 2025 layer was published in February 2026 — so open a
+  field and press **Check this season**. It reads a dozen-odd Sentinel-2 passes
+  over that outline and says whether the crop is still standing, going off, or
+  cut, and roughly when it came off. Free, no account, and it takes about a
+  minute.
+
+  Three things worth knowing before you trust it. It **never edits your
+  field** — not the crop, not the cut date. It reports, disagrees out loud if
+  it disagrees, and you decide; a satellite that could overwrite what you typed
+  would eventually overwrite something it got wrong. It **always tells you how
+  old the reading is**, because cloud routinely hides a field for weeks and
+  "standing" from a fortnight ago is a different claim from "standing on
+  Tuesday". And when two clear passes sit too far apart it will say a field is
+  **either cut or dried down** rather than pick one — from a single greenness
+  number, a combine and a hard drydown look the same, and only how *fast* the
+  fall happened separates them.
+
+  It can also try to identify the crop itself, but on this ground it will
+  usually decline, and that is the honest answer rather than a broken one.
+  Telling corn from soybeans by satellite works well, but it has to be
+  calibrated against nearby fields whose crop is already known, and there
+  barely are any: a two-kilometre sample around the property is 40% woody
+  wetland, 16% corn and 4% soybeans — one soybean point in twenty-five. In
+  proper corn-belt country it would answer. Here it says why it cannot, which
+  is worth more than a confident number you have no way to check.
+
+  If a scan misbehaves, `node check-crops.mjs` walks the same path a step at a
+  time and says which step broke.
 - **Walk-in routes can finally be edited.** Every route wears a small chip at
   its midpoint; tap it for rename, a different stand, **Redraw the line** (the
   shape is redrawn, the name and verdict-keeping survive) and Delete. The

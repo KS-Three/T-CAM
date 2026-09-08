@@ -412,10 +412,25 @@ camera is overwritten each run; these are deliberately left out of that list, a
 test pins it, and the failure it prevents would otherwise appear only as pins
 drifting back weeks later with nothing to explain it.
 
-**Correct a pin to where the camera is, not to where it looks right.** If a pin
-seems off against satellite imagery, check first whether the imagery is the
-thing that is misplaced — `Who owns this?` draws your surveyed parcel boundary,
-and if that follows the field edges then the photograph is registered correctly.
+**Correct a pin to where the camera is, not to where it looks right.**
+
+Two different things can put a pin in the wrong spot, and they need opposite
+responses. The quickest way to tell them apart is to open the same camera in
+the manufacturer's own app:
+
+- **Both apps show it in the same wrong place.** They are plotting the same
+  coordinate faithfully, so the *coordinate* is wrong — that is the camera's own
+  GPS, and correcting the pin is exactly the right move.
+- **The manufacturer's app looks right and this one does not.** Both are still
+  drawing the same number, onto differently registered photographs. The pin is
+  not the thing to change, and moving it would push a wrong coordinate into the
+  parcel lookups, the weather locations and the planner.
+
+For that second case, `Who owns this?` settles it without leaving the map. It
+draws your surveyed parcel boundary, and if that follows the field edges and
+fence lines in the photograph then the imagery is registered correctly and the
+pin is where it says it is.
+
 The distance on the card is there to make an implausible correction obvious: a
 few metres is a GPS fix under trees, a few hundred is a map being bent to match
 a picture.

@@ -445,6 +445,17 @@ inherits the error.
 - **Undo is first-class.** A camera genuinely moved later makes yesterday's
   correction the wrong answer, and removing it is the honest fix rather than
   nudging it — the same argument `Clear facing` already rests on.
+- **Two causes, opposite responses, and one cheap test.** A pin can be wrong
+  because the coordinate is wrong, or because the photograph under it is
+  registered differently. Opening the same camera in the vendor's own app
+  separates them in seconds: if BOTH show it in the same wrong place they are
+  drawing the same coordinate faithfully and the fix itself is wrong, which is
+  what a correction is for; if only this one looks wrong, the two apps are
+  drawing one number onto different photographs and correcting the pin would
+  bake an error into the stored coordinate. This was learned the slow way here
+  — the report arrived as "SpyPoint is right, T-CAM is wrong", which sent the
+  investigation looking for an ingestion bug that did not exist, and was
+  corrected to "both are off" only afterwards.
 - **The distance is shown on purpose.** A few metres is a canopy; a few hundred
   is somebody bending the map to match a photograph. Correcting a pin against
   imagery rather than against the ground would put a wrong coordinate into the

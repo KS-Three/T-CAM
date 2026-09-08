@@ -929,6 +929,20 @@ function cameraCard(c, { withId = true } = {}) {
         : 'When the camera last fixed its own position.';
       card.appendChild(line('GPS fix', v));
     }
+
+    // Whether the pin above is the device's fix or the owner's correction, and
+    // how far apart the two are. Kept as words rather than left implicit: a
+    // corrected pin that looked identical to a reported one would quietly turn
+    // somebody's estimate into the camera's own measurement, which is the
+    // distinction this whole file exists to preserve.
+    if (c.placed) {
+      const far = c.placed.fromFix;
+      const w = el('span', null, 'placed by hand'
+        + (far === null ? '' : ' \u2014 ' + far + ' m from the GPS fix'));
+      w.title = 'The camera reported a position and you corrected it. The '
+        + 'reported fix is kept, and "Use the GPS fix" puts the pin back.';
+      card.appendChild(line('Pin', w));
+    }
   }
   const t = el('span', 'tag ' + c.health.level,
     c.health.level === 'ok' ? 'healthy' : c.health.notes.join(' \u00b7 '));

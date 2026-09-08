@@ -708,6 +708,36 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 18,
+    name: 'where the owner says a camera actually is',
+    up: db => {
+      // A camera's lat/lng is the fix its own GPS reported, and every sync
+      // overwrites them - correctly, because they are the provider's fact and
+      // a moved camera has to be able to correct itself.
+      //
+      // But a trail camera's GPS is a small antenna under a tree canopy, and
+      // its fix can sit ten or twenty metres from where the camera is bolted.
+      // Nothing could say so. Stands can be dragged; a camera could not, so a
+      // pin known to be in the wrong place stayed there, and everything
+      // measured from it - a stand's distance, which lanes cover it, the
+      // ground the facing cone lies on - inherited the error silently.
+      //
+      // These three columns are the OWNER's answer, kept beside the camera's
+      // rather than on top of it. Both are true statements about different
+      // things: one is what the device reported, the other is where the person
+      // who hung it says it is. Keeping both is what lets the card show the
+      // distance between them, and what lets the correction be undone.
+      //
+      // They are deliberately absent from upsertCamera's INSERT and its
+      // ON CONFLICT list, exactly as `view` is, so a sync cannot erase them.
+      // A sync that quietly un-corrected every pin would show up only as
+      // markers drifting back, weeks later, with nothing to explain it.
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_lat REAL;');
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_lng REAL;');
+      db.exec('ALTER TABLE cameras ADD COLUMN placed_at  TEXT;');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];
@@ -929,6 +959,50 @@ export function setCameraView(db, id, view) {
     .get(view === null || view === undefined ? null : JSON.stringify(view), nowIso(), id);
   if (!r) throw new Error(`no camera ${id}`);
   return r;
+}
+
+/**
+ * Say where a camera actually is, or withdraw the correction.
+ *
+ * Never touches lat/lng: those stay the fix the device reported, so the two
+ * can be compared and the correction can be undone. Passing null clears it and
+ * the map goes back to drawing the GPS position - which has to stay reachable,
+ * because a camera that has since been moved makes yesterday's correction the
+ * wrong answer, and the honest fix is to remove it rather than nudge it.
+ */
+export function setCameraPlacement(db, id, at) {
+  const clear = at === null || at === undefined;
+  if (!clear) {
+    const { lat, lng } = at;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new Error('a corrected pin needs both a latitude and a longitude');
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new Error(`coordinates out of range: ${lat}, ${lng}`);
+    }
+  }
+  const r = db.prepare(`
+    UPDATE cameras SET placed_lat = ?, placed_lng = ?, placed_at = ?, updated_at = ?
+    WHERE id = ? RETURNING *
+  `).get(clear ? null : at.lat, clear ? null : at.lng,
+    clear ? null : nowIso(), nowIso(), id);
+  if (!r) throw new Error(`no camera ${id}`);
+  return r;
+}
+
+/**
+ * Where the map should draw a camera: the owner's correction when there is
+ * one, the device's fix otherwise.
+ *
+ * One definition, used by everything. The alternative - each caller deciding
+ * for itself - is how the pin, the distance to a stand and the facing cone end
+ * up disagreeing about where one camera is.
+ */
+export function cameraPoint(r) {
+  const placed = Number.isFinite(r?.placed_lat) && Number.isFinite(r?.placed_lng);
+  return placed
+    ? { lat: r.placed_lat, lng: r.placed_lng, corrected: true }
+    : { lat: r?.lat ?? null, lng: r?.lng ?? null, corrected: false };
 }
 
 /**

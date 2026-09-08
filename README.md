@@ -384,6 +384,57 @@ Defaults are a 21° half-angle (the FLEX-M's detection zone is quoted at about
 about your camera: mounting height and undergrowth change what it really sees,
 and the photos are the evidence.
 
+### When the pin is not where the camera is
+
+A camera's position is the fix its own GPS reported, and a trail camera's GPS is
+a small antenna under a canopy. Ten or twenty metres out is ordinary, and
+everything measured *from* a camera inherits it: how far a stand is, which
+lanes cover it, the ground its facing cone lies on.
+
+Select the camera and press **Correct the pin**, then click where it actually
+hangs. The card then reads:
+
+```
+Location   44.225935, -88.976957
+GPS fix    9/8/2026
+Pin        placed by hand — 38 m from the GPS fix
+```
+
+**The reported fix is kept, never overwritten.** Both are true statements about
+different things — what the device measured, and where you say it is — so the
+card can show the distance between them and **Use the GPS fix** can put the pin
+back. That matters when a camera is genuinely moved later: yesterday's
+correction is then the wrong answer, and removing it is the honest fix rather
+than nudging it.
+
+Like the facing, a correction **survives a sync**. Every other column on a
+camera is overwritten each run; these are deliberately left out of that list, a
+test pins it, and the failure it prevents would otherwise appear only as pins
+drifting back weeks later with nothing to explain it.
+
+**Correct a pin to where the camera is, not to where it looks right.**
+
+Two different things can put a pin in the wrong spot, and they need opposite
+responses. The quickest way to tell them apart is to open the same camera in
+the manufacturer's own app:
+
+- **Both apps show it in the same wrong place.** They are plotting the same
+  coordinate faithfully, so the *coordinate* is wrong — that is the camera's own
+  GPS, and correcting the pin is exactly the right move.
+- **The manufacturer's app looks right and this one does not.** Both are still
+  drawing the same number, onto differently registered photographs. The pin is
+  not the thing to change, and moving it would push a wrong coordinate into the
+  parcel lookups, the weather locations and the planner.
+
+For that second case, `Who owns this?` settles it without leaving the map. It
+draws your surveyed parcel boundary, and if that follows the field edges and
+fence lines in the photograph then the imagery is registered correctly and the
+pin is where it says it is.
+
+The distance on the card is there to make an implausible correction obvious: a
+few metres is a GPS fix under trees, a few hundred is a map being bent to match
+a picture.
+
 **An unset facing stays unset.** A camera nobody has pointed shows no Facing row
 and no cone, rather than defaulting to north — a guessed bearing drawn in the
 same ink as a measured one is worse than none, because nothing downstream can

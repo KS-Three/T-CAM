@@ -32,7 +32,7 @@ import {
   allMarkers, createMarker, updateMarker, deleteMarker, MARKER_KINDS, MARKER_LABELS,
   groupVisits, allVisits, visitById, photosForVisit, reviewVisit,
   detectionsForVisit, addDetection, updateDetection, deleteDetection, checkDetection,
-  setCameraView, cameraDays,
+  setCameraView, setCameraPlacement, cameraPoint, cameraDays,
   allBucks, upsertBuck, recentDetectionCounts, SPECIES, DEER_CLASS, speciesFromVendorWord,
   upsertProperty, allProperties, assignPropertyMembers, setPhotoPhash, emptyBaseline,
   saveWindClimatology, windClimatology,
@@ -130,8 +130,17 @@ export function cameraFromRow(r) {
     property: r.property_name ?? null,
     name: r.name,
     model: r.model,
-    lat: r.lat,
-    lng: r.lng,
+    // lat/lng are where the camera IS, which is the owner's correction when
+    // there is one. Everything downstream - the pin, the distance to a stand,
+    // which lanes cover it, the facing cone - reads these and therefore agrees
+    // without being told about corrections at all.
+    lat: cameraPoint(r).lat,
+    lng: cameraPoint(r).lng,
+    // The device's own fix, always, so the card can show both and the
+    // correction can be judged and undone.
+    gpsLat: r.lat,
+    gpsLng: r.lng,
+    placed: placementOf(r),
     gpsFix: r.gps_fix,
     battery: r.battery,
     batteryLevel: r.battery_level,
@@ -155,9 +164,27 @@ export function cameraFromRow(r) {
     // the card and the API re-deriving a bearing separately is how they start
     // quoting different numbers for one cone.
     view: parseView(r.view),
-    facing: cameraView({ lat: r.lat, lng: r.lng, view: r.view }),
-    facingLine: facingLine({ lat: r.lat, lng: r.lng, view: r.view }),
+    // Anchored on the effective point, not the raw fix: a corrected pin whose
+    // cone still grew from the GPS position would be a camera looking out of
+    // somewhere it is not.
+    facing: cameraView({ ...cameraPoint(r), view: r.view }),
+    facingLine: facingLine({ ...cameraPoint(r), view: r.view }),
   };
+}
+
+/**
+ * The correction on a camera, and how far it moved the pin.
+ *
+ * The distance is the point of it. A three-metre nudge is a GPS fix under a
+ * canopy; a three-hundred-metre one is somebody correcting the map to match a
+ * photograph rather than the ground, and the number is what makes the
+ * difference visible on the card.
+ */
+function placementOf(r) {
+  if (!Number.isFinite(r?.placed_lat) || !Number.isFinite(r?.placed_lng)) return null;
+  const fromFix = Number.isFinite(r.lat) && Number.isFinite(r.lng)
+    ? Math.round(distanceM(r.lat, r.lng, r.placed_lat, r.placed_lng)) : null;
+  return { lat: r.placed_lat, lng: r.placed_lng, at: r.placed_at, fromFix };
 }
 
 /**
@@ -783,8 +810,36 @@ export function createServer({ out = OPT.out } = {}) {
       if (camMatch && (req.method === 'PATCH' || req.method === 'PUT')) {
         const id = decodeURIComponent(camMatch[1]);
         const b = await readJson(req);
-        if (!('view' in b)) {
-          return sendJson(res, 400, { error: 'only "view" can be set on a camera' });
+        const wantsView = 'view' in b, wantsPlaced = 'placed' in b;
+        if (!wantsView && !wantsPlaced) {
+          return sendJson(res, 400,
+            { error: 'only "view" and "placed" can be set on a camera' });
+        }
+
+        // Where the owner says the camera actually is. Kept beside the fix
+        // rather than over it, so the two can be compared and this undone.
+        if (wantsPlaced) {
+          let at = null;
+          if (b.placed !== null && b.placed !== undefined) {
+            const lat = Number(b.placed.lat), lng = Number(b.placed.lng);
+            // Number(null) is 0, and 0,0 is a real place in the Atlantic, so
+            // the check is for a finite number and not for a truthy one.
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+              return sendJson(res, 400,
+                { error: 'placed must be {"lat":n,"lng":n}, or null to clear it' });
+            }
+            at = { lat, lng };
+          }
+          try {
+            const updated = setCameraPlacement(db, id, at);
+            // The camera has moved as far as everything downstream is
+            // concerned, so any heading derived from where it stood is stale.
+            updateVisitHeadings(db);
+            if (!wantsView) return sendJson(res, 200, cameraFromRow(updated));
+          } catch (err) {
+            const missing = /^no camera /.test(err.message);
+            return sendJson(res, missing ? 404 : 400, { error: err.message });
+          }
         }
         // null clears it. Anything else must parse as a cone, or it is a
         // mistake worth reporting rather than a facing worth storing.

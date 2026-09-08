@@ -2026,6 +2026,9 @@ function clearMapModes(keep) {
   if (keep !== 'route' && drawing) cancelRoute();
   if (keep !== 'lane' && laneEdit) { laneEdit = null; }
   if (keep !== 'facing' && facingPick) { facingPick = null; }
+  // clearMapModes is the single place that knows every mode. A button that
+  // forgets to turn this one off is how "+ Add stand" once turned nothing off.
+  if (keep !== 'place' && placePick) { placePick = null; }
   if (keep !== 'measure' && measuring) stopMeasuring();
   if (keep !== 'field' && fielding) cancelFielding();
   if (keep !== 'entry' && entryPick) cancelEntryPick();
@@ -2157,6 +2160,7 @@ let gripDrag = null;    // { i, kind } while a handle is held
 // the same shape as a lane and there is no reason to invent a second way to
 // describe one.
 let facingPick = null;   // { cameraId } while waiting for the click
+let placePick = null;    // { cameraId } while waiting for the corrected pin
 
 /**
  * Put the stand form away and forget everything hanging off it.
@@ -3384,6 +3388,38 @@ function setCameraFacing(cameraId, view) {
     });
 }
 
+/**
+ * Say where a camera actually is, or take the correction back.
+ *
+ * The GPS fix is never touched - the server keeps it beside this - so the card
+ * can show how far the two are apart and "Use the GPS fix" can undo it.
+ */
+function setCameraPlacement(cameraId, at) {
+  fetch('/api/cameras/' + encodeURIComponent(cameraId), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ placed: at }),
+  }).then(r => (r.ok ? r.json() : r.json().then(j => Promise.reject(new Error(j.error)))))
+    .then(updated => {
+      const cam = D.cameras.find(c => c.id === cameraId);
+      if (cam) {
+        // lat/lng ARE the effective point, so the pin, the cone and every
+        // distance measured from this camera follow without being told.
+        cam.lat = updated.lat; cam.lng = updated.lng;
+        cam.placed = updated.placed;
+        cam.facing = updated.facing;
+        cam.facingLine = updated.facingLine;
+        showCameraPanel(cam);
+      }
+      draw();
+    })
+    .catch(err => {
+      const cam = D.cameras.find(c => c.id === cameraId);
+      if (cam) showCameraPanel(cam);
+      window.alert('Could not save the pin: ' + err.message);
+    });
+}
+
 /** A camera's card, in the same panel. */
 function showCameraPanel(c) {
   closeStandForm();
@@ -3410,6 +3446,31 @@ function showCameraPanel(c) {
     selPanel.appendChild(say);
   };
   btns.appendChild(point);
+
+  // A camera's GPS is a small antenna under a canopy, and its fix can sit
+  // twenty metres from where the camera is bolted. Everything measured from a
+  // camera inherits that error, so correcting it has to be possible.
+  const place = document.createElement('button');
+  place.type = 'button';
+  place.textContent = c.placed ? 'Move the pin' : 'Correct the pin';
+  place.onclick = () => {
+    clearMapModes('place');
+    placePick = { cameraId: c.id };
+    mapEl.classList.add('placing');
+    selPanel.appendChild(el('div', 'kind',
+      'Click where the camera actually is. The GPS fix is kept.'));
+  };
+  btns.appendChild(place);
+
+  if (c.placed) {
+    const undo = document.createElement('button');
+    undo.type = 'button'; undo.textContent = 'Use the GPS fix';
+    // Reachable on purpose, like Clear facing: a camera that has since been
+    // moved makes yesterday's correction the wrong answer, and removing it is
+    // the only honest fix.
+    undo.onclick = () => setCameraPlacement(c.id, null);
+    btns.appendChild(undo);
+  }
 
   if (c.view) {
     const clr = document.createElement('button');
@@ -4640,6 +4701,17 @@ mapEl.addEventListener('click', e => {
     draw();
     return;
   }
+  if (placePick) {
+    const rp = mapEl.getBoundingClientRect();
+    const qx = e.clientX - rp.left, qy = e.clientY - rp.top;
+    if (qx < 0 || qy < 0 || qx > rp.width || qy > rp.height) return;
+    const at = pixelToLatLng(qx, qy);
+    const id = placePick.cameraId;
+    placePick = null;
+    mapEl.classList.remove('placing');
+    setCameraPlacement(id, { lat: at.lat, lng: at.lng });
+    return;
+  }
   if (facingPick) {
     const rf = mapEl.getBoundingClientRect();
     const fx = e.clientX - rf.left, fy = e.clientY - rf.top;
@@ -4904,7 +4976,7 @@ mapEl.addEventListener('wheel', e => {
 mapEl.addEventListener('dblclick', e => {
   if (!onMapGround(e.target)) return;
   if (placing || marking || drawing || measuring || identifying || laneEdit
-      || fielding || entryPick || facingPick) return;
+      || fielding || entryPick || facingPick || placePick) return;
   e.preventDefault();
   zoomAt(zoom + 1, e.clientX, e.clientY);
 });

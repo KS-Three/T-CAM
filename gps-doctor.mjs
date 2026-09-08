@@ -253,6 +253,23 @@ function main() {
       say(`database row (drawn): ${stored ? `lat ${stored.lat}, lng ${stored.lng}`
         : 'NO POSITION'}   (fix ${row.gps_fix ?? 'none'}, written ${row.updated_at})`);
 
+      // A hand-corrected pin changes what this whole report MEANS: every
+      // comparison below is about the GPS columns, and the map is not drawing
+      // them. Without this line the verdict reads "nothing explains a wrong
+      // pin" to somebody whose pin is deliberately somewhere else.
+      const corrected = Number.isFinite(row.placed_lat) && Number.isFinite(row.placed_lng);
+      if (corrected) {
+        const moved = stored
+          ? distanceM(stored.lat, stored.lng, row.placed_lat, row.placed_lng) : null;
+        say('');
+        say('NOTE: this camera\u2019s pin has been CORRECTED BY HAND'
+          + (moved === null ? '' : ` (${yd(moved)} yd from the fix below)`) + '.');
+        say('  The map draws that correction, not the fix this report compares.');
+        say('  Everything below is still about the GPS columns, which are kept');
+        say('  untouched so the two can be told apart. "Use the GPS fix" on the');
+        say('  camera card puts the pin back.');
+      }
+
       // ---- Verdict -------------------------------------------------------
       say('');
       say('VERDICT');

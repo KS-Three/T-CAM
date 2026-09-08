@@ -416,6 +416,46 @@ year one. A hunter reading his own ground will judge 3-versus-1 correctly when t
 raw counts are in front of him; a bare "hunt A" hides that it rests on almost
 nothing.
 
+### A corrected pin sits beside the fix, never over it (settled 2026-09-08)
+
+Six pins reported as "all slightly off". They were not: the stored row matched
+every one of the three encodings SpyPoint sends to 0 yd, the projection was
+proven exact, and the fix landed inside the owner's own surveyed parcel with the
+parcel boundary following the field edges in the imagery. The tool was faithful
+to the camera, and the camera's GPS was simply a small antenna under a canopy.
+
+That made the real gap obvious. A stand can be dragged because a person put it
+there. A camera's position arrived from the device, so there was nowhere to
+record that the device is wrong — and everything measured from a camera
+inherits the error.
+
+- **Both answers are kept, because they are answers to different questions.**
+  `lat`/`lng` stay the fix the device reported; `placed_lat`/`placed_lng` are
+  what the owner says. Overwriting the fix would destroy the only evidence that
+  a correction happened, and with it the ability to show the distance, to judge
+  whether the correction is plausible, and to undo it.
+- **The effective point is computed in ONE place.** `cameraFromRow` returns the
+  correction as `lat`/`lng`, so the pin, the facing cone, the distance to a
+  stand and everything else agree without being taught about corrections. Each
+  caller choosing for itself is how they start disagreeing about one camera.
+- **It survives a sync**, by the same mechanism and for the same reason as
+  `view`: absent from `upsertCamera`'s column list, pinned by a test. A sync
+  that quietly un-corrected every pin would surface only as markers drifting
+  back weeks later with nothing to explain it.
+- **Undo is first-class.** A camera genuinely moved later makes yesterday's
+  correction the wrong answer, and removing it is the honest fix rather than
+  nudging it — the same argument `Clear facing` already rests on.
+- **The distance is shown on purpose.** A few metres is a canopy; a few hundred
+  is somebody bending the map to match a photograph. Correcting a pin against
+  imagery rather than against the ground would put a wrong coordinate into the
+  parcel lookups, the weather locations and the planner, so the number that
+  makes that visible is part of the feature rather than decoration.
+
+`gps-doctor.mjs` announces a correction before its verdict. Every comparison it
+makes is about the GPS columns, and once a pin is corrected the map is not
+drawing them — without that line it tells somebody whose pin is deliberately
+elsewhere that nothing explains a wrong pin.
+
 ## 10. Build order: evolve in place, never break it
 
 Each step ships working:

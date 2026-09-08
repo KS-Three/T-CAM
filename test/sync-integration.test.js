@@ -66,12 +66,14 @@ const CAMERA = (id, name, lng, lat) => ({
  */
 async function fakeSpypoint(extraCameras = []) {
   const photos = {
+    // originName is the camera's own file counter. cam1 skips PICT0002: one
+    // photo that exists on its card and never transmitted.
     cam1: [
-      { id: 'p1', originDate: '2026-08-21T07:15:00.000Z', tag: ['deer'] },
-      { id: 'p2', originDate: '2026-08-21T07:15:04.000Z', tag: ['deer', 'buck'] },
+      { id: 'p1', originDate: '2026-08-21T07:15:00.000Z', tag: ['deer'], originName: 'PICT0001.JPG' },
+      { id: 'p2', originDate: '2026-08-21T07:15:04.000Z', tag: ['deer', 'buck'], originName: 'PICT0003.JPG' },
     ],
     cam2: [
-      { id: 'p3', originDate: '2026-08-22T18:40:00.000Z', tag: [] },
+      { id: 'p3', originDate: '2026-08-22T18:40:00.000Z', tag: [], originName: 'PICT0010.JPG' },
     ],
   };
   const calls = [];
@@ -422,4 +424,20 @@ test('--inspect --raw prints the true values, and warns that it did', async t =>
   const { stdout } = await sync(port, tmp(), ['--inspect', '--raw']);
   assert.match(stdout, /-90\.654321/, 'the real fix, because it was asked for');
   assert.match(stdout, /Do not paste it anywhere public/);
+});
+
+// --- what stayed on the card -------------------------------------------------
+
+test('the sync says what stayed on the card, per camera, from the camera\'s own file numbers', async t => {
+  const { server, port } = await fakeSpypoint();
+  t.after(() => server.close());
+  const out = tmp();
+  const { stdout } = await sync(port, out);
+  assert.match(stdout, /On the card, never sent/);
+  assert.match(stdout, /North Ridge\s+1 photo, 8\/21/,
+    'PICT0002 never arrived between PICT0001 and PICT0003');
+  assert.doesNotMatch(stdout, /Creek Bottom\s+\d+ photo/,
+    'a camera with nothing missing is not listed');
+  const html = fs.readFileSync(path.join(out, 'dashboard.html'), 'utf8');
+  assert.match(html, /"cardGap":\{[^}]*"missing":1/, 'the static dashboard carries the reading');
 });

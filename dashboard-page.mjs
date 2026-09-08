@@ -85,7 +85,17 @@ function healthOf(r, now = Date.now()) {
     level = worst(level, quota.level);
     notes.push(quota.note);
   }
-  return { level, notes, age, quota };
+
+  // Photos the camera numbered that never arrived (card-gap.mjs), attached to
+  // the row by whichever page builder had the database. The count is always
+  // on the card; only a RECENT hole is an alert, because an old one is
+  // history the card pull already did or did not happen for.
+  const cardGap = r.cardGap ?? null;
+  if (cardGap && cardGap.level !== 'ok' && cardGap.note) {
+    level = worst(level, cardGap.level);
+    notes.push(cardGap.note);
+  }
+  return { level, notes, age, quota, cardGap };
 }
 
 // Embedding JSON in a <script> block: the only sequence that can break out is
@@ -879,6 +889,18 @@ function cameraCard(c, { withId = true } = {}) {
     card.appendChild(line('Temperature', c.tempValue + '\u00b0' + (c.tempUnit || '')));
   if (typeof c.memUsed === 'number' && typeof c.memSize === 'number')
     card.appendChild(line('SD card', c.memUsed + ' / ' + c.memSize + ' MB'));
+
+  // Photos the camera numbered that never reached the cloud (card-gap.mjs).
+  // Shown whenever there are any, however old: the number is what decides
+  // whether the card is worth the walk, and it does not shrink with time. The
+  // SD card line above says how full the card is; this says what is on it
+  // that is nowhere else.
+  const cg = c.health.cardGap;
+  if (cg && cg.missing > 0) {
+    const v = el('span', null, cg.missing + ' · ' + cg.window);
+    v.title = 'Numbered by the camera, never reached the cloud. Only the card has them.';
+    card.appendChild(line('Never sent', v));
+  }
 
   // Transmission quota, drawn like the battery because it fails the same
   // way: reach the end and the camera goes dark without announcing it. The

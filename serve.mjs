@@ -44,6 +44,7 @@ import {
   fieldScan, allFieldScans, saveFieldScan,
   saveForecast, cachedForecast, distanceM,
 } from './db.mjs';
+import { cardGapsByCamera } from './card-gap.mjs';
 import { fetchForecast, shapeForecast, FORECAST_TTL_MINUTES } from './forecast.mjs';
 import {
   makeIndexCache, makeTileCache, framesForClient, frameById, tileUrl, validId,
@@ -299,7 +300,11 @@ export function standsForClient(db) {
 }
 
 export async function buildState(db, out) {
-  const cameras = allCameras(db).map(cameraFromRow);
+  // What each camera's file counter says never arrived (card-gap.mjs), keyed
+  // by database id, which is what cameraFromRow hands back as `id`.
+  const gaps = cardGapsByCamera(db);
+  const cameras = allCameras(db).map(cameraFromRow)
+    .map(c => ({ ...c, cardGap: gaps[c.id] ?? null }));
   const photos = recentPhotos(db);
   const plan = await readPlan(out);
   const stands = standsForClient(db);

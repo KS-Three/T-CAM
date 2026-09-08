@@ -147,7 +147,14 @@ Say ''
 if ($redacted) {
     Say '  Done. This file is safe to send:' 'Green'
     Say "    $out" 'White'
-    if ($models) { Say "  $($models -join '')".Trim() 'DarkGray' }
+    # Computed first, not written as "...".Trim() inline: a function's arguments
+    # are parsed in argument mode, where a method call on a quoted string is not
+    # called at all - it is appended as literal text, and the line would print
+    # with ".Trim()" stuck on the end.
+    if ($models) {
+        $modelLine = ($models -join ' ').Trim()
+        Say "  $modelLine" 'DarkGray'
+    }
     Say ''
     Say '  Coordinates, ids, SIMs and serials are replaced by their type and' 'DarkGray'
     Say '  format. Camera names are kept so the lines can be told apart.' 'DarkGray'

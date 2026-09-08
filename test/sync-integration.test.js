@@ -58,8 +58,13 @@ const CAMERA = (id, name, lng, lat) => ({
   }],
 });
 
-/** A stand-in for the SpyPoint API, serving two cameras and three photos. */
-async function fakeSpypoint() {
+/**
+ * A stand-in for the SpyPoint API, serving two cameras and three photos.
+ *
+ * `extraCameras` are appended to the account, which is how a model the
+ * extraction has never met gets in front of the real sync.
+ */
+async function fakeSpypoint(extraCameras = []) {
   const photos = {
     cam1: [
       { id: 'p1', originDate: '2026-08-21T07:15:00.000Z', tag: ['deer'] },
@@ -94,6 +99,7 @@ async function fakeSpypoint() {
           // Deliberately close to cam1 — under 2 km, so both must end up sharing
           // one weather location rather than creating two.
           CAMERA('cam2', 'Creek Bottom', -90.656000, 44.125000),
+          ...extraCameras,
         ]);
       }
       if (req.url.endsWith('/photo/all')) {
@@ -320,4 +326,100 @@ test('the sync reports the quota per camera, not one camera for the account', as
   assert.match(stdout, /Photo quota this billing cycle:/);
   assert.match(stdout, /North Ridge\s+\[.{10}\] 2\/100/,
     'the camera, its bar and its own counts');
+});
+
+// --- a model the extraction has never met ----------------------------------
+
+/**
+ * A camera whose document the current extraction cannot read.
+ *
+ * Its battery is a remaining percentage under `power`, its fix is a pair of
+ * bare degrees under `gps`, its quota is worded differently and its last
+ * contact is a heartbeat. Every one of those comes through as null — which,
+ * because NULL means unknown everywhere downstream, is indistinguishable from
+ * a camera that simply did not say. These two tests are about the sync saying
+ * which of the two it is.
+ */
+const NEW_MODEL = {
+  id: 'cam3',
+  config: { name: 'Oak Flat' },
+  power: { remainingPct: 64, chemistry: 'LITHIUM' },
+  gps: { lastFix: { latDeg: 44.126, lonDeg: -90.658 } },
+  reception: { strengthPct: 71 },
+  quota: { used: 12, allowance: 100 },
+  heartbeat: '2026-08-20T12:00:00.000Z',
+  status: {},
+};
+
+test('a sync names the fields a new model sent that it could not read', async t => {
+  const { server, port } = await fakeSpypoint([NEW_MODEL]);
+  t.after(() => server.close());
+  // The report goes to stderr: it is a fault to act on, not part of the running
+  // commentary, and --quiet must not be able to hide it.
+  const { stderr } = await sync(port, tmp(), ['--quiet']);
+
+  assert.match(stderr, /Oak Flat: 5 field\(s\) this camera DID send were not read/,
+    'the camera is NAMED — stderr is often read on its own');
+  assert.match(stderr, /battery \(battery\) — read nothing, but the document mentions:/);
+  assert.match(stderr, /power\.remainingPct = 64/, 'the unread key, named by path');
+  assert.match(stderr, /position \(lat and lng\)/);
+  assert.match(stderr, /gps\.lastFix\.latDeg/);
+
+  // The cameras that DO read correctly say nothing. A warning printed on every
+  // run for every camera is one nobody reads.
+  assert.doesNotMatch(stderr, /North Ridge/);
+  assert.doesNotMatch(stderr, /Creek Bottom/);
+});
+
+test('the blank report says nothing about a field the document never mentioned', async t => {
+  // "This camera did not report a temperature" is true of healthy cameras on
+  // every run. Only the actionable half — a field that WAS sent and was not
+  // read — is worth printing, and the distinction is the whole feature.
+  const { server, port } = await fakeSpypoint([NEW_MODEL]);
+  t.after(() => server.close());
+  const { stderr } = await sync(port, tmp(), ['--quiet']);
+  assert.doesNotMatch(stderr, /nothing in the document mentions it/);
+  assert.doesNotMatch(stderr, /temperature/i, 'the new model sent no temperature; stay quiet');
+});
+
+test('--inspect dumps every model on the account, not just the first', async t => {
+  // The reason to read a shape at all is that SOME model is misread, and a dump
+  // of cameras[0] cannot show you the third camera's document.
+  const { server, port } = await fakeSpypoint([NEW_MODEL]);
+  t.after(() => server.close());
+  const { stdout } = await sync(port, tmp(), ['--inspect']);
+
+  assert.match(stdout, /models on this account: FLEX-M, \(no model reported\)/);
+  assert.match(stdout, /camera fields — FLEX-M \(North Ridge\)/);
+  assert.match(stdout, /camera fields — \(no model reported\) \(Oak Flat\)/,
+    'the model nobody has met is in the dump');
+  assert.match(stdout, /what did not come through — \(no model reported\)/);
+  assert.match(stdout, /power\.remainingPct = 64/);
+});
+
+test('an --inspect dump carries no coordinate, and says so', async t => {
+  // The output exists to be sent to somebody. A fix is the location of a
+  // hunting property, and the previous version printed it and then asked the
+  // reader to trim it by hand.
+  const { server, port } = await fakeSpypoint([NEW_MODEL]);
+  t.after(() => server.close());
+  const { stdout } = await sync(port, tmp(), ['--inspect']);
+
+  assert.doesNotMatch(stdout, /-90\.654321|44\.123456/, 'no FLEX-M fix');
+  assert.doesNotMatch(stdout, /-90\.658|44\.126/, 'no new-model fix');
+  assert.match(stdout, /<number 6dp>/, 'the type and precision survive');
+  assert.match(stdout, /Values are redacted so this can be shared/);
+
+  // The shape itself has to remain readable, or the redaction has eaten the
+  // reason for running it.
+  assert.match(stdout, /status\.model = "FLEX-M"/);
+  assert.match(stdout, /status\.powerSources\[0\]\.percentage = 64/);
+});
+
+test('--inspect --raw prints the true values, and warns that it did', async t => {
+  const { server, port } = await fakeSpypoint([NEW_MODEL]);
+  t.after(() => server.close());
+  const { stdout } = await sync(port, tmp(), ['--inspect', '--raw']);
+  assert.match(stdout, /-90\.654321/, 'the real fix, because it was asked for');
+  assert.match(stdout, /Do not paste it anywhere public/);
 });

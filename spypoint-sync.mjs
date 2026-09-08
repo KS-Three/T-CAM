@@ -21,7 +21,10 @@
  *   --size S       large | medium | small (default large; falls back downward)
  *   --cameras A,B  only cameras whose name/id contains one of these
  *   --dry-run      show what would download; write nothing
- *   --inspect      dump raw field paths of one camera + one photo, then exit
+ *   --inspect      dump the field SHAPE of one camera + one photo, then exit.
+ *                  Coordinates, ids and serials are redacted so the output can
+ *                  be shared; --raw prints the true values instead
+ *   --raw          with --inspect, print real values rather than redacted ones
  *   --quiet        errors and final summary only
  */
 
@@ -34,6 +37,7 @@ import spypoint from './providers/spypoint.mjs';
 import { openDb, upsertCamera, upsertPhoto, addDetection, counts, groupVisits,
   recordCameraDay } from './db.mjs';
 import { cameraDayRow } from './camera-days.mjs';
+import { shapeLines, blanksFor, blankLines } from './camera-shape.mjs';
 import { updateVisitHeadings } from './travel.mjs';
 import { quotaOf, quotaLine } from './quota.mjs';
 // The dashboard is its own module now: it is a page, not a sync concern.
@@ -64,6 +68,10 @@ const OPT = {
   cameras: val('--cameras', '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   dryRun: has('--dry-run'),
   inspect: has('--inspect'),
+  // Only meaningful with --inspect. The dump is redacted by default because
+  // its purpose is to be sent to somebody; asking for the true values is a
+  // deliberate act.
+  raw: has('--raw'),
   quiet: has('--quiet'),
   provider: val('--provider', 'spypoint'),
   account: val('--account', null),
@@ -113,31 +121,15 @@ async function download(url, dest) {
 
 // The camera/photo schemas are undocumented (both community clients pass the
 // JSON through untouched), so extraction hunts by key name instead of
-// hardcoding paths. Run --inspect to see what your account actually returns.
-function* walk(obj, prefix = '') {
-  if (obj === null || typeof obj !== 'object') {
-    if (prefix) yield [prefix, obj];
-    return;
-  }
-  if (Array.isArray(obj)) {
-    if (prefix && obj.length > 0 && obj.every(x => typeof x === 'number')) yield [prefix, obj];
-    for (let i = 0; i < obj.length; i++) yield* walk(obj[i], `${prefix}[${i}]`);
-    return;
-  }
-  for (const [k, v] of Object.entries(obj)) yield* walk(v, prefix ? `${prefix}.${k}` : k);
-}
+// hardcoding paths. Run --inspect to see what your account actually returns;
+// `walk` and the redaction it is printed through live in camera-shape.mjs.
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const first = a => (Array.isArray(a) ? a[0] : undefined);
 
 function dumpPaths(label, obj) {
   console.log(`\n=== ${label} ===`);
-  if (!obj) { console.log('  (nothing returned)'); return; }
-  for (const [p, v] of walk(obj)) {
-    let s = JSON.stringify(v);
-    if (s && s.length > 80) s = s.slice(0, 77) + '...';
-    console.log(`  ${p} = ${s}`);
-  }
+  for (const line of shapeLines(obj, { raw: OPT.raw })) console.log(`  ${line}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +187,28 @@ async function main() {
   log(`${cameras.length} ${provider.label} camera(s) on the account.`);
 
   if (OPT.inspect) {
-    dumpPaths('camera[0] raw fields', cameras[0]);
+    // One camera per MODEL, rather than cameras[0] alone. The reason to read a
+    // shape at all is that some model is not being read correctly, and a dump
+    // of the first camera cannot show you the third one's document — which is
+    // exactly the case a new model on an existing account arrives as.
+    const byModel = new Map();
+    for (const cam of cameras) {
+      const row = provider.normalizeCamera(cam);
+      const key = row.model ?? '(no model reported)';
+      if (!byModel.has(key)) byModel.set(key, { cam, row });
+    }
+    console.log(`\n  models on this account: ${[...byModel.keys()].join(', ')}`);
+    for (const [model, { cam, row }] of byModel) {
+      dumpPaths(`camera fields — ${model} (${row.name})`, cam);
+      // The dump says what arrived; this says what the normalizer took out of
+      // it, which is the other half of the same question and the half that
+      // names a bug.
+      const blanks = blanksFor(cam, row, { raw: OPT.raw });
+      console.log(`\n=== what did not come through — ${model} (${row.name}) ===`);
+      const lines = blankLines(blanks);
+      if (!lines.length) console.log('  every field was read');
+      for (const line of lines) console.log(`  ${line}`);
+    }
     // An empty photo list is ambiguous on its own: it could mean the account
     // genuinely holds no photos, or that this query is shaped wrong. Dump the
     // response envelope for EVERY camera so the two can be told apart.
@@ -210,13 +223,27 @@ async function main() {
       for (const k of ['countPhotos', 'count', 'total', 'totalPhotos']) {
         if (page?.[k] !== undefined) console.log(`  ${k}: ${JSON.stringify(page[k])}`);
       }
-      if (photos.length) { dumpPaths(`photo[0] raw fields (${label})`, photos[0]); break; }
+      if (photos.length) { dumpPaths(`photo fields (${label})`, photos[0]); break; }
     }
-    console.log('\n(Trim anything you consider sensitive before sharing this output.)');
+    if (OPT.raw) {
+      console.log('\n  --raw: these are the REAL values, GPS coordinates included.');
+      console.log('  This output is the location of your cameras. Do not paste it anywhere public.');
+    } else {
+      console.log('\n  Values are redacted so this can be shared: coordinates, ids, SIMs and');
+      console.log('  serials are shown as their type and format ("N44 7.407360" as "A## #.######"),');
+      console.log('  which is what diagnosing a shape needs and carries no location.');
+      console.log('  Camera names are kept, so the lines can be told apart.');
+      console.log('  Pass --raw to see the true values — for your own eyes.');
+    }
     return;
   }
 
   const rows = cameras.map(c => ({ ...provider.normalizeCamera(c), provider: provider.id }));
+  // The document each row was read out of, so a blank field can be checked
+  // against what the camera actually sent. Keyed by the row object rather than
+  // by index, which stays correct however the list is filtered downstream.
+  const rawFor = new WeakMap();
+  cameras.forEach((c, i) => rawFor.set(rows[i], c));
   const selected = OPT.cameras.length
     ? rows.filter(r => OPT.cameras.some(f =>
         r.name.toLowerCase().includes(f) || r.id.toLowerCase().includes(f)))
@@ -233,6 +260,25 @@ async function main() {
         `${r.signalType ? ` ${r.signalType}` : ''}` +
         `  temp=${r.tempValue !== null ? `${r.tempValue}°${r.tempUnit ?? ''}` : '?'}` +
         `  last=${ageTxt}${mark}`);
+    // A field that came through blank while the document appears to carry it
+    // is a normalizer that has not met this model — not a quiet camera. Both
+    // look identical afterwards: NULL means unknown everywhere downstream, so
+    // a misread field and an unreported one produce the same gap on the card
+    // and the same silence in the health rules. Say it here, on the run that
+    // fetched it, instead of leaving it to be noticed weeks later.
+    //
+    // Only the half with candidates is printed. "This camera did not report a
+    // temperature" is true of healthy cameras on every run, and a warning that
+    // is always on is one nobody reads.
+    const unread = blanksFor(rawFor.get(r), r).filter(b => b.candidates.length);
+    if (unread.length) {
+      // Named, not "this camera": the report goes to stderr, which is often
+      // read on its own — in a log, in a scheduled run's mail — where the line
+      // it would otherwise be sitting under is nowhere to be seen.
+      warn(`      ${r.name}: ${unread.length} field(s) this camera DID send were `
+        + `not read — run --inspect for the shape:`);
+      for (const line of blankLines(unread)) warn(`        ${line}`);
+    }
   }
   // Quota is metered PER CAMERA. This was one line reporting whichever
   // camera happened to come back first, labelled as though it were the

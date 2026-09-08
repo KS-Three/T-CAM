@@ -112,3 +112,76 @@ export const ODD_SHAPE = {
   heartbeat: '2026-09-01T11:22:33.000Z',
   status: {},
 };
+
+// A FLEX-M2, the model that joined Kent's account on 2026-09-07. Rebuilt from a
+// REDACTED --inspect dump of the real camera: the shape is exactly what SpyPoint
+// sent, and every identifying value is invented — the coordinates sit on the
+// repo's 44.12 / -90.65 cluster, the ids and serials are made up.
+//
+// It reads correctly end to end, which is the point worth pinning: the fear was
+// that a new model would come through blank, and it does not. What it does
+// carry are two things the FLEX-M did not.
+//
+//   - `powerSources[0].type` is "UNK" and there is NO `status.batteryType` at
+//     all, so the battery-source chain lands on the vendor's placeholder. That
+//     must normalize to null: "UNK" is the camera saying it does not know, and
+//     storing it as a chemistry is exactly the invented value
+//     providers/README.md forbids.
+//   - The fix carries FOURTEEN and FIFTEEN decimal places where the FLEX-M
+//     sends six. That is float noise, not precision, and it is kept as sent —
+//     rounding on ingest would quietly alter what the vendor reported.
+export const FLEX_M2 = {
+  activationDate: '2026-09-07T21:28:00.809Z',
+  config: {
+    name: 'FLEX-M2-Z24J', gps: true, quality: 'normal',
+    // multiShot 1, where the FLEX-M is set to 2. Visit grouping reads the
+    // timestamps rather than assuming a burst size, so this is recorded as an
+    // observed difference and not as something to handle.
+    multiShot: 1, motionDelay: 10, temperatureUnit: 'F',
+  },
+  creationDate: '2026-09-07T21:28:00.809Z',
+  dataMatrixKey: 'EXAMPLE00XY',
+  hdSince: '2026-09-07T21:27:04.342Z',
+  id: 'eeeeeeeeeeeeeeeeeeeeeeee',
+  status: {
+    batteries: [94],
+    activePowerSource: 0,
+    powerSources: [{
+      location: 'TRAY1', type: 'UNK', percent: 94, percentage: 94, voltage: 12205,
+      energyNow: 34, energyFull: 36, energyDesign: 36, level: 'high',
+    }],
+    capability: { hdRequest: true, soe: true, sos: true, video: true, edgeAI: false },
+    coordinates: [{
+      dateTime: '2026-09-08T03:12:35.000Z',
+      latitude: 'N44 7.4074', longitude: 'W90 39.2593',
+      position: { type: 'Point', coordinates: [-90.65432109876543, 44.12345678901234] },
+      geohash: 'exampl3g30ha',
+    }],
+    installDate: '2026-09-07T17:10:00.000Z',
+    lastUpdate: '2026-09-08T09:43:13.000Z',
+    memory: { size: 7893, used: 2614 },
+    model: 'FLEX-M2',
+    modemFirmware: 'EG915QNALGR01A04M04_A0.003.A0.003',
+    signal: {
+      bar: 5, dBm: -67, mcc: 310, mnc: 410, type: 'LTE',
+      processed: { percentage: 100, bar: 5, lowSignal: false, level: 'high' },
+    },
+    sim: '00000000000000000000',
+    temperature: { unit: 'F', value: 63 },
+    version: '1.0.1',
+    batteryLevels: ['high'],
+  },
+  ucid: '000000000000000',
+  user: 'ffffffffffffffffffffffff',
+  isCellular: true,
+  subscriptions: [{
+    id: '', cameraId: 'eeeeeeeeeeeeeeeeeeeeeeee', paymentStatus: 'active', isActive: true,
+    plan: { name: 'Free', id: 'Free', isActive: true, isFree: true, photoCountPerMonth: 100 },
+    currency: 'USD', externalId: null, paymentFrequency: 'month_by_month',
+    isFree: true, isTrial: false,
+    startDateBillingCycle: '2026-09-01T00:00:00.000Z',
+    endDateBillingCycle: '2026-09-30T23:59:59.999Z',
+    monthEndBillingCycle: '2026-09-30T23:59:59.999Z',
+    photoCount: 18, photoLimit: 100, edgeAI: false,
+  }],
+};

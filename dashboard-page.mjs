@@ -38,7 +38,13 @@ import { HASH_BITS } from './phash.mjs';
 
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
-const fmtLoc = r => (r.lat !== null && r.lng !== null ? `${r.lat},${r.lng}` : '?');
+// Six decimals is about 11 cm, and the camera card has always shown it that
+// way. The FLEX-M2 sends its fix at FOURTEEN, so the sync's own line read
+// loc=44.12345678901234,-90.65432109876544 - float noise printed as though it
+// were precision. Guarded with isNum rather than a null check, because
+// Number(null) is 0 and 0,0 is a real place in the Atlantic.
+const fmtLoc = r => (isNum(r.lat) && isNum(r.lng)
+  ? `${r.lat.toFixed(6)},${r.lng.toFixed(6)}` : '?');
 
 const fmtPct = (v, suffix = '%') => (isNum(v) ? `${v}${suffix}` : '?');
 

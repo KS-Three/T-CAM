@@ -72,7 +72,8 @@ are never written to disk, never logged, and never stored in this repo.
 | --- | --- |
 | `node spypoint-sync.mjs` | Full sync: cameras, photos, dashboard |
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
-| `node spypoint-sync.mjs --inspect` | Dumps the raw API field names for one camera and one photo |
+| `node spypoint-sync.mjs --inspect` | Dumps the field shape of one camera per model, and one photo. Values are redacted so the output can be sent to someone |
+| `node spypoint-sync.mjs --inspect --raw` | The same, with the true values — including your GPS coordinates |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
 | `node serve.mjs` | Serves everything from the database at http://127.0.0.1:8787 |
 | `node serve.mjs --open` | The same, and opens a browser |
@@ -105,6 +106,7 @@ being "Dan's place", on the map and in the records underneath.
 | `--limit N` | Photos per API request (default 100) |
 | `--size S` | `large` (default) / `medium` / `small`; falls back downward |
 | `--cameras A,B` | Only cameras whose name or id contains one of these |
+| `--raw` | With `--inspect`, print real values instead of redacted ones |
 | `--quiet` | Errors and final summary only |
 
 ## Camera brands
@@ -597,6 +599,68 @@ Because the API is undocumented, field extraction reads the known paths first
 and falls back to hunting by key name, keeping the raw JSON alongside so
 nothing is lost when a camera model differs. Run `--inspect` to see exactly
 what your account returns.
+
+### When a new camera comes through blank
+
+Hang a model this tool has never met and its document may be shaped differently
+enough that the extraction cannot read it. The fields it misses arrive as
+`NULL`, which everywhere downstream means *unknown* — so a misread camera and a
+camera that genuinely reports nothing look identical on the card, on the pin
+and in the health rules. That is a real gap and nothing used to say it was
+there.
+
+The sync now says it, on the run that fetched it:
+
+```
+  Oak Flat  model=?  loc=?
+      battery=?  signal=?  temp=?  last=?
+      Oak Flat: 5 field(s) this camera DID send were not read — run --inspect for the shape:
+        battery (battery) — read nothing, but the document mentions:
+            power.remainingPct = 64
+        photo quota (photoCount and photoLimit) — read nothing, but the document mentions:
+            quota.used = 12
+            quota.allowance = 100
+```
+
+It never claims to know which key is the right one — guessing that is how a
+wrong value gets written down as a fact. It says the document mentions the
+thing and the sync took nothing, which is a bug report you can act on. A field
+**nothing** in the document mentions is a camera that did not report it, which
+is a different fact needing the opposite response, and the two are never
+collapsed into one line. Only the first kind is printed on a normal run: "this
+camera did not report a temperature" is true of healthy cameras every time, and
+a warning that is always on is one nobody reads.
+
+It goes to stderr and survives `--quiet`, because it is a fault rather than
+commentary.
+
+### An `--inspect` dump is safe to send
+
+The next step after that warning is showing somebody the shape — and a camera
+document contains a GPS fix, which is the location of your cameras. `--inspect`
+used to print all of it and then ask you to trim it by hand.
+
+It now redacts by default. Coordinates, ids, SIMs and serials keep their type,
+their precision and, for strings, their **format** — `"N44 7.407360"` prints as
+`"A## #.######"` — which is what diagnosing a shape needs and carries no
+location. Everything else is untouched, because a battery percentage redacted
+would defeat the point:
+
+```
+status.model = "FLEX-M"
+status.powerSources[0].percentage = 20
+status.coordinates[0].dateTime = "2025-11-28T15:00:42.000Z"
+status.coordinates[0].position.coordinates = [<number 6dp>, <number 6dp>]
+status.coordinates[0].geohash = "AaAaAaAaAaAaAa"
+```
+
+The fix's date survives — it is not a place, and it is what says which of
+several fixes is newest. Camera names survive too, so the lines can be told
+apart. `--raw` prints the true values for your own eyes, and says so loudly.
+
+One camera **per model** is dumped rather than the first camera on the account.
+The reason to read a shape at all is that some model is being misread, and a
+dump of the first camera cannot show you the third one's document.
 
 ### Coordinates are `[longitude, latitude]`
 

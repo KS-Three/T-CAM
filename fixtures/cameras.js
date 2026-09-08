@@ -87,3 +87,28 @@ export const PHOTO = {
   medium: { host: 'example-cdn.invalid', path: 'md/photo.jpg', width: 800 },
   large: { host: 'example-cdn.invalid', path: 'lg/photo.jpg', width: 1920 },
 };
+
+// A model whose document the current extraction CANNOT read: the battery is a
+// remaining percentage under its own `power` object, the fix is a pair of bare
+// `gps` numbers, the quota is worded differently and the last contact is called
+// something else. Nothing here is a guess at a real SpyPoint model — it is a
+// deliberately awkward shape, and its job is to prove that camera-shape.mjs
+// reports the misread rather than letting it pass as a quiet camera.
+//
+// Keep it defeating the normalizer. If a future provider learns to read these
+// keys, this fixture stops testing anything and should be made awkward again
+// rather than deleted — the case it covers (a model nobody has met) never
+// stops existing.
+export const ODD_SHAPE = {
+  id: 'eeeeeeeeeeeeeeeeeeeeeeee',
+  config: { name: 'New Model' },
+  power: { remainingPct: 64, chemistry: 'LITHIUM' },
+  // Bare numbers, no `position`, no DMS, no geohash — and named `lon`, which
+  // the position probe has to reach or the report would call this camera
+  // simply silent about where it is.
+  gps: { lastFix: { latDeg: 44.126, lonDeg: -90.658 } },
+  reception: { strengthPct: 71 },
+  quota: { used: 12, allowance: 100 },
+  heartbeat: '2026-09-01T11:22:33.000Z',
+  status: {},
+};

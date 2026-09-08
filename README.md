@@ -72,8 +72,9 @@ are never written to disk, never logged, and never stored in this repo.
 | --- | --- |
 | `node spypoint-sync.mjs` | Full sync: cameras, photos, dashboard |
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
-| `node spypoint-sync.mjs --inspect > spypoint-data\shape.txt` | Dumps the field shape of one camera per model, and one photo. Values are redacted so the output can be sent to someone |
-| `node spypoint-sync.mjs --inspect --raw` | The same, with the true values — including your GPS coordinates. Keep it out of the repo |
+| Double-click `camera-shape.cmd` | The easiest way to get a shareable dump: signs you in, writes `spypoint-data\shape.txt`, and checks its own output is redacted |
+| `node spypoint-sync.mjs --inspect > spypoint-data\shape.txt` | The same by hand. Dumps the field shape of one camera per model, and one photo |
+| `node spypoint-sync.mjs --inspect --raw` | The true values — including your GPS coordinates. Keep it out of the repo |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
 | `node serve.mjs` | Serves everything from the database at http://127.0.0.1:8787 |
 | `node serve.mjs --open` | The same, and opens a browser |
@@ -658,7 +659,17 @@ The fix's date survives — it is not a place, and it is what says which of
 several fixes is newest. Camera names survive too, so the lines can be told
 apart. `--raw` prints the true values for your own eyes, and says so loudly.
 
-**Write the dump into `spypoint-data\`**, which is gitignored wholesale:
+**The easy way is `camera-shape.cmd`** — double-click it. It signs you in with
+the same saved login the launcher uses, writes the dump to the safe path, and
+then reads its own output back to tell you in one line whether the file can be
+sent. It exists because getting this by hand went wrong four ways in one
+sitting: run from the wrong directory and an old copy of the script answers;
+paste the example credentials out of the instructions and a rejected login
+writes no dump at all; redirect into the repo root, which is not gitignored;
+and afterwards none of those is distinguishable, because all three leave a file
+with no dump in it.
+
+By hand, **write the dump into `spypoint-data\`**, which is gitignored wholesale:
 
 ```powershell
 node --disable-warning=ExperimentalWarning spypoint-sync.mjs --inspect *> spypoint-data\shape.txt

@@ -14,6 +14,15 @@ cameras.raw.json
 cameras.csv
 photos.jsonl
 dashboard.html
+# --inspect dumps. Redacted by default, but --raw prints the real GPS fix, and
+# the redirect target is whatever the person typed — so the obvious names are
+# caught here even when the file lands in the repo root. Write them into
+# spypoint-data/ instead, which is excluded wholesale above and therefore
+# covers a name nobody has thought of yet.
+shape.txt
+inspect.txt
+inspect-*.txt
+*.inspect.txt
 trailcam.db
 trailcam.db-wal
 trailcam.db-shm

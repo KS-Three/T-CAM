@@ -72,8 +72,8 @@ are never written to disk, never logged, and never stored in this repo.
 | --- | --- |
 | `node spypoint-sync.mjs` | Full sync: cameras, photos, dashboard |
 | `node spypoint-sync.mjs --dry-run` | Lists cameras and what *would* download. Writes nothing |
-| `node spypoint-sync.mjs --inspect` | Dumps the field shape of one camera per model, and one photo. Values are redacted so the output can be sent to someone |
-| `node spypoint-sync.mjs --inspect --raw` | The same, with the true values — including your GPS coordinates |
+| `node spypoint-sync.mjs --inspect > spypoint-data\shape.txt` | Dumps the field shape of one camera per model, and one photo. Values are redacted so the output can be sent to someone |
+| `node spypoint-sync.mjs --inspect --raw` | The same, with the true values — including your GPS coordinates. Keep it out of the repo |
 | `node hunt-planner.mjs` | Ranks the next two weeks of sits at your camera locations |
 | `node serve.mjs` | Serves everything from the database at http://127.0.0.1:8787 |
 | `node serve.mjs --open` | The same, and opens a browser |
@@ -657,6 +657,29 @@ status.coordinates[0].geohash = "AaAaAaAaAaAaAa"
 The fix's date survives — it is not a place, and it is what says which of
 several fixes is newest. Camera names survive too, so the lines can be told
 apart. `--raw` prints the true values for your own eyes, and says so loudly.
+
+**Write the dump into `spypoint-data\`**, which is gitignored wholesale:
+
+```powershell
+node --disable-warning=ExperimentalWarning spypoint-sync.mjs --inspect *> spypoint-data\shape.txt
+```
+
+`*>` catches stderr too, so a camera that also trips the blank-field warning
+above puts that in the same file. The repo root is **not** a safe place for it:
+this repository is public, a `--raw` dump is the location of your cameras, and
+one `git add -A` would commit it. The obvious names are gitignored as a
+backstop, but `spypoint-data/` is the rule that also covers a filename nobody
+has thought of yet.
+
+Check you ran the redacting version before sending it anywhere:
+
+```powershell
+Select-String -Path spypoint-data\shape.txt -Pattern "Values are redacted"
+```
+
+That line comes only from the redacting code. No match means either the dump
+never ran — a rejected login writes nothing but an error — or it came from an
+older copy of this script, in which case the file holds real coordinates.
 
 One camera **per model** is dumped rather than the first camera on the account.
 The reason to read a shape at all is that some model is being misread, and a

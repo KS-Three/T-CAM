@@ -72,6 +72,26 @@ function findFirst(obj, keyRe, pred = () => true) {
 const isNum = v => typeof v === 'number' && Number.isFinite(v);
 const first = a => (Array.isArray(a) ? a[0] : undefined);
 
+// A vendor placeholder standing in for "I do not know" is not a value.
+//
+// providers/README.md: anything a provider cannot supply is null, never a
+// placeholder, because the dashboard and the health rules distinguish zero
+// from unknown and a fake value corrupts both. The FLEX-M2 reports its battery
+// tray as type "UNK" and carries no status.batteryType at all, so without this
+// every one of those cameras records a battery chemistry called UNK - a fact
+// that is really the camera admitting it has none, stored, exported to CSV and
+// served over the API as though it were one.
+//
+// Deliberately short. "NA" is left out: a battery chemistry really could be
+// written that way one day, and turning a value into a null is the error that
+// cannot be noticed afterwards.
+const UNKNOWN_WORDS = new Set(['unk', 'unknown', 'n/a']);
+const word = v => {
+  if (typeof v !== 'string') return v ?? null;
+  const s = v.trim();
+  return s === '' || UNKNOWN_WORDS.has(s.toLowerCase()) ? null : s;
+};
+
 /**
  * The newest entry of a list that carries `dateTime` stamps.
  *
@@ -125,23 +145,23 @@ function cameraSummary(cam) {
     name: cam?.config?.name
       ?? findFirst(cam, /^name$/i, v => typeof v === 'string' && v.length > 0)?.value
       ?? String(cam?.id ?? 'camera'),
-    model: st.model ?? findFirst(cam, /^model$/i, v => typeof v === 'string')?.value ?? null,
+    model: word(st.model ?? findFirst(cam, /^model$/i, v => typeof v === 'string')?.value ?? null),
     lat: geo ? pos[1] : findFirst(cam, /^lat(itude)?$/i, isNum)?.value ?? null,
     lng: geo ? pos[0] : findFirst(cam, /^(lng|lon|long|longitude)$/i, isNum)?.value ?? null,
     gpsFix: gps?.dateTime ?? null,
     battery: power?.percentage ?? first(st.batteries)
       ?? findFirst(cam, /batter/i, isNum)?.value ?? null,
-    batteryLevel: power?.level ?? first(st.batteryLevels) ?? null,
-    batterySource: power?.type ?? st.batteryType ?? null,
+    batteryLevel: word(power?.level ?? first(st.batteryLevels) ?? null),
+    batterySource: word(power?.type ?? st.batteryType ?? null),
     signal: sig.processed?.percentage ?? null,
     signalBars: sig.processed?.bar ?? sig.bar ?? null,
-    signalLevel: sig.processed?.level ?? null,
-    signalType: sig.type ?? null,
+    signalLevel: word(sig.processed?.level ?? null),
+    signalType: word(sig.type ?? null),
     tempValue: st.temperature?.value ?? null,
-    tempUnit: st.temperature?.unit ?? null,
+    tempUnit: word(st.temperature?.unit ?? null),
     memUsed: st.memory?.used ?? null,
     memSize: st.memory?.size ?? null,
-    plan: sub?.plan?.name ?? null,
+    plan: word(sub?.plan?.name ?? null),
     photoCount: sub?.photoCount ?? null,
     photoLimit: sub?.photoLimit ?? sub?.plan?.photoCountPerMonth ?? null,
     // The billing cycle the counts above are measured against. Without these

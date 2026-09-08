@@ -28,6 +28,15 @@ Every provider must produce this shape. Anything it cannot supply is `null` —
 never invented, never a placeholder, because the dashboard and the health rules
 distinguish "zero" from "unknown" and a fake value corrupts both.
 
+**That includes a placeholder the vendor sends you.** SpyPoint's FLEX-M2 reports
+its battery tray as type `"UNK"` and carries no `status.batteryType` at all;
+stored as given, every one of those cameras records a battery chemistry called
+UNK, in the database, the CSV export and the API. `"UNK"`, `"UNKNOWN"`, `"N/A"`
+and a blank string are the camera admitting it does not know, and they normalize
+to `null` like anything else it cannot supply. Keep such a list short: turning a
+real value into a null is the error nobody can spot afterwards, while the
+reverse shows up as an odd word on a card.
+
 | Field | Type | Notes |
 | --- | --- | --- |
 | `id` | string | Unique within the provider |
@@ -65,5 +74,5 @@ distinguish "zero" from "unknown" and a fake value corrupts both.
 
 | Provider | State |
 | --- | --- |
-| `spypoint` | Working. Verified against a real 4-camera FLEX-M account |
+| `spypoint` | Working. Verified against a real 6-camera account running FLEX-M and FLEX-M2 |
 | `moultrie` | **Not implemented.** See `moultrie.mjs` for what is needed and why |

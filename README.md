@@ -120,7 +120,7 @@ label on each card.
 
 | Provider | State |
 | --- | --- |
-| `spypoint` | **Working.** Verified against a real 4-camera FLEX-M account |
+| `spypoint` | **Working.** Verified against a real 6-camera account running FLEX-M and FLEX-M2 |
 | `moultrie` | **Not implemented** — see below |
 
 `providers/README.md` documents the interface and how to add a brand.

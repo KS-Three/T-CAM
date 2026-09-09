@@ -89,6 +89,22 @@ test('dayOf refuses an unreadable timestamp rather than inventing a day', () => 
   assert.equal(dayOf(null), null);
 });
 
+test("the day is the camera's solar day, so an evening is not filed under tomorrow", () => {
+  // 20:23 in Wisconsin on the 8th is 01:23 UTC on the 9th. Binned by UTC,
+  // every dusk visit and every evening sync lands on the following day. At
+  // 90.654 W solar midnight is 06:02:37 UTC, and that is where the day turns.
+  const lng = -90.654321;
+  assert.equal(dayOf('2026-09-09T01:23:00Z', lng), '2026-09-08');
+  assert.equal(dayOf('2026-09-09T06:02:00Z', lng), '2026-09-08');
+  assert.equal(dayOf('2026-09-09T06:03:00Z', lng), '2026-09-09');
+  // The row the sync stores says the same, from the same instant.
+  const row = cameraDayRow(cam({ lng }), { now: Date.parse('2026-09-09T01:23:00Z') });
+  assert.equal(row.day, '2026-09-08');
+  assert.equal(row.observedAt, '2026-09-09T01:23:00.000Z');
+  // With no longitude it falls back to UTC rather than inventing an offset.
+  assert.equal(dayOf('2026-09-09T01:23:00Z', null), '2026-09-09');
+});
+
 // ---------------------------------------------------------------------------
 // A gap is not a live day
 // ---------------------------------------------------------------------------

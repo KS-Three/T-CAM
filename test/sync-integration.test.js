@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { dayOf } from '../camera-days.mjs';
 
 const run = promisify(execFile);
 // fileURLToPath, NOT new URL(...).pathname: on Windows the pathname is
@@ -292,10 +293,22 @@ test('a sync records whether each camera was watching that day', async t => {
   await sync(port, out);
 
   const db = new DatabaseSync(path.join(out, 'trailcam.db'));
-  const days = db.prepare('SELECT * FROM camera_days ORDER BY camera_id').all();
+  const days = db.prepare(`
+    SELECT cd.*, c.lng FROM camera_days cd JOIN cameras c ON c.id = cd.camera_id
+    ORDER BY cd.camera_id`).all();
   assert.equal(days.length, 2, 'one row per camera, for today');
-  const today = new Date().toISOString().slice(0, 10);
-  assert.deepEqual(days.map(d => d.day), [today, today]);
+  // "Today" is the camera's SOLAR day at its own longitude, derived the way the
+  // writer derives it (dayOf, design.md §9) - not the UTC day. The stand-in
+  // sits near 90.65 W, six hours behind UTC, so from 19:00 CDT to about 01:00
+  // the two disagree, and comparing against the UTC day here made this test
+  // fail every evening and pass every morning. observed_at is the very instant
+  // the writer binned, so deriving from it cannot straddle midnight between the
+  // sync finishing and this line running either.
+  for (const d of days) {
+    assert.ok(Date.now() - Date.parse(d.observed_at) < 60_000, 'observed just now');
+    assert.equal(d.day, dayOf(d.observed_at, d.lng),
+      `${d.camera_id}: the solar day of the observation, at its longitude`);
+  }
 
   // Both stand-in cameras last checked in well over the silence threshold, so
   // both correctly log as silent rather than live. That is the whole point in

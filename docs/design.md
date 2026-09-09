@@ -467,6 +467,30 @@ makes is about the GPS columns, and once a pin is corrected the map is not
 drawing them — without that line it tells somebody whose pin is deliberately
 elsewhere that nothing explains a wrong pin.
 
+### A camera's day is its solar day, not the UTC day (settled 2026-08-31, written down 2026-09-08)
+
+`camera_days.day`, and every other per-day bin the sightings use, is the
+calendar day at the camera's own longitude: solar local time, `lng / 15`
+hours from UTC (`dayOf` in `camera-days.mjs`). Not the UTC day, and not a
+named timezone.
+
+- **Not UTC**, because in Wisconsin 19:00 is already tomorrow in UTC. A dusk
+  visit at 20:00 is about 01:00 UTC the next day, so a UTC boundary files every
+  evening under the following morning, and "9 of 10 days" quietly counts each
+  evening against the wrong day. That is every dusk sighting, not an edge case.
+- **Not a timezone database**, because there is none in a dependency-free
+  program, the sun is what the deer and the light bands are keyed to, and an
+  hour of DST error cannot move a dawn or a dusk across a day boundary the way
+  six hours of UTC offset does.
+- **No longitude, UTC.** Without a coordinate `dayOf` falls back to the UTC
+  day rather than inventing an offset, and says nothing it cannot support.
+
+Anything that reads a stored day, or checks one, must derive "today" the same
+way - `dayOf(instant, lng)`, never `toISOString().slice(0, 10)`. The
+end-to-end sync test did the latter and failed on every run after 19:00 CDT
+while passing every morning; the writer was right and the test was fixed. A
+second copy of the rule is how the check and the thing it checks drift.
+
 ## 10. Build order: evolve in place, never break it
 
 Each step ships working:

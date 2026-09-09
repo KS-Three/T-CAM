@@ -203,6 +203,37 @@ export const mapStyles = `
          box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: pointer; }
   .pin.ok { background: var(--ok); } .pin.warn { background: var(--warn); }
   .pin.bad { background: var(--bad); }
+  /* Deer activity, drawn as a halo BEHIND the pin rather than as the pin's own
+     colour. The pin colour is the camera's health and is not for sale: a camera
+     that is busy and nearly out of battery has to be able to say both.
+
+     A WHITE RING with a shadow, exactly like .pin, because that is what makes a
+     mark read over aerial photography. The first cut was a tinted disc at 34%
+     opacity: it measured 62px across in the DOM and was invisible on the
+     screenshot, dark green over dark green. The tint now rides in a child so
+     the ring can stay opaque while the fill stays translucent: an opacity on
+     the parent would fade the ring along with it. */
+  .heat { position: absolute; border-radius: 50%; transform: translate(-50%, -50%);
+          border: 2px solid rgba(255,255,255,.92); overflow: hidden;
+          box-shadow: 0 0 6px rgba(0,0,0,.55); pointer-events: none; }
+  .heat > i { position: absolute; inset: 0; background: var(--accent); opacity: .45; }
+  /* Too few hours to support a rate. A dashed empty ring: an empty circle reads
+     as "we do not know", where a small disc would read as "quiet here". */
+  .heat.thin { border-style: dashed; box-shadow: 0 0 5px rgba(0,0,0,.45); }
+  /* Below the top bar, which is FIXED at z-index 20 while #map is a stacking
+     context at z-index 0 — so nothing in here can ever be drawn over it, and a
+     bar at top:10px is simply hidden. Same 52px the tool tree uses. */
+  #heatbar { position: absolute; left: 50%; top: 52px; transform: translateX(-50%);
+             z-index: 8; display: flex; gap: 8px; align-items: center;
+             background: var(--panel); border: 1px solid var(--line);
+             border-radius: 999px; padding: 5px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.3);
+             font: 500 12px/1 ui-sans-serif, system-ui, sans-serif; color: var(--muted); }
+  #heatbar select { font: 500 12px/1 ui-sans-serif, system-ui, sans-serif;
+                    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+                    border-radius: 6px; padding: 4px 6px; }
+  #heatbar .heatmax { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #heatbar button.x { border: 0; background: none; color: var(--muted); cursor: pointer;
+                      font-size: 15px; line-height: 1; padding: 0 2px; }
   .stand.sel { outline: 3px solid var(--warn); outline-offset: 2px; }
   .maptools button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   #map.placing { cursor: crosshair; }
@@ -827,10 +858,18 @@ export const mapMarkup = String.raw`
             <button id="measureBtn" type="button">Measure</button>
             <button id="whoOwns" type="button">Who owns this?</button>
             <button id="findOwner" type="button">Find an owner</button>
+            <button id="heatBtn" type="button">Deer activity</button>
           </div>
         </div>
         <div class="tt-leaf"><button id="offlineBtn" type="button">Save offline</button></div>
       </div>
+    </div>
+    <div id="heatbar" hidden>
+      <span>Deer per 100 h</span>
+      <select id="heatCond" title="Which conditions to count"></select>
+      <select id="heatSrc" title="Whose tags to count"></select>
+      <span class="heatmax" id="heatMax"></span>
+      <button class="x" id="heatOff" type="button" title="Stop shading">&times;</button>
     </div>
     <div id="view3d" hidden>
       <canvas id="gl3d"></canvas>
@@ -892,6 +931,16 @@ const OVERLAYS = D.tiles.overlays;
 // localStorage, and a live layer that comes back on by itself at every launch
 // would quietly fetch a reel every time the map opened.
 let radarOn = false;
+// Deer activity shading. Declared HERE rather than beside the rest of its code
+// at the foot of the script: draw() reads heatOn and runs long before that
+// point, and a let-binding read from inside its dead zone throws rather than
+// reading undefined, which would take the whole map down and not just the
+// shading. (No backtick may appear in this template. That is what broke it the
+// first time this comment was written.)
+let heatOn = false;
+let HEAT = null;                      // the /api/patterns payload
+let heatSource = 'camera';
+let heatCondKey = 'all';              // 'all', or 'axis:bucket'
 let RADAR = null;                // the served frame list, or null
 let radarIdx = 0;                // which frame is drawn
 let radarNewer = 0;              // frames that arrived while scrubbed back
@@ -1089,6 +1138,10 @@ function draw() {
   for (const c of located) {
     const x = projX(c.lng, zoom) - left, y = projY(c.lat, zoom) - top;
     if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
+    if (heatOn) {
+      const halo = heatHalo(c.id, x, y);
+      if (halo) pinsEl.appendChild(halo);
+    }
     const lab = el('div', 'plabel', c.name);
     lab.style.left = x + 'px'; lab.style.top = y + 'px';
     const p = el('div', 'pin ' + c.health.level);
@@ -5696,4 +5749,134 @@ wxChip.onclick = async ev => {
 if (D.live) {
   wxEnsure().then(wxPaintChip).catch(() => { /* no forecast, no strip */ });
 }
+
+// ---------------------------------------------------------------------------
+// Deer activity, on the pins
+// ---------------------------------------------------------------------------
+//
+// The same numbers the statistics board draws, shaded onto the map, because
+// "which camera" is a question about ground and belongs on ground.
+//
+// Two decisions worth keeping:
+//
+//   The halo is BEHIND the pin, never the pin itself. A pin's colour is the
+//   camera's health, and a camera that is busy AND nearly out of battery has to
+//   be able to say both things at once.
+//
+//   Area, not radius, carries the rate. Radius-proportional circles overstate
+//   a big number by the square, which is the oldest way to lie with a map.
+const heatBar = document.getElementById('heatbar');
+const heatCondSel = document.getElementById('heatCond');
+const heatSrcSel = document.getElementById('heatSrc');
+const heatMaxEl = document.getElementById('heatMax');
+const heatBtn = document.getElementById('heatBtn');
+
+/** patterns.mjs has landed. Called from the statistics board's own script. */
+function mapOnPatterns(sb) {
+  HEAT = sb && sb.cameras && sb.cameras.length ? sb : null;
+  if (heatBtn) heatBtn.disabled = !HEAT;
+  if (HEAT) heatFillControls();
+  if (heatOn) draw();
+}
+
+function heatFillControls() {
+  heatCondSel.textContent = '';
+  const all = document.createElement('option');
+  all.value = 'all'; all.textContent = 'any hour';
+  heatCondSel.appendChild(all);
+  for (const a of HEAT.axes) {
+    const g = document.createElement('optgroup');
+    g.label = a.label + (a.tier === 'D' ? ' (tier D)' : '');
+    for (const b of a.buckets) {
+      const o = document.createElement('option');
+      o.value = a.key + ':' + b.key;
+      o.textContent = b.label;
+      g.appendChild(o);
+    }
+    heatCondSel.appendChild(g);
+  }
+  heatCondSel.value = heatCondKey;
+  heatSrcSel.textContent = '';
+  for (const src of HEAT.sources) {
+    const o = document.createElement('option');
+    o.value = src.key; o.textContent = src.label;
+    heatSrcSel.appendChild(o);
+  }
+  heatSrcSel.value = heatSource;
+}
+
+/** The rate for one camera under the current selection, or null. */
+function heatRate(cameraId) {
+  if (!HEAT) return null;
+  if (heatCondKey === 'all') {
+    const row = (HEAT.board[heatSource] || []).find(r => r.id === cameraId);
+    return row ? row.rate : null;
+  }
+  const parts = heatCondKey.split(':');
+  const per = HEAT.byCamera[heatSource] && HEAT.byCamera[heatSource][cameraId];
+  if (!per) return null;
+  const axis = per.axes.find(a => a.key === parts[0]);
+  if (!axis) return null;
+  const b = axis.buckets.find(x => x.key === parts[1]);
+  return b ? b.rate : null;
+}
+
+/** The biggest rate any camera reaches under this selection, for the scale. */
+function heatPeak() {
+  let max = 0;
+  if (!HEAT) return max;
+  for (const c of HEAT.cameras) {
+    const r = heatRate(c.id);
+    if (r !== null && r > max) max = r;
+  }
+  return max;
+}
+
+function heatHalo(cameraId, x, y) {
+  if (!HEAT) return null;
+  const rate = heatRate(cameraId);
+  const peak = heatPeak();
+  const d = el('div', 'heat');
+  let size;
+  if (rate === null) {
+    d.classList.add('thin');
+    size = 15;
+    d.title = 'Not enough watched hours under these conditions to give a rate.';
+  } else {
+    d.appendChild(el('i'));
+    // Area proportional to the rate: radius follows the square root.
+    const f = peak <= 0 ? 0 : Math.sqrt(rate / peak);
+    size = 14 + f * 48;
+    d.title = rate.toFixed(rate >= 10 ? 0 : 1) + ' per 100 camera-hours';
+  }
+  d.style.width = size + 'px';
+  d.style.height = size + 'px';
+  d.style.left = x + 'px';
+  d.style.top = y + 'px';
+  return d;
+}
+
+function heatPaintScale() {
+  const peak = heatPeak();
+  heatMaxEl.textContent = peak > 0
+    ? 'biggest circle = ' + (peak >= 10 ? peak.toFixed(0) : peak.toFixed(1))
+    : 'nothing to scale against yet';
+}
+
+function heatSet(on) {
+  heatOn = on && !!HEAT;
+  heatBar.hidden = !heatOn;
+  if (heatBtn) heatBtn.classList.toggle('on', heatOn);
+  if (heatOn) heatPaintScale();
+  draw();
+}
+
+if (heatBtn) {
+  heatBtn.disabled = true;                 // until the numbers arrive
+  heatBtn.onclick = () => heatSet(!heatOn);
+}
+const heatOffBtn = document.getElementById('heatOff');
+if (heatOffBtn) heatOffBtn.onclick = () => heatSet(false);
+heatCondSel.onchange = () => { heatCondKey = heatCondSel.value; heatPaintScale(); draw(); };
+heatSrcSel.onchange = () => { heatSource = heatSrcSel.value; heatPaintScale(); draw(); };
 `;

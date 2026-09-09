@@ -168,8 +168,6 @@ const sbAxisBtns = sbById('sbAxisBtns'), sbMatrixArea = sbById('sbMatrixArea');
 const sbAxisNote = sbById('sbAxisNote'), sbBuckArea = sbById('sbBuckArea');
 let SB = null;
 let sbAxisKey = 'light';
-/** The map registers here to shade its pins off the same numbers. */
-let sbAfterLoad = null;
 
 /** One decimal below ten, none above: 12.4 and 0.9 both want two useful digits. */
 const sbNum = v => (v >= 10 ? v.toFixed(0) : v.toFixed(1));
@@ -472,7 +470,9 @@ async function loadStats() {
   sbDrawAxisButtons();
   sbDrawMatrix();
   sbDrawBucks();
-  if (sbAfterLoad) sbAfterLoad(SB);
+  // The map shades its pins off the same numbers. A function declaration in
+  // the map's half of this shared scope, so it is hoisted and safe to call.
+  if (typeof mapOnPatterns === 'function') mapOnPatterns(SB);
 }
 loadStats();
 `;

@@ -349,28 +349,44 @@ test('the measure tool ships the same arithmetic the tests check', async () => {
   assert.match(html, /MEASURE\.measure\(/, 'and the map calls it');
 });
 
-test('a plan with no start time loses the time, not the headline', async () => {
+test('a sit with no start time loses the time, not the headline', async () => {
   // It printed "Invalid Date · AM from Invalid Date" — twice per row, in the
   // largest text on the page. The date and window are always present, so a
-  // missing or unparseable start instant costs only the start time. Same
-  // reasoning as the `parts` fallback directly below it in the source.
+  // missing or unparseable start instant must cost only the start time.
+  //
+  // This used to pin the DASHBOARD's copy of that renderer. Design decision 13
+  // replaced the dashboard's two narrative sections with the statistics board,
+  // so that copy is gone — but the hazard is not, because /tonight still draws
+  // sit rows from the same plan. Repointed rather than deleted: the code moved,
+  // the lesson did not.
+  const { tonightHtml } = await import('../tonight-page.mjs');
+  const html = tonightHtml({ generatedAt: '2026-08-27T12:00:00.000Z', sits: [] });
+
+  assert.match(html, /function clockOf\(ms, sit\)/, 'one formatter, not one per row');
+  assert.match(html, /if \(!isFinite\(ms\)\) return '\?';/,
+    'an unparseable instant returns a mark, never the string Invalid Date');
+  // And it is actually used, rather than being a guard nothing calls: the
+  // definition plus at least one call site.
+  assert.ok((html.match(/clockOf\(/g) || []).length >= 2,
+    'clockOf is called, not merely defined');
+});
+
+test('the dashboard no longer renders the hunt plan at all', async () => {
+  // The other half of decision 13. If the plan section ever comes back by
+  // accident — a revert, a merge — this says so, because the whole point was
+  // that the front page stops narrating.
   const { dashboardHtml } = await import('../dashboard-page.mjs');
-  const sit = extra => ({
-    date: '2026-11-09', window: 'AM', rating: 'PRIME', total: 52, camera: 'Creek',
-    windDir: 315, windFrom: 'NW', wind: 9, temp: 33, rut: 'Chasing', moon: 'full',
-    parts: [], ...extra,
-  });
   const html = dashboardHtml([], [], '2026-08-27T12:00:00.000Z', {
     generatedAt: '2026-08-27T12:00:00.000Z',
-    sits: [sit(), sit({ start: 'not a time' }), sit({ start: '2026-11-09T11:30:00Z' })],
+    sits: [{ date: '2026-11-09', window: 'AM', rating: 'PRIME', total: 52,
+      camera: 'Creek', windDir: 315, windFrom: 'NW', wind: 9, temp: 33,
+      rut: 'Chasing', moon: 'full', parts: [] }],
   }, [], true);
-
-  // The guard is in the emitted script, so check the branch is actually there.
-  assert.match(html, /Invalid Date/, 'the comment naming the bug survives');
-  assert.match(html, /const timed = when && !isNaN\(when\)/,
-    'the row asks whether the instant parsed before formatting it');
-  assert.match(html, /s\.date \|\| 'date not recorded'/,
-    'and falls back to the date the plan always carries');
+  assert.doesNotMatch(html, /Best sits ahead/);
+  assert.doesNotMatch(html, /id="planArea"/);
+  assert.doesNotMatch(html, /Where to sit/);
+  assert.doesNotMatch(html, /id="standPlan"/);
+  assert.match(html, /id="statboard"/, 'and the board is what stands in its place');
 });
 
 // ---------------------------------------------------------------------------

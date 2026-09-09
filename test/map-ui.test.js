@@ -367,3 +367,20 @@ test('the age beside a frame is that frame\'s, not the reel\'s', () => {
   assert.match(head.slice(0, 1600), /in ' \+ Math\.abs\(mins\)/,
     'a nowcast frame is in the future, and says so rather than reporting negative age');
 });
+
+test('the panel\'s buttons wrap rather than running off its edge', () => {
+  // Found in a screenshot, not in a test. A camera with both a facing and a
+  // corrected pin carries six buttons — Move the facing, Move the pin, Use the
+  // GPS fix, Clear facing, Show in camp report, Close — and on one line the
+  // last of them sat 61px OUTSIDE the 330px panel. Nothing shrank it: a flex
+  // item will not go below its content width, so the row simply overflowed and
+  // Close was reachable only by scrolling sideways.
+  //
+  // Measured in Chromium after the fix: every button ends inside the panel,
+  // two rows of three at 95px each.
+  const rule = mapStyles.slice(mapStyles.indexOf('.selpanel .btns {'));
+  assert.match(rule.slice(0, 200), /flex-wrap: wrap/,
+    'the row breaks onto a second line instead of overflowing');
+  assert.match(rule.slice(0, 400), /\.selpanel \.btns button \{[^}]*min-width: 88px/,
+    'and a floor on the button width is what decides where it breaks');
+});

@@ -604,8 +604,13 @@ export const mapStyles = `
   .selpanel .fact b { color: var(--ink); font-weight: 600; text-align: right; }
   .selpanel .camrow { font-size: 12px; color: var(--muted); padding: 2px 0; }
   .selpanel .camrow a { color: var(--accent); cursor: pointer; }
-  .selpanel .btns { display: flex; gap: 8px; margin-top: 12px; }
-  .selpanel .btns button { flex: 1; padding: 7px; border-radius: 6px; cursor: pointer;
+  /* WRAPS on purpose. A camera with both a facing and a corrected pin carries
+     six buttons; on one line the last of them ("Close") sat 61px outside the
+     330px panel, reachable only by scrolling sideways. Only a screenshot ever
+     showed it. min-width sets how many fit a line before the row breaks. */
+  .selpanel .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .selpanel .btns button { flex: 1; min-width: 88px;
+                           padding: 7px; border-radius: 6px; cursor: pointer;
                            font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
                            border: 1px solid var(--line); background: var(--bg);
                            color: var(--ink); }

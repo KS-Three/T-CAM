@@ -31,6 +31,7 @@
 import { quotaOf } from './quota.mjs';
 import { sourceDescriptors } from './tile-sources.mjs';
 import { mapStyles, mapMarkup, mapScript } from './map-view.mjs';
+import { statsStyles, statsMarkup, statsScript } from './stats-board.mjs';
 import { registerSnippet } from './offline.mjs';
 // Only the constant: the number of bits in a photo fingerprint, baked into
 // the wind-match percentage. The page never hashes — review does that.
@@ -138,6 +139,7 @@ function dashboardHtml(rows, photos, generatedAt, plan = null, stands = [], live
 <title>Trail Cameras</title>
 <style>
   ${mapStyles}
+  ${statsStyles}
   :root {
     --bg: #f6f7f5; --panel: #fff; --ink: #1a1c19; --muted: #5d6159;
     --line: #dcdfd8; --ok: #2f7d4f; --warn: #b06d15; --bad: #b3352b;
@@ -424,14 +426,11 @@ ${mapMarkup}
     <button id="drawerClose" type="button" title="Close">&times;</button>
   </div>
   <div id="alerts"></div>
-  <h2 class="section" style="margin-top:0">Best sits ahead</h2>
-  <div id="planArea"></div>
+  ${statsMarkup}
   <h2 class="section">Which stands earn their keep</h2>
   <div id="windArea"></div>
   <h2 class="section">Review photos <a class="reviewlink" id="reviewLink" href="/review">tag what is in them &rarr;</a></h2>
   <div id="reviewArea"></div>
-  <h2 class="section">Where to sit</h2>
-  <div id="standPlan"></div>
   <h2 class="section">Cameras</h2>
   <div class="grid" id="cards"></div>
   <h2 class="section">Recent photos</h2>
@@ -509,6 +508,7 @@ function revealInDrawer(id) {
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
 
 ${mapScript}
+${statsScript}
 
 // ---- alerts -----------------------------------------------------------
 const bad = D.cameras.filter(c => c.health.level !== 'ok');
@@ -705,56 +705,6 @@ if (D.live && tonightLink) tonightLink.hidden = false;
 const journalLink = document.getElementById('journalLink');
 if (D.live && journalLink) journalLink.hidden = false;
 
-const standPlanEl = document.getElementById('standPlan');
-
-async function loadStandPlan() {
-  if (!D.live) {
-    standPlanEl.appendChild(el('div', 'empty',
-      'Stand ranking needs the server \u2014 open http://127.0.0.1:8787'));
-    return;
-  }
-  let data;
-  try {
-    data = await (await fetch('/api/stand-plan?sits=3')).json();
-  } catch {
-    standPlanEl.appendChild(el('div', 'empty', 'Could not load the stand ranking.'));
-    return;
-  }
-  standPlanEl.textContent = '';
-  if (data.note) standPlanEl.appendChild(el('div', 'stale-note', data.note));
-  if (!data.sits.length) return;
-
-  for (const sit of data.sits) {
-    const box = el('div', 'sitplan');
-    const d = new Date(sit.date + 'T12:00:00');
-    box.appendChild(el('h3', null,
-      d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-      + ' ' + sit.window + ' \u2014 ' + sit.rating + ', wind ' + sit.windFrom));
-    box.appendChild(el('div', 'verdict', sit.summary));
-
-    for (const st of sit.stands) {
-      const cls = st.huntable === true ? 'yes' : st.huntable === false ? 'no' : 'unknown';
-      const row = el('div', 'srow ' + cls);
-      const left = el('div');
-      left.appendChild(el('span', 'nm', st.name));
-      // "Unknown" is shown as unknown, never as a quiet yes: a stand whose
-      // winds have not been recorded must not look like one that works.
-      left.appendChild(el('span', 'verdict-tag',
-        st.huntable === true ? 'huntable' : st.huntable === false ? 'wrong wind' : 'winds not set'));
-      const ul = document.createElement('ul');
-      for (const r of st.reasons) {
-        const li = el('li', r.points < 0 ? 'minus' : null,
-          r.why + (r.points ? ' (' + (r.points > 0 ? '+' : '') + r.points + ')' : ''));
-        ul.appendChild(li);
-      }
-      left.appendChild(ul);
-      row.appendChild(left);
-      box.appendChild(row);
-    }
-    standPlanEl.appendChild(box);
-  }
-}
-loadStandPlan();
 // ---- lightbox ---------------------------------------------------------
 // Click a photo and it expands over the page; the arrows, the arrow keys, or
 // a swipe walk the list. WHICH list is the click site's call — the drawer
@@ -1025,68 +975,6 @@ function cameraCard(c, { withId = true } = {}) {
   return card;
 }
 for (const c of D.cameras) cards.appendChild(cameraCard(c));
-// ---- hunt plan --------------------------------------------------------
-const planArea = document.getElementById('planArea');
-if (!D.plan || !D.plan.sits || !D.plan.sits.length) {
-  planArea.appendChild(el('div', 'empty',
-    'No hunt plan yet. Run "node hunt-planner.mjs" to rank the coming sits by weather, rut phase and moon — it needs no photos, only your camera locations.'));
-} else {
-  // A forecast goes off quickly, so say plainly when the plan was built rather
-  // than presenting week-old weather as if it were current.
-  const built = new Date(D.plan.generatedAt);
-  const hrs = (Date.now() - built.getTime()) / 3600000;
-  if (hrs > 12) {
-    planArea.appendChild(el('div', 'stale-note',
-      'This plan was built ' + (hrs < 48 ? Math.round(hrs) + ' hours' : Math.round(hrs / 24) + ' days')
-      + ' ago. Re-run "node hunt-planner.mjs" for a current forecast.'));
-  }
-  for (const s of D.plan.sits.slice(0, 8)) {
-    const row = el('div', 'sit r' + '-' + s.rating.toLowerCase());
-    const sc = el('div');
-    sc.appendChild(el('div', 'score', String(Math.round(s.total))));
-    sc.appendChild(el('span', 'rating', s.rating));
-    const body = el('div');
-    // A plan may carry no usable start instant — an older planner, a hand-edited
-    // file, a partial write. That should cost you the START TIME, not put
-    // "Invalid Date" in the headline twice, which is what it did. The date and
-    // window are always present, so they are what the row is built from.
-    const when = s.start ? new Date(s.start) : null;
-    const timed = when && !isNaN(when);
-    // Rendered on the property's clock where the plan recorded one, so the day
-    // does not shift for a reader in another timezone.
-    const opts = s.timezone ? { timeZone: s.timezone } : {};
-    const day = timed
-      ? when.toLocaleDateString(undefined,
-          Object.assign({ weekday: 'long', month: 'short', day: 'numeric' }, opts))
-      : (s.date || 'date not recorded');
-    body.appendChild(el('div', 'when',
-      day + ' · ' + s.window
-      + (timed
-        ? ' from ' + when.toLocaleTimeString(undefined,
-            Object.assign({ hour: 'numeric', minute: '2-digit' }, opts))
-        : '')
-      + ' · ' + s.camera));
-    body.appendChild(el('div', 'cond',
-      Math.round(s.temp) + '°F · wind ' + s.windFrom + ' ' + Math.round(s.wind)
-      + ' mph · ' + s.rut + ' · ' + s.moon + ' moon'
-      + (s.alsoAt && s.alsoAt.length
-        ? ' · same window also scored at ' + s.alsoAt.join(', ') : '')));
-    const ul = el('ul');
-    // A plan written by an older version of the planner, or edited by hand, may
-    // not carry the reason breakdown. Missing reasons should cost you the
-    // reasons, not the whole page — this threw and blanked everything below it.
-    for (const p of s.parts ?? []) {
-      const li = el('li', p.points < 0 ? 'neg' : null,
-        (p.points > 0 ? '+' : '') + p.points + '  ' + p.reason);
-      ul.appendChild(li);
-    }
-    body.appendChild(ul);
-    row.append(sc, body);
-    planArea.appendChild(row);
-  }
-  planArea.appendChild(el('div', 'sub',
-    'Wind direction is where the wind comes FROM. This ranks WHEN to sit; you still choose WHERE.'));
-}
 // ---- photos -----------------------------------------------------------
 const area = document.getElementById('photoArea');
 if (!D.photos.length) {

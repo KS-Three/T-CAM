@@ -58,6 +58,7 @@ Rules for anything added from here:
 | **Wind history** — which winds blow during season, and what each stand is worth | Live: 9,751 huntable hours across 7 seasons at the property |
 | **Walk-in routes** — draw the approach, judged against the wind like a stand | Browser-verified end to end; geometry checked against hand-reasoned cases |
 | **Collar ingest** (`calibrate-planner.mjs`) — reads a published GPS dataset | Verified against a fixture with a planted effect; **awaiting the real file** |
+| **Card gap** (`card-gap.mjs`) — photos the camera numbered that never reached the cloud, per camera: a section in the sync output, a *Never sent* line on the card, Needs attention when the hole is under 30 days old | 20 unit tests on the counter arithmetic (holes, a contiguous block, a reset, an out-of-order FLEX-M2 run, unplaceable photos, old vs recent); the sync integration test asserts the section and the static page carry it; against the real database it read 74 on Fremont North (8/30–8/31), 28 on East Side (9/3–9/8) and 1 on the FLEX-M2, the same numbers a hand count of the raw documents gave; a real sync on the branch printed the section with those numbers; the served page was opened in a browser (second server on 8788, the live one untouched), the drawer opened with a real click, and the East Side card read *Never sent 28 · 9/3 to 9/8* with all three cameras in Needs attention |
 | **Tonight** (`/tonight`) — one screen: the stand, the walk in, when to leave | Driven in a browser in both themes, and end to end over the API |
 | **Legal shooting light** — Wisconsin's 30-before / 20-after, with a countdown | Unit-tested, and run under three machine timezones to prove the times do not move |
 | **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
@@ -97,7 +98,7 @@ Rules for anything added from here:
 | **Wisconsin LiDAR basemap + shade overlay** — `lidarwi` / `lidarwishade`, the DNR's statewide bare-earth DEM rendered with a hillshade rule of our own (ZFactor 8), now the layer the plain "LiDAR" button lands on; USGS 3DEP demoted to "LiDAR (US)" on its own key, terrain.mjs untouched | Chased from an Ayres 3D viewer that turned out to be Fond du Lac County only — no coverage on Waushara ground. Probed the alternatives live 2026-08-31: DNR beats 3DEP on data (Waushara 2-ft 2017 vs 1 m), accepts custom raster functions where 3DEP refuses them, and is *faster* (median 0.8 s/tile vs 1.6 s for Gray-Stretch, 3.2 s for the DNR's own prebuilt hillshade — 8 fresh 256px tiles each). ZFactor picked by rendering one flat-sand tile at 2/3/8/15 and looking: 3 = washed out, 15 = amplified noise, 8 = field edges and shallow drainages read. Separate cache key is load-bearing, not cosmetic — tiles live at `tiles/<key>/z/x/y` for 90 days, so an in-place swap would have served a mixture of both renderings for months; pinned by test. Fetched through the real `getTile()` path: three distinct cache trees, `lidarwi` and `lidarwishade` byte-identical (same template, referenced not repeated), second read cached. 778 tests pass. **Not driven in a browser yet, and not yet looked at over Kent's actual cameras — the z-factor was tuned on a public town 20 miles off.** |
 | **Elevation grid stays on USGS** — the same DNR DEM exposes `getSamples`, and it was the obvious next step; measurement killed it | Timed against 3DEP 2026-08-31: DNR returns 10 points in 13.5 s, 100 in 29.2 s, and times out before 300, against 0.8–1.1 s for 300 from USGS. `terrain.mjs` plans thousands of points in batches of 900, so a single grid would take hours. Do NOT point `TRAILCAM_ELEVATION_URL` at the DNR service — the 0.6 m resolution is real but unreachable through that endpoint. Their image pyramid is quick; their point sampling is not. |
 | **Camera GPS: newest fix wins** — status.coordinates is an ARRAY and the sync took [0]; a moved camera carries several and the pin stayed on the old spot. Newest dateTime now decides, and the camera card shows the fix date, flagged when it is much older than the last contact | Reported from the field 2026-08-30. Reproduced from the real document shape (two fixes, old one first), pinned both orders plus the undated cases; 616 tests |
-| **Camera liveness log** (`camera_days`) - one row per camera per day from every sync: live / quota-dark / silent / unknown, plus the quota reading it was judged on. The denominator for anything that ever says "a deer passed here N of M days", because a camera out of quota produces exactly the evidence an empty trail does. A day with NO ROW reads as unknown, never live | Built FIRST, ahead of the feature that needs it, because it cannot be backfilled - the cameras table holds current state only and every sync overwrites it. 16 unit tests (each state, silence beating quota-dark, unmetered plans not reading as spent, gaps counted as unknown, the photo count only ever rising, a camera going dark mid-day ending the day dark) plus an end-to-end assertion on a real sync run - which caught my own wrong assumption that the stand-in had one camera, and showed both of its stale cameras correctly logging `silent`. Checked against the live account offline: Fremont North reads quota-dark at 100/100, the other three live. 724 tests |
+| **Camera liveness log** (`camera_days`) - one row per camera per day from every sync: live / quota-dark / silent / unknown, plus the quota reading it was judged on. The denominator for anything that ever says "a deer passed here N of M days", because a camera out of quota produces exactly the evidence an empty trail does. A day with NO ROW reads as unknown, never live | Built FIRST, ahead of the feature that needs it, because it cannot be backfilled - the cameras table holds current state only and every sync overwrites it. 16 unit tests (each state, silence beating quota-dark, unmetered plans not reading as spent, gaps counted as unknown, the photo count only ever rising, a camera going dark mid-day ending the day dark) plus an end-to-end assertion on a real sync run - which caught my own wrong assumption that the stand-in had one camera, and showed both of its stale cameras correctly logging `silent`. Checked against the live account offline: Fremont North reads quota-dark at 100/100, the other three live. 724 tests. The end-to-end check then turned out to compare the stored day against the UTC day, so it failed on every run after 19:00 CDT and passed every morning — the writer stores the camera's SOLAR day at its longitude, on purpose (design.md §9). It now derives today the way the writer does, and was proven under a faked clock at 01:23 UTC, a minute either side of solar midnight, and on the real clock at 20:41 CDT |
 | **Camera facing** - point a camera by clicking the ground it watches; stored and drawn as ONE SHOOTING LANE, since a detection zone is the same shape and laneGeometry() takes any anchor. Card reads `Facing NE 45 deg - 43 m`; the cone shows only while that camera is selected. Unset stays unset - no default bearing - and Clear facing is reachable because a camera that has been moved must be correctable | 12 unit tests: refusing malformed views, clamped spread, every compass point, the cone's own containment test, and the one that matters - a facing SURVIVES A SYNC (it is deliberately absent from upsertCamera's ON CONFLICT list; in it, every sync would unpoint every camera and the only symptom would be cones quietly vanishing). Driven in a real browser end to end: Set facing armed, ground clicked, PATCH stored it, server returned NE 44.8 deg / 43 m, card and cone both showed it, deselecting removed the cone. 707 tests. NOTE: this is half a direction on purpose - bearing says which ground is photographed, NOT which way the deer was walking; that needs frame-to-frame motion across a burst |
 | **Photo quota alarm** — each camera's transmission allowance, flagged on 80% spent AND on a burn rate that will not last the billing cycle; folded into camera health so the card, the map pin and the Needs attention list all react. The old one-line "Plan: 10/100" reported whichever camera came back first, which hid the one at 100/100 that had stopped sending | 17 unit tests (thresholds, the rate, cycle-end suppression, over-limit, unlimited plans, missing and unparseable dates); driven in a real browser against the real 4-camera account and against a mid-cycle seed showing all three levels — banner, alert list, cards and pin classes all read back correct; 693 tests |
 | **Tiles: an expired one never blocks the map** - past 90 days the cached bytes go out immediately and the refresh runs behind the response; one tile asked for twice at once makes one upstream request. Save-offline still waits for real bytes, on purpose | Profiled first, and the profiling corrected two guesses: a bare Node server serving a fixed buffer costs the same 15.8 ms per request as this one, so there was no server-side latency to remove, and the warm map already completes in 345 ms. The cost is per LAYER and upstream - measured cold, twice: satellite 120 ms a tile, Terrain ~300 ms, LiDAR 1.5-2.7 s, CWD 2.5-3.7 s (a first run also showed VPA and Deer-zones in the seconds; that did NOT reproduce and was a transient). A/B on the same tiles and services with the cache aged past 90 days: CWD 4049 ms -> 2 ms, satellite 60 -> 3, LiDAR 57 -> 3. Then driven in a real browser against a store whose every tile was 120 days old - map drew complete, header read `revalidating` then `hit`. 702 tests, run twice for flakes |
@@ -346,6 +347,34 @@ can see across rather than shoot down. The map clamps a drag to those; the
 database's own check is looser (above 0, below 90) because it is guarding
 against nonsense arriving over the API, not enforcing a judgement.
 
+## Photos on the card cannot be fetched remotely — settled 2026-09-08
+
+Kent asked whether the photos a FLEX-M / FLEX-M2 keeps on its SD card but
+never transmits could be reached without pulling the camera. No. Three
+independent lines say so, and none of them should need re-researching:
+
+- **The API surface.** SpyPoint's own web-app bundle exposes the full v3 API.
+  Every photo endpoint returns cloud photos. The camera command set is
+  `takePhoto`, `takeVideo`, `formatSD` (erases the card), `update`,
+  `updateGPS`, `updateStatus`, `factoryReset` — nothing lists, resends or
+  fetches card contents. `photo/all` with `hd: true` is a *filter* for HD
+  copies already requested, not a fetch (probed live: zero on every camera).
+- **SpyPoint's support page** (article s132): a quota-blocked photo is not
+  delivered "even after the next month's limit reset date"; the card is the
+  copy. Photos held back by a lost signal DO queue and send at the next sync
+  (s57). Multi-shot frames all transmit; time-lapse transmits.
+- **Our own data.** Fremont North's 74-photo hole from 8/30–8/31 never
+  backfilled in the week after the plan changed.
+
+What does exist remotely: `POST /api/v3/photo/hd/{cameraId}/{photoId}`
+requests the full-resolution copy of a photo *already in the app* (an HD
+credit each); `PUT /api/v3/camera/settings/{cameraId}` changes transmit
+frequency, multi-shot and the rest. Neither reaches an untransmitted photo.
+The card-gap reading above is what came out of this; an SD-card import (full
+import, merged with the cloud copies of the same frames, design agreed
+2026-09-08 but not specced) is the follow-up, and needs a pulled card first
+to see the real DCIM layout.
+
 ## Next, in order
 
 1. **Record a walk in, on the real phone.** The recorder is driven and tested
@@ -453,6 +482,13 @@ Two smaller notes:
   only symptom is "chromium never answered", sixty times a quarter-second
   apart). Use `fileURLToPath` and `os.tmpdir()`. Fixed 2026-08-31 - the suite
   is green on Windows for the first time, 694/694.
+- **A spawned tool inherits the test runner's cwd.** `gps-doctor.mjs` falls
+  back to `./spypoint-data` when `--out` has no value, and from the repo root on
+  Kent's machine that is the real, synced output dir: the doctor found data,
+  printed no error, and the test expecting "Run a sync first" failed - while
+  passing in CI and from any empty directory. A test that exercises a *default*
+  path must pin `cwd:` on the spawn to a fresh `os.tmpdir()` dir, or the default
+  is whatever the machine happens to hold. Fixed 2026-09-08.
 - Run node with `--disable-warning=ExperimentalWarning`; `node:sqlite` prints an
   experimental notice that makes a working tool look broken. The launcher does.
 - The dashboard **file** (`spypoint-data/dashboard.html`) cannot save anything.

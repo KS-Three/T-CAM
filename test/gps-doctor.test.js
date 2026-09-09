@@ -228,10 +228,17 @@ test('a trailing flag falls back to the default instead of throwing', () => {
   // `--out` with nothing after it used to reach path.resolve(undefined) and
   // die with a Node stack trace, from the one tool a person runs when they are
   // already confused about where their data is.
+  //
+  // The fallback is ./spypoint-data relative to the cwd, and a spawned child
+  // inherits the test runner's. From the repo root on Kent's machine that is
+  // the real, synced output dir: the doctor then succeeds, stderr is empty,
+  // and this test fails for having found data. Pin the cwd to a fresh temp
+  // dir so the default is guaranteed empty and the tool has to explain itself.
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gpsdoc-cwd-'));
   let stderr = '';
   try {
     execFileSync(process.execPath, [DOCTOR, '--out'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     stderr = String(err.stderr ?? '');
   }

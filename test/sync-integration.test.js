@@ -67,12 +67,14 @@ const CAMERA = (id, name, lng, lat) => ({
  */
 async function fakeSpypoint(extraCameras = []) {
   const photos = {
+    // originName is the camera's own file counter. cam1 skips PICT0002: one
+    // photo that exists on its card and never transmitted.
     cam1: [
-      { id: 'p1', originDate: '2026-08-21T07:15:00.000Z', tag: ['deer'] },
-      { id: 'p2', originDate: '2026-08-21T07:15:04.000Z', tag: ['deer', 'buck'] },
+      { id: 'p1', originDate: '2026-08-21T07:15:00.000Z', tag: ['deer'], originName: 'PICT0001.JPG' },
+      { id: 'p2', originDate: '2026-08-21T07:15:04.000Z', tag: ['deer', 'buck'], originName: 'PICT0003.JPG' },
     ],
     cam2: [
-      { id: 'p3', originDate: '2026-08-22T18:40:00.000Z', tag: [] },
+      { id: 'p3', originDate: '2026-08-22T18:40:00.000Z', tag: [], originName: 'PICT0010.JPG' },
     ],
   };
   const calls = [];
@@ -293,16 +295,22 @@ test('a sync records whether each camera was watching that day', async t => {
   await sync(port, out);
 
   const db = new DatabaseSync(path.join(out, 'trailcam.db'));
-  const days = db.prepare('SELECT * FROM camera_days ORDER BY camera_id').all();
+  const days = db.prepare(`
+    SELECT cd.*, c.lng FROM camera_days cd JOIN cameras c ON c.id = cd.camera_id
+    ORDER BY cd.camera_id`).all();
   assert.equal(days.length, 2, 'one row per camera, for today');
-  // The camera's OWN day, not the machine's. A camera-day is the denominator
-  // for "a deer passed here N of M days", so it has to be the day where the
-  // camera stands - and the stand-in cameras sit near 90 W, six hours behind
-  // UTC. Comparing against a UTC date made this test fail for the six hours
-  // between local midnight and UTC midnight, every day, on main as well as
-  // here; it just took until 02:46 UTC for anyone to run it in that window.
-  const today = dayOf(new Date().toISOString(), -90.654321);
-  assert.deepEqual(days.map(d => d.day), [today, today]);
+  // "Today" is the camera's SOLAR day at its own longitude, derived the way the
+  // writer derives it (dayOf, design.md §9) - not the UTC day. The stand-in
+  // sits near 90.65 W, six hours behind UTC, so from 19:00 CDT to about 01:00
+  // the two disagree, and comparing against the UTC day here made this test
+  // fail every evening and pass every morning. observed_at is the very instant
+  // the writer binned, so deriving from it cannot straddle midnight between the
+  // sync finishing and this line running either.
+  for (const d of days) {
+    assert.ok(Date.now() - Date.parse(d.observed_at) < 60_000, 'observed just now');
+    assert.equal(d.day, dayOf(d.observed_at, d.lng),
+      `${d.camera_id}: the solar day of the observation, at its longitude`);
+  }
 
   // Both stand-in cameras last checked in well over the silence threshold, so
   // both correctly log as silent rather than live. That is the whole point in
@@ -429,4 +437,20 @@ test('--inspect --raw prints the true values, and warns that it did', async t =>
   const { stdout } = await sync(port, tmp(), ['--inspect', '--raw']);
   assert.match(stdout, /-90\.654321/, 'the real fix, because it was asked for');
   assert.match(stdout, /Do not paste it anywhere public/);
+});
+
+// --- what stayed on the card -------------------------------------------------
+
+test('the sync says what stayed on the card, per camera, from the camera\'s own file numbers', async t => {
+  const { server, port } = await fakeSpypoint();
+  t.after(() => server.close());
+  const out = tmp();
+  const { stdout } = await sync(port, out);
+  assert.match(stdout, /On the card, never sent/);
+  assert.match(stdout, /North Ridge\s+1 photo, 8\/21/,
+    'PICT0002 never arrived between PICT0001 and PICT0003');
+  assert.doesNotMatch(stdout, /Creek Bottom\s+\d+ photo/,
+    'a camera with nothing missing is not listed');
+  const html = fs.readFileSync(path.join(out, 'dashboard.html'), 'utf8');
+  assert.match(html, /"cardGap":\{[^}]*"missing":1/, 'the static dashboard carries the reading');
 });

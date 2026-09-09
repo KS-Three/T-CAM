@@ -835,6 +835,51 @@ any of this can see it — no client can download a photo that was never sent.
 The full-resolution originals of everything, including whatever was never
 transmitted, are on the camera's SD card.
 
+## Photos that never left the card
+
+Every photo the cloud returns carries the camera's own file name —
+`PICT0431.JPG` on a FLEX-M, `1392.jpg` on a FLEX-M2 — and the camera numbers
+its files in order. So the numbers missing between two photos that *did*
+arrive are photos that exist on the SD card and were never sent. The sync
+counts them, per camera, after every run:
+
+```
+On the card, never sent (from the camera's own file numbers):
+  Fremont North  74 photos, 8/30 to 8/31
+  East Side      28 photos, 9/3 to 9/8
+Only the card holds these. SpyPoint does not send them later, not even
+after the quota resets. Pull the card, or accept the hole.
+```
+
+The same number sits on the camera's card on the dashboard as **Never sent**,
+and a hole from the last 30 days puts the camera in Needs attention, the way a
+flat battery or a spent quota does. An older hole stays on the card but stops
+shouting: it is history the card pull either happened for or did not.
+
+What it can and cannot know:
+
+- It counts numbers the camera issued that never reached this database. A
+  photo deleted in the app *after* a sync is still here and does not count.
+  One deleted before any sync saw it is indistinguishable from one never
+  sent, and does.
+- A counter that restarts — a formatted card, or 9999 rolling over — is a
+  reset, and nothing across it is counted. A reset that lands inside a hole
+  hides the part before it: an undercount, never an invented photo.
+- A gap's dates are the two photos either side of it. When the missing ones
+  were taken, only the card knows.
+- A photo held back by a lost signal is queued and sent at the next sync, so
+  a hole that closes on its own was never one. A hole that persists across
+  syncs is real, and that — not the count on any single run — is the thing
+  to act on.
+
+Why this exists: on 2026-09-08 two cameras had 102 photos between them on
+their cards from the previous ten days that the app had never shown, and the
+app gives no sign. SpyPoint's own support page says quota-blocked photos are
+never transmitted later, and there is no remote way to list or fetch a card —
+the camera's command set is take a photo, take a video, format the card,
+update firmware, refresh GPS or status, factory reset. The count is the only
+thing that says whether the walk is worth it.
+
 ## Hunt planner
 
 ```bash

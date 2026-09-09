@@ -384,3 +384,68 @@ test('the panel\'s buttons wrap rather than running off its edge', () => {
   assert.match(rule.slice(0, 400), /\.selpanel \.btns button \{[^}]*min-width: 88px/,
     'and a floor on the button width is what decides where it breaks');
 });
+
+// ---------------------------------------------------------------------------
+// Deer activity on the pins (2026-09-09)
+// ---------------------------------------------------------------------------
+
+test('the activity halo never becomes the pin\'s own colour', () => {
+  // A pin's colour is the camera's HEALTH. A camera that is busy and nearly out
+  // of battery has to be able to say both things at once, so the rate rides in
+  // a separate element behind the pin rather than recolouring it.
+  assert.match(mapScript, /const halo = heatHalo\(c\.id, x, y\);/,
+    'the halo is drawn in the camera loop');
+  assert.match(mapStyles, /\.heat \{[^}]*position: absolute/);
+  assert.doesNotMatch(mapScript, /p\.classList\.add\('heat'\)/,
+    'the pin itself is never given the heat class');
+});
+
+test('the halo is drawn the way every other mark over imagery is', () => {
+  // The first cut was a tinted disc at 34% opacity. It measured 62px across in
+  // the DOM and was invisible on the screenshot — dark green over dark green.
+  // A white ring with a shadow is what .pin and .stand already use, and for
+  // the same reason.
+  const rule = mapStyles.slice(mapStyles.indexOf('.heat {'));
+  assert.match(rule.slice(0, 320), /border: 2px solid rgba\(255,255,255,\.92\)/,
+    'a white ring, like the pins');
+  assert.match(rule.slice(0, 320), /box-shadow: 0 0 6px/, 'and a shadow to lift it off the ground');
+  assert.match(mapStyles, /\.heat > i \{[^}]*opacity: \.45/,
+    'the tint rides in a CHILD, so the ring can stay opaque');
+});
+
+test('area carries the rate, not radius', () => {
+  // Radius-proportional circles overstate a big number by the square. This is
+  // the oldest way to lie with a map and it is one character to reintroduce.
+  assert.match(mapScript, /Math\.sqrt\(rate \/ peak\)/,
+    'the radius follows the square root of the rate');
+});
+
+test('a camera with too few hours gets a ring, not a small circle', () => {
+  // A small disc reads as "quiet here". The honest drawing of "we do not know"
+  // is an empty dashed ring at a FIXED size, so it encodes no magnitude at all.
+  const fn = mapScript.slice(mapScript.indexOf('function heatHalo'));
+  assert.match(fn.slice(0, 700), /if \(rate === null\) \{[\s\S]*?classList\.add\('thin'\)[\s\S]*?size = 15;/,
+    'null rate means the dashed ring at a fixed size');
+  assert.match(mapStyles, /\.heat\.thin \{[^}]*border-style: dashed/);
+});
+
+test('the activity bar clears the fixed top bar', () => {
+  // #map is position:fixed with z-index 0, which makes it a stacking context —
+  // so nothing inside it can ever paint over #topbar at z-index 20. A bar at
+  // top:10px is not merely overlapped, it is invisible, and only measuring its
+  // rect against the topbar's showed it.
+  const rule = mapStyles.slice(mapStyles.indexOf('#heatbar {'));
+  assert.match(rule.slice(0, 200), /top: 52px/,
+    'the same offset the tool tree already uses to clear the header');
+  assert.doesNotMatch(rule.slice(0, 200), /top: 10px/);
+});
+
+test('the board hands the map its numbers rather than the map fetching again', () => {
+  // One request, one set of numbers. Two fetches would let the map and the
+  // board disagree about the same camera, which is the exact failure the
+  // "one definition, emitted" rule exists to prevent.
+  assert.match(mapScript, /function mapOnPatterns\(sb\)/,
+    'a function declaration, so it is hoisted across the shared script scope');
+  assert.doesNotMatch(mapScript, /fetch\('\/api\/patterns'\)/,
+    'the map never asks for the statistics itself');
+});

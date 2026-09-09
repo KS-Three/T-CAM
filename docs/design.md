@@ -625,6 +625,64 @@ morning.
 
 ---
 
+## 13. The report shows what was counted, not what to think
+
+Settled 2026-09-09, on Kent's word: *"I don't like the AI generated camp report,
+I want more statistical analysis of the deer patterns."*
+
+The camp report opened with two sections of the planner talking — "Best sits
+ahead" and "Where to sit". Both are gone from the dashboard. What replaced them
+is `patterns.mjs` and the board that draws it: rates, cut four ways, with the
+sample size beside every figure. `/api/stand-plan` and the Tonight page are
+untouched; the planner still answers "when", it just no longer narrates on the
+front page.
+
+Four rules govern every number on that board, and each of them exists because
+the obvious alternative is wrong in a way that still looks right.
+
+**The denominator is watched hours, never elapsed days.** A quota-dark camera
+and a camera watching an empty trail produce identical evidence: nothing.
+`camera_days` already made this argument for the sit planner and it is the same
+argument here — only rows whose state is `live` count, at 24 hours each. In the
+seeded season one camera is dark for twenty days; it holds 2400 watched hours
+rather than 2880, and still ranks first on rate. A raw tally would have ranked
+it third.
+
+**The clock is solar.** Hour-of-day means camera-local solar time, from the same
+`solarOffsetMs(lng)` that decides which day a photograph belongs to. On this
+longitude UTC bucketing puts the dawn peak at eleven in the morning, and the
+chart still looks like a reasonable chart. Nothing about the picture tells you
+it is six hours wrong.
+
+**Both provenances, side by side, never summed.** `yours` is `confirmed = 1`;
+`camera` is `source = 'camera-ai' AND confirmed = 0`. Disjoint by construction.
+db.mjs is right that an unreviewed machine guess is not evidence — but it is
+data, and there are five times as much of it, so refusing to look at it leaves
+every panel empty for a season. The resolution is the review screen's: show
+both, keep them apart, and never offer a control that adds them. The seeded
+season demonstrates exactly why both are needed — the planted north-west signal
+is unmistakable in the camera's 165 detections and lost in the noise of 29
+confirmed ones.
+
+**A cell that cannot support a rate gets null, and null is drawn as a refusal.**
+Not zero, not blank. "Deer do not use this camera on an east wind" is a claim
+and four hours cannot support it, so `rate: null` and `rate: 0` stay
+distinguishable all the way from SQL to the hatched cell on the page. A measured
+zero — nothing in four hundred hours — is a real finding and gets the number.
+
+**What is deliberately NOT here.** No interpolated heat surface between cameras.
+Six cameras are six points, and shading the ground between them would invent
+data about ground nothing watched — the same refusal `check-crops.mjs` and the
+route judge already make. The map shades the PINS, and the space between them
+stays honestly blank.
+
+The barometer axis is plotted and labelled tier D in the same breath, which is
+the compromise `individuals.mjs` already reached: no collar study supports it,
+`movement-model.mjs` scores it zero, and Kent's own ground is still allowed to
+answer the question for itself.
+
+---
+
 ## What is still unverified
 
 Honesty about the gaps, so nobody reads this as a status report:

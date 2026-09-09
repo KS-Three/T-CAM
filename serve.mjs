@@ -59,6 +59,7 @@ import { parcelAt, parcelsByOwner, ownerTerm, OWNER_SEARCH_MIN_CHARS, OWNER_SEAR
 import { terrainFeatures } from './terrain-features.mjs';
 import { rankStands, summarise, verdict as standVerdict } from './stand-ranking.mjs';
 import { evidenceFor } from './evidence.mjs';
+import { patterns } from './patterns.mjs';
 import { individualsFor } from './individuals.mjs';
 import { suggestStands, onYourGround, resolveHomeGround, insideGround } from './stand-suggester.mjs';
 import { groundsFrom, groundAt, describeGround } from './grounds.mjs';
@@ -954,6 +955,29 @@ export function createServer({ out = OPT.out } = {}) {
         } catch (err) {
           console.error(`\n  Wind history failed at ${lat},${lng}: ${err.message}\n`);
           return sendJson(res, 502, { error: err.message });
+        }
+      }
+      // The statistics board: rates per 100 camera-hours, cut by time of day,
+      // wind, temperature and barometer, computed twice — your tags and the
+      // camera's unreviewed guesses — and never summed. Synchronous and local:
+      // it touches no network, and a season of four cameras costs about 80ms.
+      if (req.method === 'GET' && url.pathname === '/api/patterns') {
+        const speciesParam = url.searchParams.get('species');
+        // An explicit empty species means EVERY species, which is a different
+        // question from the default of deer and has to stay reachable.
+        const species = speciesParam === null ? 'deer'
+          : (speciesParam === '' || speciesParam === 'any' ? null : speciesParam);
+        const asked = Number(url.searchParams.get('minHours'));
+        const minHours = Number.isFinite(asked) && asked > 0 ? Math.floor(asked) : undefined;
+        try {
+          return sendJson(res, 200, patterns(db, {
+            species,
+            ...(minHours === undefined ? {} : { minHours }),
+            bucks: url.searchParams.get('bucks') !== 'off',
+          }));
+        } catch (err) {
+          console.error(`\n  Patterns failed: ${err.message}\n`);
+          return sendJson(res, 500, { error: err.message });
         }
       }
       // The hourly forecast the map's weather strip scrubs. Same location

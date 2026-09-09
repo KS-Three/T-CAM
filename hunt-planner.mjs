@@ -250,7 +250,11 @@ async function main() {
     await fs.writeFile(dash, dashboardHtml(
       raw.map(cameraSummary), photos, new Date().toISOString(), plan));
     log(`\nDashboard updated: ${dash}`);
-    log('Open it to see this plan alongside your camera map.');
+    // The dashboard no longer renders the plan: design decision 13 replaced its
+    // two narrative sections with the statistics board. The ranked sits live on
+    // /tonight, which is a served page, so say that rather than pointing at a
+    // section that is not there any more.
+    log('The ranked sits are on the Tonight page once the server is running.');
   } catch {
     log(`\nPlan saved to ${path.join(OPT.out, PLAN_FILE)}.`);
     log('Run "node spypoint-sync.mjs" to build the dashboard around it.');

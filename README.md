@@ -991,9 +991,23 @@ else overlays it or slides in over it.
   Scouting and Ground branches with guide lines, collapsible per branch and
   from the root — which is what makes it usable on a phone, where the open
   tree is a third of the screen.
-- **Camp report** (top-right) slides the old page in from the right: alerts,
-  best sits, wind history, the review queue, camera cards, recent photos. It
-  scrolls on its own, so browsing it never moves the map underneath.
+- **Camp report** (top-right) slides in from the right: alerts, the statistics
+  board, wind history, the review queue, camera cards, recent photos. It scrolls
+  on its own, so browsing it never moves the map underneath.
+- **The statistics board** is the top of that drawer, and it is numbers rather
+  than prose. Which cameras are producing, per 100 hours the camera was actually
+  watching; when deer move at each one, on the camera's own solar clock with
+  dawn and dusk shaded; a camera-by-condition grid you can cut by time of day,
+  wind direction, temperature or barometer; and a card per named buck. Your
+  confirmed tags and the camera's own unreviewed guesses are counted separately
+  and shown side by side — they are never added together, because they are not
+  the same kind of claim. Every figure carries the hours behind it, and a cell
+  with too few hours is hatched and dashed rather than drawn as a zero.
+- **Deer activity** (Tools → Ground) shades the camera pins off those same
+  numbers: pick a condition and a source, and each pin wears a ring whose AREA
+  is its rate. The ground between pins stays blank on purpose — six cameras are
+  six points, and colouring the gaps would be inventing data about ground
+  nothing watched.
 - **Click a stand and its hunting report opens** — not the edit form. The
   panel carries the coming sit's verdict as a coloured chip, the ranking's
   reasons word for word, the winds it is judged on and where they came from,
@@ -1303,14 +1317,15 @@ is gated on sighting data.
 | Photo download and paging | **Working** — first real run 2026-08-29 found and fixed the one path bug |
 | Sighting log — deer per camera per hour | **Working** — the review screen, with the camera's own AI guess offered as a suggestion; only what a person confirms counts |
 | Individual buck identification | **Working, by hand** — name a buck in review and every later tag is one click. Assisted matching stays future work; automated re-identification from trail-camera images is not a solved problem |
-| Movement vs. weather, learned from your ground | Blocked: needs a season of sightings |
+| Movement vs. weather, learned from your ground | **The measurement exists** — the statistics board cuts your own rates by wind octant, temperature, barometer and time of day, per camera, against the hours that camera was actually watching. It still needs a season of sightings before most cells mean anything, and it refuses cell by cell rather than guessing |
 | Stand recommendations from observed patterns | Blocked: needs all of the above |
 
 ### It writes to the dashboard
 
 `hunt-planner.mjs` saves `spypoint-data/plan.json` and rebuilds
-`dashboard.html` with a **Best sits ahead** section at the top — so there is one
-page to open, not a console to read:
+`dashboard.html`. The ranked sits themselves are read on the **Tonight** page
+rather than on the dashboard — the dashboard's two narrative sections were
+replaced by the statistics board (design decision 13):
 
 ```powershell
 node hunt-planner.mjs

@@ -452,6 +452,13 @@ Two smaller notes:
   only symptom is "chromium never answered", sixty times a quarter-second
   apart). Use `fileURLToPath` and `os.tmpdir()`. Fixed 2026-08-31 - the suite
   is green on Windows for the first time, 694/694.
+- **A spawned tool inherits the test runner's cwd.** `gps-doctor.mjs` falls
+  back to `./spypoint-data` when `--out` has no value, and from the repo root on
+  Kent's machine that is the real, synced output dir: the doctor found data,
+  printed no error, and the test expecting "Run a sync first" failed - while
+  passing in CI and from any empty directory. A test that exercises a *default*
+  path must pin `cwd:` on the spawn to a fresh `os.tmpdir()` dir, or the default
+  is whatever the machine happens to hold. Fixed 2026-09-08.
 - Run node with `--disable-warning=ExperimentalWarning`; `node:sqlite` prints an
   experimental notice that makes a working tool look broken. The launcher does.
 - The dashboard **file** (`spypoint-data/dashboard.html`) cannot save anything.

@@ -144,6 +144,51 @@ what settled it:
 A wrong identity silently corrupts every movement pattern built on it. Manual is
 slower and always right.
 
+### Reversed a third time, and this time it ships (settled 2026-09-09)
+
+Kent asked again, and added the thing the earlier proposals lacked: **a
+confidence, and anything doubtful comes to him.**
+
+The objection above was never that a model cannot see antlers. It was that a
+wrong identity *silently* corrupts every movement pattern built on it. The word
+carrying the weight is SILENTLY, and a confidence gate removes it. That is not a
+rhetorical dodge - it changes which failure is possible. Before: a wrong fact in
+the record that nothing can distinguish from a right one. After: a wrong
+suggestion, sitting beside the vendor's wrong suggestions, waiting for a person.
+
+This repo already had the pattern. §3 settled that the camera's own AI tag is a
+claim, not a sighting: stored unconfirmed, shown as "the camera thinks", and a
+person agreeing writes THEIR tag while the machine's row stays untouched. An
+assistant's guess about identity is the same kind of object, so it gets the same
+treatment - `source = 'assist'` (migration 19), a third provenance kept apart
+from both the vendor's and the person's, because "how often is that right here"
+is a question worth being able to ask separately of each.
+
+What the reversal did NOT include, deliberately:
+
+- **No auto-accept, at any confidence.** Kent asked for a 50% gate; what shipped
+  refuses to write at 50 and at 99 alike. A confidently wrong match is precisely
+  the case §4 was about, and a threshold that auto-accepts above it re-opens the
+  hole while looking like it closed it. Confidence orders the buttons and
+  decides how loudly to ask. It never decides to skip asking.
+- **No local model.** Python, PyTorch and checkpoints would end zero-dependency
+  and the double-click launcher, which §2 and §10 make load-bearing. The cloud
+  call is raw HTTP over the same global `fetch` the sync, the tile cache and the
+  terrain sampler already use.
+- **No ambient upload.** The caller passes images in deliberately; there is no
+  "sync everything up" path, and without a key the feature is simply off.
+
+**The cost, stated plainly: photographs leave the machine.** That reverses §1
+and §6, which kept everything local, and it is the part Kent decided rather than
+me. Only the animal's frame goes - no coordinates, no camera name, no property.
+The pin locations, which are the sensitive half, never do.
+
+**What is honestly weak.** The published vision guidance warns that accuracy
+suffers on low-quality, rotated and very small images, which describes a night
+infrared trail-camera frame exactly. A SpyPoint "large" frame is about 50 KB of
+lossy JPEG. So the confidences will be low often, and that is the system working:
+the gate was built expecting it.
+
 ## 5. App shape: local web server
 
 `node serve.mjs` on Node's built-in `http` — still zero dependencies, still

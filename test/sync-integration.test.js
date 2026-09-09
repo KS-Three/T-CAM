@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { dayOf } from '../camera-days.mjs';
 
 const run = promisify(execFile);
 // fileURLToPath, NOT new URL(...).pathname: on Windows the pathname is
@@ -294,7 +295,13 @@ test('a sync records whether each camera was watching that day', async t => {
   const db = new DatabaseSync(path.join(out, 'trailcam.db'));
   const days = db.prepare('SELECT * FROM camera_days ORDER BY camera_id').all();
   assert.equal(days.length, 2, 'one row per camera, for today');
-  const today = new Date().toISOString().slice(0, 10);
+  // The camera's OWN day, not the machine's. A camera-day is the denominator
+  // for "a deer passed here N of M days", so it has to be the day where the
+  // camera stands - and the stand-in cameras sit near 90 W, six hours behind
+  // UTC. Comparing against a UTC date made this test fail for the six hours
+  // between local midnight and UTC midnight, every day, on main as well as
+  // here; it just took until 02:46 UTC for anyone to run it in that window.
+  const today = dayOf(new Date().toISOString(), -90.654321);
   assert.deepEqual(days.map(d => d.day), [today, today]);
 
   // Both stand-in cameras last checked in well over the silence threshold, so

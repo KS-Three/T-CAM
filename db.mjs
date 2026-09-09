@@ -738,6 +738,48 @@ const MIGRATIONS = [
       db.exec('ALTER TABLE cameras ADD COLUMN placed_at  TEXT;');
     },
   },
+  {
+    version: 19,
+    name: 'an assistant may propose an identity, never record one',
+    up: db => {
+      // `source` gains a third value. It could not be added in place: SQLite
+      // cannot alter a CHECK constraint, so the table is rebuilt and copied.
+      //
+      // Why a third value rather than reusing 'camera-ai': provenance is the
+      // whole point. design.md 3 keeps the vendor's guess and the person's tag
+      // apart because a later "how often is that right here" question needs to
+      // know which is which, and an assistant's guess is a third source with
+      // its own error rate. Folding it into either would destroy the only
+      // record of where a claim came from.
+      //
+      // Nothing references detections, so the drop is safe with foreign keys
+      // on; its three indexes go with it and are recreated below.
+      db.exec(`
+        CREATE TABLE detections_new (
+          id            INTEGER PRIMARY KEY,
+          photo_id      TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+          species       TEXT,
+          count         INTEGER NOT NULL DEFAULT 1,
+          buck_id       INTEGER REFERENCES bucks(id) ON DELETE SET NULL,
+          source        TEXT NOT NULL CHECK (source IN ('camera-ai', 'manual', 'assist')),
+          confirmed     INTEGER NOT NULL DEFAULT 0,
+          notes         TEXT,
+          created_at    TEXT NOT NULL
+        );
+      `);
+      db.exec(`
+        INSERT INTO detections_new
+          (id, photo_id, species, count, buck_id, source, confirmed, notes, created_at)
+        SELECT id, photo_id, species, count, buck_id, source, confirmed, notes, created_at
+        FROM detections;
+      `);
+      db.exec('DROP TABLE detections;');
+      db.exec('ALTER TABLE detections_new RENAME TO detections;');
+      db.exec('CREATE INDEX detections_photo ON detections(photo_id);');
+      db.exec('CREATE INDEX detections_buck ON detections(buck_id);');
+      db.exec('CREATE INDEX detections_species ON detections(species);');
+    },
+  },
 ];
 
 export const STAND_TYPES = ['stand', 'tripod', 'ground-blind', 'box-blind', 'saddle', 'other'];

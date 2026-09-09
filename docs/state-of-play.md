@@ -58,6 +58,7 @@ Rules for anything added from here:
 | **Wind history** — which winds blow during season, and what each stand is worth | Live: 9,751 huntable hours across 7 seasons at the property |
 | **Walk-in routes** — draw the approach, judged against the wind like a stand | Browser-verified end to end; geometry checked against hand-reasoned cases |
 | **Collar ingest** (`calibrate-planner.mjs`) — reads a published GPS dataset | Verified against a fixture with a planted effect; **awaiting the real file** |
+| **Card gap** (`card-gap.mjs`) — photos the camera numbered that never reached the cloud, per camera: a section in the sync output, a *Never sent* line on the card, Needs attention when the hole is under 30 days old | 20 unit tests on the counter arithmetic (holes, a contiguous block, a reset, an out-of-order FLEX-M2 run, unplaceable photos, old vs recent); the sync integration test asserts the section and the static page carry it; against the real database it read 74 on Fremont North (8/30–8/31), 28 on East Side (9/3–9/8) and 1 on the FLEX-M2, the same numbers a hand count of the raw documents gave; a real sync on the branch printed the section with those numbers; the served page was opened in a browser (second server on 8788, the live one untouched), the drawer opened with a real click, and the East Side card read *Never sent 28 · 9/3 to 9/8* with all three cameras in Needs attention |
 | **Tonight** (`/tonight`) — one screen: the stand, the walk in, when to leave | Driven in a browser in both themes, and end to end over the API |
 | **Legal shooting light** — Wisconsin's 30-before / 20-after, with a countdown | Unit-tested, and run under three machine timezones to prove the times do not move |
 | **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
@@ -344,6 +345,34 @@ Bounds: a half-angle under 3 degrees is a line, over 80 is a 160-degree fan you
 can see across rather than shoot down. The map clamps a drag to those; the
 database's own check is looser (above 0, below 90) because it is guarding
 against nonsense arriving over the API, not enforcing a judgement.
+
+## Photos on the card cannot be fetched remotely — settled 2026-09-08
+
+Kent asked whether the photos a FLEX-M / FLEX-M2 keeps on its SD card but
+never transmits could be reached without pulling the camera. No. Three
+independent lines say so, and none of them should need re-researching:
+
+- **The API surface.** SpyPoint's own web-app bundle exposes the full v3 API.
+  Every photo endpoint returns cloud photos. The camera command set is
+  `takePhoto`, `takeVideo`, `formatSD` (erases the card), `update`,
+  `updateGPS`, `updateStatus`, `factoryReset` — nothing lists, resends or
+  fetches card contents. `photo/all` with `hd: true` is a *filter* for HD
+  copies already requested, not a fetch (probed live: zero on every camera).
+- **SpyPoint's support page** (article s132): a quota-blocked photo is not
+  delivered "even after the next month's limit reset date"; the card is the
+  copy. Photos held back by a lost signal DO queue and send at the next sync
+  (s57). Multi-shot frames all transmit; time-lapse transmits.
+- **Our own data.** Fremont North's 74-photo hole from 8/30–8/31 never
+  backfilled in the week after the plan changed.
+
+What does exist remotely: `POST /api/v3/photo/hd/{cameraId}/{photoId}`
+requests the full-resolution copy of a photo *already in the app* (an HD
+credit each); `PUT /api/v3/camera/settings/{cameraId}` changes transmit
+frequency, multi-shot and the rest. Neither reaches an untransmitted photo.
+The card-gap reading above is what came out of this; an SD-card import (full
+import, merged with the cloud copies of the same frames, design agreed
+2026-09-08 but not specced) is the follow-up, and needs a pulled card first
+to see the real DCIM layout.
 
 ## Next, in order
 

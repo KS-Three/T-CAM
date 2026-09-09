@@ -1142,6 +1142,23 @@ export const allCameras = db => db.prepare(`
   ORDER BY p.name, c.name
 `).all();
 
+/**
+ * Every photo's camera-side file name, per camera, oldest first — the input
+ * to card-gap.mjs. Read out of the raw document rather than stored as a
+ * column: nothing else wants it, and the raw JSON is already here.
+ */
+export function originCounters(db) {
+  const rows = db.prepare(`
+    SELECT camera_id, taken_at, json_extract(raw, '$.originName') AS origin_name
+    FROM photos ORDER BY camera_id, taken_at
+  `).all();
+  const byCam = {};
+  for (const r of rows) {
+    (byCam[r.camera_id] ??= []).push({ takenAt: r.taken_at, originName: r.origin_name ?? null });
+  }
+  return byCam;
+}
+
 export const photosForCamera = (db, cameraId, limit = 500) =>
   db.prepare('SELECT * FROM photos WHERE camera_id = ? ORDER BY taken_at DESC LIMIT ?')
     .all(cameraId, limit);

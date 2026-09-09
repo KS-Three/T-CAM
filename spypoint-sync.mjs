@@ -41,6 +41,7 @@ import { cameraDayRow } from './camera-days.mjs';
 import { shapeLines, blanksFor, blankLines } from './camera-shape.mjs';
 import { updateVisitHeadings } from './travel.mjs';
 import { quotaOf, quotaLine } from './quota.mjs';
+import { cardGapsByCamera, cardGapLine } from './card-gap.mjs';
 // The dashboard is its own module now: it is a page, not a sync concern.
 import {
   dashboardHtml, healthOf, fmtLoc, fmtPct, daysSince, STALE_DAYS,
@@ -456,6 +457,25 @@ async function main() {
 
   if (meta.length && !OPT.dryRun) {
     await fs.appendFile(path.join(OPT.out, 'photos.jsonl'), meta.join('\n') + '\n');
+  }
+
+  // What each camera numbered and the cloud never received (card-gap.mjs).
+  // Read from the database, so it covers every sync rather than tonight's,
+  // and read AFTER the downloads, because a photo that arrives late closes a
+  // hole that was only a delayed transmission. Attached to the rows so the
+  // static dashboard below carries it the way the served one does.
+  if (db) {
+    const gaps = cardGapsByCamera(db);
+    for (const r of rows) r.cardGap = gaps[`${provider.id}:${r.id}`] ?? null;
+    const held = rows.filter(r => r.cardGap && r.cardGap.missing > 0);
+    if (held.length) {
+      const label = r => String(r.name ?? r.id);
+      const w = Math.max(...held.map(r => label(r).length));
+      log('\nOn the card, never sent (from the camera\'s own file numbers):');
+      for (const r of held) log(`  ${label(r).padEnd(w)}  ${cardGapLine(r.cardGap)}`);
+      warn('Only the card holds these. SpyPoint does not send them later, not even');
+      warn('after the quota resets. Pull the card, or accept the hole.\n');
+    }
   }
 
   if (!OPT.dryRun) {

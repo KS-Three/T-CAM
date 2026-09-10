@@ -178,6 +178,26 @@ test('the suggested walk in is fetched, drawn dashed, and saved only on request'
     'the caveat ships with the card, not just the PR description');
 });
 
+test('every class the walk-in card draws has a rule under .infocard', () => {
+  // The card was born as the stand suggester's and wore its class. When the
+  // suggester went, its rules went with it — including `.suggcard .caveat`,
+  // which the walk-in card was using too. Nothing failed: the caveat simply
+  // rendered as full-size body text, and only a screenshot showed it.
+  const fn = mapScript.slice(mapScript.indexOf('function showWalkCard('));
+  const body = fn.slice(0, fn.indexOf('\n}'));
+  assert.match(body, /el\('div', 'infocard walkcard'\)/, 'the card is an infocard');
+  const used = new Set([
+    ...[...body.matchAll(/el\('\w+', '([\w-]+)'/g)].map(m => m[1]),
+    ...[...body.matchAll(/className = '([\w-]+)'/g)].map(m => m[1]),
+  ]);
+  used.delete('infocard');
+  assert.ok(used.has('caveat') && used.has('meta'), 'the scan found the card\'s classes');
+  for (const cls of used) {
+    assert.match(mapStyles, new RegExp('\\.infocard[^{}]*\\.' + cls + '\\b'),
+      `.${cls} is styled inside the card`);
+  }
+});
+
 test('shooting lanes are drawn for the selected stand and no other', () => {
   // Every stand's cones at once was a wash of overlapping wedges over the
   // ground they describe. Driven in a browser on both grounds: nothing selected

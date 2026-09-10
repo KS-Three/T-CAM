@@ -553,66 +553,38 @@ owned. ArcGIS makes this easy to get wrong: it reports its own errors *inside*
 a 200 response, so checking the status code alone would turn a broken service
 into "no parcel here". A test pins that.
 
-### "Suggest a stand" asks which ground first
+### "Property boundaries" — which ground is which
 
-Press it and the first thing you get is a list of the properties you hunt —
-worked out from the parcels under the pins you have already placed, with the
-owner and acreage off the deed. Tick one (or both) and the boundary is drawn
-on the map before anything is searched, so the ground the tool is about to
-reason over is a shape you can look at. The choice sticks; shift-click the
-button to change it.
+Under **Tools → Ground**, it lists the properties you hunt: worked out from the
+parcels under the pins you have already placed, with the owner and acreage off
+the deed. Tick one (or both) and the boundary is drawn on the map. The choice
+sticks.
 
-This replaced guessing from the map centre, which failed in the most ordinary
-way possible: the view that frames everything centres in open country *between*
-two properties, so the honest answer to "whose ground is this" was neither —
-and the old code fell back to every stand you own and picked a deed by vote.
-The first press of the button returned nothing, judged against a property
-nineteen kilometres away.
+Your ground is the *parcels* under your own pins — the boundary, not the
+owner's name. Names looked fine until two properties turned up deeded to a
+person and to that same person's revocable trust: two names for one hunter, and
+anything matching on names judged each property against the other's owner half
+the time. A shape either contains a point or it does not.
 
-Two properties ticked at once gives one shortlist, best first, each spot
-labelled with the ground it is on.
+The clustering that decides "these pins are one property" is a 2 km gap —
+the same one the ground switcher uses.
 
-### What "Suggest a stand" will not suggest
+### The stand suggester was removed
 
-The first real run of the suggester returned five spots: three on a state
-highway, two in a yard, and none of them on the property that was on screen.
-Each was its own hole, and each is now closed.
+It is gone — the module, the endpoint, the button and the built-up filter that
+served it. It answered "where should I hang the next stand", and the answer
+leaned on terrain shapes, a wind history and a scoring table rather than on
+anything the cameras had photographed. Its first real run put three spots on a
+state highway and two in a yard; four filters later it still had to ask you
+which property it was looking at. That is an opinion dressed as a measurement,
+and it is the opposite of what this tool is now for. The reasoning is in
+[design.md §14](docs/design.md).
 
-- **Somebody else's ground.** Your ground is worked out as the *parcels* under
-  your own pins — the boundary, not the owner's name. Names looked fine until
-  two properties turned up deeded to a person and to that same person's trust:
-  two names, and the tool picked one and threw away every suggestion on the
-  other property. A shape either contains a point or it does not.
-- **Ground that is not a parcel at all.** The state layer covers the whole
-  state; its gaps are highway right-of-way, rail corridor and open water. That
-  is where three of the five were standing. The layer *saying* there is no
-  parcel now drops the spot. The service *failing to answer* still keeps it,
-  flagged — a bad afternoon at ArcGIS should not quietly hide good ground.
-- **The yard and the blacktop.** Owning the ground does not make it huntable:
-  a forty with a farmhouse on it is your ground and the yard is still the yard,
-  so ownership can never catch that one. Buildings and classified roads come
-  from OpenStreetMap — 120 m off a building, 60 m off a road, both adjustable.
-  Field roads, two-tracks and footpaths are deliberately *not* roads; that is
-  where you want to be.
-- **The other property.** The suggester alone works on the ground you ticked.
-  The planner and `/tonight` still rank across both places, because "the best
-  sit tonight is at the other place" is a useful answer — but "hang a new stand
-  here" is a question about one property.
+What survived it, because both are statements of record rather than opinions:
+the property picker above, and `/api/my-properties` underneath it.
 
-The search area comes off the parcel boundary, not off the map, so the answer
-does not change when you zoom. Anything that lands outside the current view is
-still counted in the notes ("2 of these are outside the current view") rather
-than hidden — you picked the property, and a spot on it is on it whatever the
-zoom happens to be.
-
-Every drop is counted out loud in the notes under the button. `?parcels=off`
-and `?builtup=off` skip the two external checks.
-
-**The honest limit:** OSM's building coverage is per-place. One of the two real
-properties has 28 buildings mapped within 1.2 km; the other has *none* within
-1.5 km, though there is certainly a house on it. So the answer says when OSM
-had nothing to check against, rather than letting "unmapped" read as "all
-clear". These remain places to go and **walk**.
+`/tonight` still ranks when to sit, and the stand ranking still says which
+stand suits a given wind. Neither invents a place to go.
 
 ## Output
 
@@ -1291,7 +1263,7 @@ both renderings of the same ground.
 
 This layer is for *scanning* ground by eye. The **Terrain** button is still
 the analysis: it fetches the actual elevations and finds the draws, ridges,
-saddles and benches, names them, and feeds the stand suggester and 3D view.
+saddles and benches, names them, and feeds the 3D view.
 
 Google's own tiles are deliberately **not** used — serving them outside the
 Google Maps API breaches their terms. Esri's imagery is free for this with

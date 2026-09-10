@@ -56,16 +56,22 @@ test('a legal window is only printed when both ends are known', () => {
     'and a half-known day says which half it has');
 });
 
-test('a failed suggestion request shows the reason, not "nothing to suggest"', () => {
-  // The endpoint explains itself — no stands yet, no LiDAR coverage, terrain
-  // service down — and all three came out as the blandest possible lie.
+test('a failed property lookup shows the reason, not a blank list', () => {
+  // Written against the stand suggester, whose three distinct failures — no
+  // stands yet, no LiDAR coverage, terrain service down — all came out as the
+  // blandest possible lie, "nothing to suggest here". The suggester is gone;
+  // the principle is not, and the property lookup is now the request on this
+  // page that can fail with a reason worth reading.
+  //
   // Bounded to the function: an unbounded slice runs to the end of the script
   // and matches an ok-check belonging to something else entirely.
-  const from = mapScript.indexOf('async function loadSuggestions');
-  const load = mapScript.slice(from, mapScript.indexOf('suggestBtn.onclick', from));
+  const from = mapScript.indexOf('async function loadMyProperties');
+  const load = mapScript.slice(from, mapScript.indexOf('function showPropertyPicker', from));
   assert.ok(load.length > 200 && load.length < 3000, 'the slice is the function');
   assert.match(load, /if \(!res\.ok\) throw/, 'the status is checked');
   assert.match(load, /body\.error/, 'and the server\'s reason is used');
+  assert.match(mapScript, /Could not read your property boundaries/,
+    'and the reason reaches the person');
 });
 
 test('typing in a notes box never edits the map', () => {

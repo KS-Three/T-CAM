@@ -25,8 +25,7 @@ coordinate, and never point a fixture at one.
 ## Commands
 
 ```bash
-node --test                          # the whole suite (~1035 tests). No install step — there are NO dependencies, ever (Node 22+, node:sqlite).
-node --test $(ls test/*.test.js | grep -v suggest-api)   # the same, minus the one file that can hang — see below
+node --test                          # the whole suite (~1003 tests, under a minute). No install step — there are NO dependencies, ever (Node 22+, node:sqlite).
 node --test test/coverage.test.js    # one file
 node serve.mjs --out DIR --port 8787 # serve a dashboard from DIR's trailcam.db
 node spypoint-sync.mjs               # sync (needs SPYPOINT_EMAIL / SPYPOINT_PASSWORD env; --dry-run, --inspect for schema dumps)
@@ -35,18 +34,14 @@ node gps-doctor.mjs --camera NAME     # a camera's pin is wrong: which side is l
 node check-crops.mjs                 # diagnose a field's satellite scan, step by step (--classify for the slow half)
 ```
 
-**`test/suggest-api.test.js` can hang for as long as you let it.** It calls the
-real USGS elevation service (`epqs.nationalmap.gov`) through the network, and
-that service is intermittently slow — measured at 11s per request one hour and
-2.9s the next, and sometimes it simply stops answering mid-file. When it does,
-`node --test` sits there and the whole suite looks stuck rather than failing.
-
-This is NOT a symptom of whatever you just changed. Verified 2026-09-09 by
-running that file alone in a throwaway worktree at a commit predating the
-change under test: it hung there too, and got FEWER tests through than the
-branch did. If the suite stalls past a few minutes, check whether that one
-process is still alive (`ps -eo etimes,args | grep test/`), run the suite
-without it, and run it on its own afterwards.
+**A stalled suite is usually the network, not your change.** The file that used
+to hang it — `test/suggest-api.test.js`, calling the real USGS elevation service
+— went with the stand suggester (design.md §14). Some tests still reach live
+services: `test/my-properties.test.js` goes through the real `parcelAt`, which
+fetches the state parcel layer with no timeout. If `node --test` sits there
+past a few minutes, find which test process is still alive
+(`ps -eo etimes,args | grep test/`), run the suite without that file, and run
+it on its own afterwards.
 
 Kent runs it via `start-trailcam.cmd` (Windows), which is sync → plan → serve.
 The server bakes its git commit into the page banner and `/api/health`

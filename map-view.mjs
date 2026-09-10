@@ -94,9 +94,9 @@ export const mapStyles = `
              background: rgba(0,0,0,.6); color: #fff; pointer-events: none; }
   #contours path.parcel { stroke: rgba(255,90,90,.95); stroke-width: 2.6; fill: rgba(255,90,90,.10);
                           stroke-dasharray: none; }
-  /* Your own ground, ticked for suggestions. Deliberately not the red of a
-     looked-up parcel: that one is "here is who owns this", this one is "here
-     is the ground I am about to search", and they are often on screen at once. */
+  /* Your own ground, ticked in the property picker. Deliberately not the red of
+     a looked-up parcel: that one is "here is who owns this", this one is "here
+     is ground I hunt", and they are often on screen at once. */
   #contours path.myprop { stroke: rgba(120,235,150,.95); stroke-width: 2.4;
                           fill: rgba(120,235,150,.08); stroke-dasharray: 9 5; }
   .propcard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 268px;
@@ -270,7 +270,7 @@ export const mapStyles = `
      grey. Grouped under branches they read the way they are used: you come to
      the map to do something ABOUT stands, or scouting, or the ground, and the
      other groups fold away. The guide lines are the point, not decoration:
-     they are what says "Suggest a stand" belongs to Stands. */
+     they are what says "Property boundaries" belongs to Ground. */
   .maptools { position: absolute; left: 10px; top: 10px; z-index: 3;
               display: flex; flex-direction: column; gap: 0; width: 178px; }
   .tt-root { text-align: left; font-weight: 700; }
@@ -326,9 +326,6 @@ export const mapStyles = `
   /* The measuring readout. Sits under the tip rather than beside it, because
      the numbers change on every click and a moving box beside a moving box is
      hard to read. */
-  /* Suggested stands. Deliberately a different SHAPE from a real stand pin,
-     not merely a different colour: these are places to go and walk, and one
-     must never be mistaken at a glance for somewhere you actually hunt. */
   /* Shooting lanes. Drawn from the stand outward, with a node at the far end
      where the shot ends — the two together read as "I can shoot to there",
      which a bare line does not. */
@@ -474,36 +471,26 @@ export const mapStyles = `
   .lanewinds { margin-top: 7px; font-size: 12px; color: var(--muted); }
   .lanewinds b { color: var(--ink); }
   .lanewinds .no { color: var(--bad); }
-  .sugg { position: absolute; width: 20px; height: 20px; cursor: pointer; z-index: 3;
-          transform: translate(-50%, -50%); border-radius: 3px;
-          background: rgba(255,225,120,.30); border: 2px dashed #d9a441; }
-  .sugg.sel { background: rgba(255,225,120,.65); border-style: solid; }
-  .sugglabel { position: absolute; transform: translate(-50%, -50%); font-size: 11px;
-               font-weight: 700; line-height: 1; color: #241c05; z-index: 4;
-               pointer-events: none; }
-  /* The line from a suggestion to the ground it watches. Without it the pin is
-     a dot in a field, and the thing you most need to see — which way you would
-     be looking — is invisible. */
-  #contours path.sugg-look { stroke: rgba(217,164,65,.9); stroke-width: 2.2; fill: none;
-                             stroke-dasharray: 5 4; }
-  .suggcard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 290px;
+  /* The bottom-right card. It was written for the stand suggester and outlived
+     it: the walk-in report is the same shape, so the class carries the shape's
+     name rather than a feature's. */
+  .infocard { position: absolute; right: 10px; bottom: 10px; z-index: 6; width: 290px;
               max-width: calc(100% - 20px); max-height: 62%; overflow: auto;
               background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
               padding: 12px 14px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
-  .suggcard h4 { margin: 0 0 2px; font-size: 14px; padding-right: 18px; }
-  .suggcard .meta { color: var(--muted); font-size: 12px; }
-  .suggcard ul { margin: 8px 0 0; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
-  .suggcard li.minus { color: var(--warn); }
-  .suggcard .caveat { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+  .infocard h4 { margin: 0 0 2px; font-size: 14px; padding-right: 18px; }
+  .infocard .meta { color: var(--muted); font-size: 12px; }
+  .infocard ul { margin: 8px 0 0; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
+  .infocard .caveat { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
                       color: var(--muted); font-size: 11.5px; }
-  .suggcard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
+  .infocard .close { position: absolute; right: 8px; top: 6px; cursor: pointer;
                      background: none; border: 0; color: var(--muted); font-size: 17px; }
-  .suggcard .pick { display: flex; gap: 8px; margin-top: 10px; }
-  .suggcard .pick button { flex: 1; padding: 7px; border-radius: 6px;
+  .infocard .pick { display: flex; gap: 8px; margin-top: 10px; }
+  .infocard .pick button { flex: 1; padding: 7px; border-radius: 6px;
                            font: 600 12px/1 ui-sans-serif, system-ui, sans-serif;
                            border: 1px solid var(--line); background: var(--bg);
                            color: var(--ink); cursor: pointer; }
-  .suggcard .pick button.primary { background: var(--accent); color: #fff;
+  .infocard .pick button.primary { background: var(--accent); color: #fff;
                                    border-color: var(--accent); }
   .measurebox { position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
                 z-index: 6; background: var(--panel); border: 1px solid var(--line);
@@ -839,7 +826,6 @@ export const mapMarkup = String.raw`
           <button class="tt-head" type="button">Stands</button>
           <div class="tt-kids">
             <button id="addStand" type="button">+ Add stand</button>
-            <button id="suggestBtn" type="button">Suggest a stand</button>
           </div>
         </div>
         <div class="tt-group">
@@ -858,6 +844,7 @@ export const mapMarkup = String.raw`
             <button id="measureBtn" type="button">Measure</button>
             <button id="whoOwns" type="button">Who owns this?</button>
             <button id="findOwner" type="button">Find an owner</button>
+            <button id="propsBtn" type="button">Property boundaries</button>
             <button id="heatBtn" type="button">Deer activity</button>
           </div>
         </div>
@@ -1180,7 +1167,6 @@ function draw() {
   drawMarkers(left, top, W, H);
   drawFieldLabels(left, top, W, H);
   drawRouteLabels(left, top, W, H);
-  drawSuggestions(left, top, W, H);
 }
 // ---- offline ----------------------------------------------------------
 // Tiles you have looked at are already cached — every one came through this
@@ -2477,117 +2463,21 @@ function trackPaths(left, top) {
 }
 if (D.live) refreshTracks().catch(() => {});
 
-// ---- suggest a stand ---------------------------------------------------
-// Everything this needs was already on the map and never put together: the
-// landforms from the terrain layer, the winds no stand covers from the wind
-// history, and the sign you have marked. A suggestion is a piece of ground
-// PLUS the side of it the wind lets you sit — the same saddle gives a
-// different stand depending on which side you hang, and which side is decided
-// by the winds you are currently missing.
-//
-// Drawn as dashed squares, not teardrops: one must never be mistaken at a
-// glance for somewhere you actually hunt.
-let SUGGESTIONS = [];
-let suggestSel = null;
-const suggestBtn = document.getElementById('suggestBtn');
-
-function suggestPaths(left, top) {
-  // The line from each suggestion to the ground it watches. Without it the pin
-  // is a dot in a field and the thing you most need to see — which way you
-  // would be looking — is invisible.
-  return SUGGESTIONS.map(c => '<path class="sugg-look" d="'
-    + svgPath([[c.lng, c.lat], [c.feature.lng, c.feature.lat]], left, top, false)
-    + '"></path>');
-}
-
-function drawSuggestions(left, top, W, H) {
-  for (const c of SUGGESTIONS) {
-    const x = projX(c.lng, zoom) - left, y = projY(c.lat, zoom) - top;
-    if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
-    // Just the rank. Five labels reading "WNW - 13 winds" pile on top of each
-    // other and say nothing you can act on without opening the card anyway.
-    const lab = el('div', 'sugglabel', String(SUGGESTIONS.indexOf(c) + 1));
-    lab.style.left = x + 'px'; lab.style.top = y + 'px';
-    const pin = el('div', 'sugg' + (suggestSel === c ? ' sel' : ''));
-    pin.style.left = x + 'px'; pin.style.top = y + 'px';
-    pin.title = 'Suggested: looking ' + c.facing + ' at a ' + c.feature.kind;
-    pin.onclick = ev => { ev.stopPropagation(); suggestSel = c; showSuggestion(c); draw(); };
-    pinsEl.append(lab, pin);
-  }
-}
-
-function closeSuggestCard() {
-  document.querySelector('.suggcard')?.remove();
-}
-
-function showSuggestion(c) {
-  closeSuggestCard();
-  const card = el('div', 'suggcard');
-  const x = document.createElement('button');
-  x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
-  x.onclick = ev => { ev.stopPropagation(); suggestSel = null; closeSuggestCard(); draw(); };
-  card.appendChild(x);
-
-  card.appendChild(el('h4', null, '#' + (SUGGESTIONS.indexOf(c) + 1) + ' \u2014 looking '
-    + c.facing + ' at a ' + c.feature.kind));
-  card.appendChild(el('div', 'meta',
-    c.setbackM + ' m back \u00b7 huntable on ' + c.winds.length + ' of 16 winds'
-    + (c.coversGaps.length ? ' \u00b7 fills ' + c.coversGaps.join(', ') : '')
-    // Which ground it is on, but only when you asked about more than one \u2014
-    // on a single property it is the same line under every card.
-    + (SELECTED_PROPS.size > 1 && c.property ? ' \u00b7 ' + c.property.label : '')));
-
-  const ul = el('ul');
-  for (const r of c.reasons) {
-    const li = el('li', r.points < 0 ? 'minus' : null, r.why);
-    ul.appendChild(li);
-  }
-  card.appendChild(ul);
-
-  const winds = el('div', 'meta');
-  winds.style.marginTop = '8px';
-  winds.textContent = 'Good winds: ' + c.winds.join(', ');
-  card.appendChild(winds);
-
-  const pick = el('div', 'pick');
-  const hang = document.createElement('button');
-  hang.className = 'primary';
-  hang.textContent = 'Hang it here';
-  hang.onclick = ev => {
-    ev.stopPropagation();
-    // Straight into the normal stand form, with the winds already ticked. The
-    // suggestion is a starting point you then edit, not a stand.
-    closeSuggestCard();
-    openStandForm({ lat: c.lat, lng: c.lng, winds: c.winds, type: 'stand' });
-  };
-  const drop = document.createElement('button');
-  drop.textContent = 'Not this one';
-  drop.onclick = ev => {
-    ev.stopPropagation();
-    SUGGESTIONS = SUGGESTIONS.filter(s => s !== c);
-    suggestSel = null;
-    closeSuggestCard();
-    draw();
-  };
-  pick.append(hang, drop);
-  card.appendChild(pick);
-
-  if (SUGGEST_CAVEAT) card.appendChild(el('div', 'caveat', SUGGEST_CAVEAT));
-  mapEl.appendChild(card);
-}
-
-let SUGGEST_CAVEAT = null;
+// ---- which ground is which ----------------------------------------------
+// This was the stand suggester's property picker. The suggester is gone; the
+// picker is not, because "which ground am I looking at" is a question about a
+// deed rather than an opinion about where to sit. Ticking a ground outlines
+// its parcels on the map; that is all the selection does now.
+const propsBtn = document.getElementById('propsBtn');
 
 function removePropCard() { document.querySelector('.propcard')?.remove(); }
 
 /**
- * Which property (or properties) is this about?
+ * The parcels under your pins, fetched once and remembered.
  *
- * Asked once and remembered, rather than inferred from where the map is
- * scrolled. Ticking one outlines it on the map, so what the tool is about to
- * search is a shape you can see before you press the button \u2014 the whole
- * complaint that started this was suggestions landing on ground the person
- * had no interest in.
+ * Asked for rather than inferred from where the map is scrolled: on the view
+ * that frames everything, the centre lands in open country between two
+ * properties, where the honest answer is neither.
  */
 async function loadMyProperties() {
   if (PROPS_LOADED) return MY_PROPERTIES;
@@ -2603,20 +2493,19 @@ async function loadMyProperties() {
   return MY_PROPERTIES;
 }
 
-function showPropertyPicker(onGo) {
+function showPropertyPicker() {
   removePropCard();
   const card = el('div', 'propcard');
   const x = document.createElement('button');
   x.className = 'close'; x.textContent = '\u00d7'; x.title = 'Close';
   x.onclick = () => { removePropCard(); };
   card.appendChild(x);
-  card.appendChild(el('h4', null, 'Suggest a stand where?'));
-  card.appendChild(el('div', 'who', 'Tick the ground to search. The boundary is drawn as you tick.'));
+  card.appendChild(el('h4', null, 'Your ground'));
+  card.appendChild(el('div', 'who', 'Tick a property to outline it. The boundary is drawn as you tick.'));
 
   if (!MY_PROPERTIES.length) {
     card.appendChild(el('div', 'hint', 'No parcel was found under anything you have '
-      + 'placed. Outside Wisconsin the parcel layer has nothing to say, so press '
-      + '"Suggest a stand" again and it will work from the map instead.'));
+      + 'placed. Outside Wisconsin the parcel layer has nothing to say.'));
     mapEl.appendChild(card);
     return;
   }
@@ -2645,126 +2534,36 @@ function showPropertyPicker(onGo) {
 
   const go = document.createElement('button');
   go.className = 'primary go';
-  go.textContent = 'Suggest for these';
-  go.onclick = () => {
-    if (!SELECTED_PROPS.size) {
-      terrainNote('Tick at least one property first.');
-      return;
-    }
-    removePropCard();
-    onGo();
-  };
+  go.textContent = 'Done';
+  go.onclick = () => { removePropCard(); };
   card.appendChild(go);
   card.appendChild(el('div', 'hint', 'Boundaries are public record from the Wisconsin '
     + 'statewide parcel map, looked up from the pins you have placed.'));
   mapEl.appendChild(card);
 }
 
-async function loadSuggestions() {
-  suggestBtn.disabled = true;
-  suggestBtn.textContent = 'Thinking\u2026';
-  terrainNote('Reading the ground and your wind history\u2026');
-  try {
-    // The properties you ticked decide the scope. The viewport still goes
-    // along, but only so the answer can SAY how many spots are off the edge \u2014
-    // it no longer throws them away, because you already said which ground you
-    // meant and a spot on it is on it whatever the zoom happens to be.
-    const vb = visibleBounds();
-    const q = '?lat=' + centre.lat.toFixed(6) + '&lng=' + centre.lng.toFixed(6)
-      + '&north=' + vb.north.toFixed(6) + '&south=' + vb.south.toFixed(6)
-      + '&east=' + vb.east.toFixed(6) + '&west=' + vb.west.toFixed(6)
-      + (SELECTED_PROPS.size ? '&properties=' + [...SELECTED_PROPS].join(',') : '');
-    const res = await fetch('/api/suggest-stands' + q);
-    const body = await res.json();
-    // The endpoint says WHY it could not answer — no stands yet, no LiDAR
-    // coverage, the terrain service down. Without this check all three came
-    // out as the blandest possible lie: "Nothing to suggest here."
-    if (!res.ok) throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
-    // The server can only refuse to guess. When the map is over open country
-    // between two properties there IS no right answer to infer, so it hands
-    // back the list and the page asks.
-    if (body.needsProperty) {
-      terrainNote(body.note || 'Pick which property to suggest for.');
-      await loadMyProperties();
-      draw();
-      showPropertyPicker(() => loadSuggestions());
-      return;
-    }
-    SUGGESTIONS = body.candidates || [];
-    SUGGEST_CAVEAT = body.caveat || null;
-    const lines = [];
-    if (SUGGESTIONS.length) {
-      lines.push('<b>' + SUGGESTIONS.length + ' spot'
-        + (SUGGESTIONS.length === 1 ? '' : 's') + ' worth walking.</b> Tap one for why.');
-    }
-    if (body.note) lines.push(body.note);
-    // Which ground each answer came from, when you asked about more than one.
-    if ((body.properties || []).length > 1) {
-      lines.push('Searched ' + body.properties.map(p =>
-        p.label + ' (' + p.found + ')').join(' and ') + '.');
-    }
-    for (const n of body.notes || []) lines.push(n);
-    if (!body.windHistoryLoaded && SUGGESTIONS.length) {
-      lines.push('No wind history cached yet \u2014 load "Which stands earn their keep" '
-        + 'and press this again to rank by the winds you are missing.');
-    }
-    terrainNote(lines.join('<br>') || 'Nothing to suggest here.');
-    suggestBtn.classList.toggle('on', SUGGESTIONS.length > 0);
-    draw();
-  } catch (err) {
-    terrainNote('Could not work out suggestions: ' + err.message);
-  } finally {
-    suggestBtn.disabled = false;
-    suggestBtn.textContent = SUGGESTIONS.length ? 'Clear suggestions' : 'Suggest a stand';
-  }
-}
-
-suggestBtn.onclick = async ev => {
+propsBtn.onclick = async ev => {
   ev.stopPropagation();
   if (!D.live) return;
-  if (SUGGESTIONS.length) {
-    SUGGESTIONS = [];
-    suggestSel = null;
-    closeSuggestCard();
-    removePropCard();
-    suggestBtn.classList.remove('on');
-    suggestBtn.textContent = 'Suggest a stand';
-    terrainNote(null);
-    draw();
+  if (document.querySelector('.propcard')) { removePropCard(); return; }
+  propsBtn.disabled = true;
+  try {
+    await loadMyProperties();
+  } catch (err) {
+    terrainNote('Could not read your property boundaries: ' + err.message);
     return;
+  } finally {
+    propsBtn.disabled = false;
   }
-  // Ask which ground before searching it. Once you have answered, the answer
-  // sticks and the button goes straight to work — the picker is a decision to
-  // make once, not a dialog to dismiss every time. Shift-click reopens it.
-  if (!SELECTED_PROPS.size || ev.shiftKey) {
-    suggestBtn.disabled = true;
-    try {
-      await loadMyProperties();
-    } catch (err) {
-      terrainNote('Could not read your property boundaries: ' + err.message
-        + ' — suggesting from the map instead.');
-      suggestBtn.disabled = false;
-      loadSuggestions();
-      return;
-    }
-    suggestBtn.disabled = false;
-    if (MY_PROPERTIES.length > 1 || !SELECTED_PROPS.size) {
-      draw();
-      showPropertyPicker(() => loadSuggestions());
-      return;
-    }
-  }
-  loadSuggestions();
+  draw();
+  showPropertyPicker();
 };
 
-// Re-opening the picker without clearing what is on the map: the ground you
-// searched last time is not always the ground you want next.
-suggestBtn.title = 'Suggest a stand — shift-click to choose which property';
 if (!D.live) {
-  suggestBtn.disabled = true;
-  suggestBtn.title = 'Suggestions need the server';
-  suggestBtn.style.opacity = '0.6';
-  suggestBtn.style.cursor = 'not-allowed';
+  propsBtn.disabled = true;
+  propsBtn.title = 'Property boundaries need the server';
+  propsBtn.style.opacity = '0.6';
+  propsBtn.style.cursor = 'not-allowed';
 }
 
 // ---- the suggested walk in ----------------------------------------------
@@ -2847,8 +2646,7 @@ async function fetchWalkIn(standId, lat, lng, fromLabel) {
 
 function showWalkCard(s, fromLabel) {
   document.querySelector('.walkcard')?.remove();
-  closeSuggestCard();
-  const card = el('div', 'suggcard walkcard');
+  const card = el('div', 'infocard walkcard');
   const x = document.createElement('button');
   x.className = 'close'; x.textContent = '×'; x.title = 'Close';
   x.onclick = ev => { ev.stopPropagation(); clearWalk(); };
@@ -2920,9 +2718,9 @@ const contoursEl = document.getElementById('contours');
 let PARCEL_RINGS = null;     // boundary of the parcel last looked up
 
 // The properties you hunt, straight off the state parcel layer, and which of
-// them the next "Suggest a stand" is about. Asked rather than inferred: the
-// map centre used to decide, and on the view that frames everything it lands
-// in open country between two properties, where the honest answer is neither.
+// them is outlined. Asked rather than inferred: the map centre used to decide,
+// and on the view that frames everything it lands in open country between two
+// properties, where the honest answer is neither.
 let MY_PROPERTIES = [];              // [{ key, label, owner, parcels: [{rings, acres}] }]
 let SELECTED_PROPS = new Set();      // the keys ticked
 let PROPS_LOADED = false;
@@ -3151,8 +2949,7 @@ function parcelPaths(left, top) {
     .concat(walkPaths(left, top))
     .concat(lanePaths(left, top))
     .concat(trackPaths(left, top))
-    .concat(measurePaths(left, top))
-    .concat(suggestPaths(left, top));
+    .concat(measurePaths(left, top));
 }
 
 /** The parcel boundary alone, when the terrain layer is off. */

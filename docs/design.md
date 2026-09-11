@@ -324,6 +324,9 @@ Together: *"Rain this afternoon — hunt the stand near camera A."*
 
 ### A suggestion has to survive four filters, and three of them drop (settled 2026-08-31)
 
+*The suggester has since been removed — see section 14. Kept as the record of
+why.*
+
 The suggester's first real outing produced five spots: three standing on a
 state highway, two in somebody's yard, and none of them on the property Kent
 was looking at. Every one of those was a separate hole, and the reasoning
@@ -389,6 +392,9 @@ question about one property, and answering it with every pin you own is what
 let a stand forty kilometres away decide whose ground this one is.
 
 ### Which property is ASKED, never inferred (settled 2026-08-31)
+
+*The suggester is gone (section 14); the picker this produced survives as the
+"Property boundaries" tool.*
 
 The four filters above all worked, and the feature still opened wrong. Driving
 it in a browser: the map's default view frames everything, which on two
@@ -680,6 +686,47 @@ The barometer axis is plotted and labelled tier D in the same breath, which is
 the compromise `individuals.mjs` already reached: no collar study supports it,
 `movement-model.mjs` scores it zero, and Kent's own ground is still allowed to
 answer the question for itself.
+
+---
+
+## 14. No stand suggester: the tool does not invent places
+
+Kent's call, made 2026-09-08 and confirmed 2026-09-10. The commit that made it
+on the 8th was never pushed, and section 13 landed on main in the meantime, so
+the removal was redone on top of it rather than merged over it.
+
+**Why.** The evidence is two subsections of section 9, kept below as history
+because they record real bugs: "A suggestion has to survive four filters, and
+three of them drop" and "Which property is ASKED, never inferred". The
+suggester's first real outing produced five spots — three standing on a state
+highway, two in a yard. Four filters were added and three of them drop
+candidates. A feature that needs three filters to stop it being wrong was not
+answering a question the photographs could support: it proposed places from
+terrain shapes, and nothing a camera recorded chose them. As recorded on the
+8th, the objection was that it "made suggestions without having enough
+information".
+
+**Gone:** `stand-suggester.mjs`; `builtup.mjs`, which existed only to keep
+suggestions off the blacktop and out of yards; `/api/suggest-stands`, which now
+404s; the "Suggest a stand" button, its dashed pins and its card; and their
+tests, including `suggest-api.test.js`, the one file in the suite that could
+hang on the USGS elevation service.
+
+**Kept, and why none of it is the same act:**
+
+- `/tonight`, `hunt-planner.mjs` and `stand-ranking.mjs`. They rank WHEN, from
+  weather and rut with every coefficient traced to a source, over stands you
+  placed. The objection was to a shortlist of places the tool made up, not to a
+  ranking with sources.
+- `entry-path.mjs`, the suggested walk-in: geometry over a wind and a stand you
+  already chose, judged by `routes.mjs` independently of the code that drew it.
+- `/api/my-properties` and its picker, now the "Property boundaries" tool under
+  Ground. `resolveHomeGround` moved from the suggester into `grounds.mjs`
+  rather than dying with it, because which parcels sit under your pins is a
+  fact about a deed, not an opinion about where to sit.
+
+What the page offers instead is section 13's board: what the cameras counted,
+with the sample size beside it, and no advice on top.
 
 ---
 

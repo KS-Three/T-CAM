@@ -143,6 +143,68 @@ export function describeGround(g) {
 }
 
 /**
+ * Two parcels are the same parcel when the county's own id matches. Owner name
+ * is the fallback for a layer, or a stub, that carries no ids — good enough to
+ * group parcels, never good enough to decide ownership on its own.
+ */
+const parcelKey = p => (p?.parcelId ? `id:${p.parcelId}` : (p?.owner ? `owner:${p.owner}` : null));
+
+/**
+ * Which parcels under this ground's pins are yours, worked out once.
+ *
+ * This lived in stand-suggester.mjs until the suggester was removed, and it
+ * came here rather than going with it: `/api/my-properties` depends on it, and
+ * that endpoint is what draws the property picker, its boundaries and its
+ * acreage-and-county labels. None of that is a suggestion — it is a statement
+ * about a deed — so it outlives the feature it was written for.
+ *
+ * The anchors' parcels are collected WHOLE: id, owner and boundary. A point is
+ * then on your ground when it falls inside one of those boundaries, which needs
+ * no lookup and no name comparison — a parcel is a shape on record, and a shape
+ * either contains a point or does not. Owner name is only ever a fallback for
+ * grouping, never the test: the first real account had two properties forty
+ * kilometres apart, one deeded to a person and the other to that person's
+ * revocable trust, and matching on names alone judged each against the other's
+ * owner half the time.
+ *
+ * The two ways of failing are told apart, because only one is a service
+ * problem: a lookup that FAILED sets `sawFailure` and is reported, while a
+ * lookup that SUCCEEDED with no parcel is a real answer (right-of-way, rail
+ * corridor, open water — parcels.mjs says exactly that about its return value).
+ *
+ * `lookup` is parcelAt or a stand-in: on demand, cached in memory by the parcel
+ * module, never written anywhere. At most 8 anchors are asked about.
+ */
+export async function resolveHomeGround({ lookup, stands = [], at = null } = {}) {
+  const empty = { home: [], homeKeys: new Set(), ownerVotes: new Map(), homeOwner: null, sawFailure: false, anchors: [] };
+  if (typeof lookup !== 'function') return empty;
+
+  const tryLookup = async (lat, lng) => {
+    try { return { ok: true, parcel: await lookup(lat, lng) }; }
+    catch { return { ok: false, parcel: null }; }
+  };
+
+  const home = [];
+  const homeKeys = new Set();
+  const ownerVotes = new Map();
+  let sawFailure = false;
+  const anchors = stands.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  if (!anchors.length && at) anchors.push(at);
+  for (const a of anchors.slice(0, 8)) {
+    const r = await tryLookup(a.lat, a.lng);
+    if (!r.ok) { sawFailure = true; continue; }
+    if (!r.parcel) continue;
+    if (r.parcel.owner) ownerVotes.set(r.parcel.owner, (ownerVotes.get(r.parcel.owner) ?? 0) + 1);
+    const k = parcelKey(r.parcel);
+    if (!k || homeKeys.has(k)) continue;
+    homeKeys.add(k);
+    home.push(r.parcel);
+  }
+  const homeOwner = [...ownerVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return { home, homeKeys, ownerVotes, homeOwner, sawFailure, anchors };
+}
+
+/**
  * The same functions, as source, for the map to use in the browser — the
  * repo's one-definition rule (see measure.mjs, whose pattern this copies).
  * The switcher clusters the pins the page already holds, so this arithmetic

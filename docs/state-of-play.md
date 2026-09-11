@@ -62,11 +62,8 @@ Rules for anything added from here:
 | **Tonight** (`/tonight`) — one screen: the stand, the walk in, when to leave | Driven in a browser in both themes, and end to end over the API |
 | **Legal shooting light** — Wisconsin's 30-before / 20-after, with a countdown | Unit-tested, and run under three machine timezones to prove the times do not move |
 | **Measure tool** — click-to-measure distance and acreage on the map | Browser-driven; acreage checked against a survey section (640) and a quarter-quarter (40) |
-| **Stand suggester** — where to hang the next one, and which side of it | Live against USGS terrain at the property; wind geometry cross-checked against `routes.mjs` on every candidate × all 16 winds |
 | **Sit journal** (`/journal`) — what actually happened, and what it may claim | 29 tests, most of them about refusing to answer; the whole loop driven in a browser |
-| **Ownership-aware suggestions** — spots on the neighbour's dropped, crossings named | Judged against the PARCELS under your own pins, not an owner's name; live parcel service confirmed answering at both real properties; `?parcels=off` for outside Wisconsin |
-| **You pick the property; the suggester searches exactly it** — `/api/my-properties` lists the parcels under your pins (owner, acreage, county, boundary); the map's picker outlines what you tick before anything is searched and remembers it; the search circle comes off the parcel rather than the map centre; with nothing picked and the map over open country it returns `needsProperty` and the list instead of guessing | Driven in a headless browser end to end against a copy of the real database: the picker lists both properties with owner and acreage, ticking one draws its boundary (1 path, 3 when both are ticked — the northern property is two deeds), "Suggest for these" returns 2 and 5, both ticked interleaves 5 across the two by score. 18 HTTP tests |
-| **Suggestions stay on the property and off the blacktop** — the boundary is resolved before generating, so the shortlist is spent on ground you own; anything on no parcel at all (right-of-way, water) or within 120 m of a building / 60 m of a classified road is dropped | 27 suggester tests + 11 for `builtup.mjs` + 4 for `groundAt`. Every survivor re-checked one at a time straight against the parcel service — right deed, inside the viewport, all 8. Two spots dropped on the northern property for being inside 60 m of a road. `?builtup=off` skips the map service, `?parcels=off` the ownership check |
+| **Property boundaries** — `/api/my-properties` lists the parcels under your pins (owner, acreage, county, boundary); Tools → Ground → "Property boundaries" outlines what you tick and remembers it. It was the stand suggester's picker and outlived it (`design.md` §14): your ground is judged by the PARCELS under your own pins, never an owner's name | Driven in a browser 2026-09-10 against a copy of the real database: the picker lists both properties with owner, acreage and county; ticking one draws its boundary (1 path, 3 when both are ticked — one property is two deeds), the ticks are saved, and with a ground picked in the switcher the outline sits around its pins. `/api/suggest-stands` answers 404. 5 HTTP tests in `my-properties.test.js`, one of them pinning the 404 |
 | **Offline** — /tonight, the map and sit logging with no server reachable | Driven end to end: server killed, page served by the worker, sit queued, server restarted, sit arrived |
 | **Track recording** — record the walk in off the phone's GPS, judged against the route you drew | Driven in a browser with real geolocation and with a scripted 3-minute walk: 180 fixes, teleport and bad fix both rejected, 275 m, compared to the route on save |
 | **Shooting lanes** — mark where you can shoot; the winds are derived from the shape, not ticked | Cross-checked against `routes.mjs`, which computes scent independently, on every lane bearing × all 16 winds; the browser copy compiled in a vm and compared to Node's on the same lanes |
@@ -125,21 +122,11 @@ Run it: `start-trailcam.cmd`. It syncs, plans, then serves on
 
 ## Not working / not built
 
-- **The building check has a hole on the northern property, and it is OSM's, 2026-08-31** —
-  the built-up filter drops suggestions near a mapped building, and
-  OpenStreetMap has **nothing** built mapped within 1.5 km of the northern
-  property: no footprints, no address nodes. (The other property has 28
-  buildings inside 1.2 km, so this is per-place coverage, not a broken query.)
-  The parcel layer knows there is a residence there — the deed carries property
-  class 1 alongside 4/5/5M — but a class is not a location, so it cannot say
-  *where* the house is. The road standoff still fires there (6 classified
-  roads inside 620 m), and the answer now says out loud when OSM had nothing to
-  check against rather than letting "unmapped" read as "all clear". FEMA's USA
-  Structures layer is the obvious second source and was tried: its ArcGIS view
-  refuses point and envelope queries with "Invalid query parameters" whatever
-  the outFields, `where` or geometry form — worth another hour by someone who
-  knows that service, and the parcel layer's own field-name trap says the
-  answer is probably one wrong parameter name.
+- **The stand suggester is gone, 2026-09-10** — with `builtup.mjs`,
+  `/api/suggest-stands`, the button and 52 tests; Kent's call, reasoning in
+  `design.md` §14. The OSM building-coverage hole that was documented here
+  went with it: the built-up filter existed only to keep suggestions out of
+  yards, and there are no suggestions.
 
 - **Real photos arrived 2026-08-29** — the cameras came back to life after
   nine silent months: 4 cameras transmitting, 30 photos the first day. The
